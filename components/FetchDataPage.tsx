@@ -3,6 +3,8 @@ import { writeBatch, doc, getDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
 import { PlanItem, MachineStatus } from '../types';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 
 // Navigable fields across the whole row (including read-only) for smooth Excel-like movement
 const NAVIGABLE_FIELDS: (keyof any)[] = [
@@ -251,6 +253,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 }) => {
   const [selectedDate, setSelectedDate] = useState<string>(propSelectedDate || new Date().toISOString().split('T')[0]);
   const [activeDay, setActiveDay] = useState<string>('');
+  const [isDownloading, setIsDownloading] = useState(false);
+  const printRef = useRef<HTMLDivElement>(null);
   
   // Filter State
   const [searchTerm, setSearchTerm] = useState('');
@@ -661,6 +665,10 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           });
         });
       });
+
+      // Fetch daily summary (external production)
+      const dailySummary = await DataService.getDailySummary(date);
+      setExternalProduction(dailySummary?.externalProduction || 0);
       
       setAllLogs(flattenedLogs);
       setFilteredLogs(flattenedLogs);
@@ -1192,6 +1200,245 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     return acc;
   }, {} as Record<string, number>);
 
+  const handleExternalProductionBlur = async () => {
+    try {
+      await DataService.updateDailySummary(selectedDate, { externalProduction });
+      showMessage('✅ External production saved');
+    } catch (error) {
+      console.error('Error saving external production:', error);
+      showMessage('❌ Error saving external production', true);
+    }
+  };
+
+  const handleDownloadPDF = async () => {
+    if (!printRef.current) return;
+    setIsDownloading(true);
+
+    try {
+      const element = printRef.current;
+
+      // Force report header to be visible during capture
+      const header = element.querySelector('.print-header') as HTMLElement;
+      if (header) {
+        header.classList.remove('hidden');
+        header.style.display = 'block';
+      }
+      
+      const canvas = await html2canvas(element, {
+        scale: 2, 
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        windowWidth: element.scrollWidth + 100, // Ensure full width is captured
+        onclone: (clonedDoc) => {
+          // --- FIX: Sanitize OKLCH colors for html2canvas ---
+          const ctx = document.createElement('canvas').getContext('2d');
+          
+          const safeColor = (c: string) => {
+             if (!c || typeof c !== 'string') return c;
+             if (!ctx) return c; 
+             
+             if (c.includes('oklch') || c.includes('lab(') || c.includes('lch(')) {
+                  try {
+                    ctx.clearRect(0, 0, 1, 1);
+                    ctx.fillStyle = c;
+                    ctx.fillRect(0, 0, 1, 1);
+                    const data = ctx.getImageData(0, 0, 1, 1).data;
+                    return `rgba(${data[0]}, ${data[1]}, ${data[2]}, ${data[3] / 255})`;
+                  } catch (e) {
+                    console.warn('Color conversion failed', e);
+                    return '#000000'; 
+                  }
+             }
+             return c;
+          };
+
+          try {
+            if (ctx) {
+              ctx.canvas.width = 1;
+              ctx.canvas.height = 1;
+              
+              const allElements = clonedDoc.querySelectorAll('*');
+              allElements.forEach((el) => {
+                const style = (el as HTMLElement).style;
+                const computed = getComputedStyle(el);
+                
+                if (computed.backgroundColor) style.backgroundColor = safeColor(computed.backgroundColor);
+                if (computed.color) style.color = safeColor(computed.color);
+                if (computed.borderColor) style.borderColor = safeColor(computed.borderColor);
+                if (computed.outlineColor) style.outlineColor = safeColor(computed.outlineColor);
+                
+                if (computed.boxShadow && computed.boxShadow.includes('oklch')) {
+                   style.boxShadow = 'none'; 
+                }
+              });
+            }
+          } catch (e) {
+            console.error('Error in PDF color sanitization:', e);
+          }
+          // --------------------------------------------------
+
+          // Replace inputs with text for clean PDF
+          const inputs = clonedDoc.querySelectorAll('input, textarea');
+          inputs.forEach((input: any) => {
+            const span = clonedDoc.createElement('span');
+            span.textContent = input.value;
+            span.style.display = 'flex';
+            span.style.alignItems = 'center';
+            span.style.justifyContent = 'center';
+            span.style.width = '100%';
+            span.style.height = '100%';
+            span.style.fontSize = getComputedStyle(input).fontSize;
+            span.style.fontWeight = getComputedStyle(input).fontWeight;
+            
+            // Ensure color is safe here too
+            const rawColor = getComputedStyle(input).color;
+            span.style.color = safeColor(rawColor);
+
+            span.style.textAlign = 'center';
+            span.style.whiteSpace = 'pre-wrap';
+            if (input.tagName === 'TEXTAREA') {
+               span.style.textAlign = 'center'; 
+            }
+            if (input.parentNode) {
+              input.parentNode.replaceChild(span, input);
+            }
+          });
+
+          // Handle selects
+          const selects = clonedDoc.querySelectorAll('select');
+          selects.forEach((select) => {
+            const span = clonedDoc.createElement('span');
+            const selectedOption = select.options[select.selectedIndex];
+            span.textContent = selectedOption ? selectedOption.text : '';
+            span.style.display = 'flex';
+            span.style.alignItems = 'center';
+            span.style.justifyContent = 'center';
+            span.style.width = '100%';
+            span.style.height = '100%';
+            span.style.fontSize = getComputedStyle(select).fontSize;
+            span.style.fontWeight = 'bold';
+            if (select.parentNode) {
+              select.parentNode.replaceChild(span, select);
+            }
+          });
+
+          const scrollables = clonedDoc.querySelectorAll('.overflow-x-auto');
+          scrollables.forEach(el => {
+             (el as HTMLElement).style.overflow = 'visible';
+             (el as HTMLElement).style.display = 'block';
+             // Force width to fit content to avoid clipping
+             (el as HTMLElement).style.width = 'fit-content';
+          });
+          
+          const handles = clonedDoc.querySelectorAll('.drag-handle');
+          handles.forEach(el => (el as HTMLElement).style.display = 'none');
+          
+          const noPrints = clonedDoc.querySelectorAll('.no-print');
+          noPrints.forEach(el => (el as HTMLElement).style.display = 'none');
+
+          // Remove last column (Plans button)
+          const rows = clonedDoc.querySelectorAll('tr');
+          rows.forEach(row => {
+            if (row.lastElementChild) {
+              (row.lastElementChild as HTMLElement).style.display = 'none';
+            }
+          });
+        }
+      });
+
+      // Hide header again after capture
+      if (header) {
+        header.classList.add('hidden');
+        header.style.display = '';
+      }
+
+      const pdf = new jsPDF('l', 'mm', 'a4');
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 10;
+      const maxContentWidth = pageWidth - (margin * 2);
+      const maxContentHeight = pageHeight - (margin * 2);
+
+      // Calculate dimensions to fit width
+      const imgWidth = canvas.width;
+      const imgHeight = canvas.height;
+      
+      // Calculate scale to fit width
+      let pdfContentWidth = maxContentWidth;
+      let pdfContentHeight = (imgHeight * maxContentWidth) / imgWidth;
+
+      // Enforce max 2 pages constraint
+      // If height exceeds 2 pages, scale it down to fit exactly 2 pages
+      const maxTotalHeight = maxContentHeight * 2;
+      if (pdfContentHeight > maxTotalHeight) {
+        const scaleFactor = maxTotalHeight / pdfContentHeight;
+        pdfContentWidth = pdfContentWidth * scaleFactor;
+        pdfContentHeight = maxTotalHeight;
+      }
+
+      // If content fits on one page, just add it
+      if (pdfContentHeight <= maxContentHeight) {
+        // Center horizontally if scaled down
+        const x = margin + (maxContentWidth - pdfContentWidth) / 2;
+        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', x, margin, pdfContentWidth, pdfContentHeight);
+      } else {
+        // Multi-page logic (max 2 pages now guaranteed by scaling above)
+        let heightLeft = imgHeight;
+        let position = 0;
+        
+        // Calculate the height of one PDF page in canvas pixels (adjusted for the new scale)
+        // We need to map the PDF page height back to canvas pixels
+        // ratio = canvasPixels / pdfPixels
+        const scaleRatio = imgHeight / pdfContentHeight;
+        const pageCanvasHeight = maxContentHeight * scaleRatio;
+
+        let pageIndex = 0;
+        while (heightLeft > 0) {
+          // Create a temporary canvas for the slice
+          const pageCanvas = document.createElement('canvas');
+          pageCanvas.width = imgWidth;
+          // The height of the slice is either the full page height or the remaining height
+          const sliceHeight = Math.min(heightLeft, pageCanvasHeight);
+          pageCanvas.height = sliceHeight;
+          
+          const pageCtx = pageCanvas.getContext('2d');
+          if (pageCtx) {
+            // Draw the slice from the original canvas
+            pageCtx.drawImage(
+              canvas, 
+              0, position, imgWidth, sliceHeight, // Source
+              0, 0, imgWidth, sliceHeight         // Destination
+            );
+            
+            const sliceData = pageCanvas.toDataURL('image/png');
+            
+            // Calculate the height on the PDF
+            // pdfHeight = canvasHeight / scaleRatio
+            const pdfSliceHeight = sliceHeight / scaleRatio;
+            
+            if (pageIndex > 0) pdf.addPage();
+            
+            // Center horizontally
+            const x = margin + (maxContentWidth - pdfContentWidth) / 2;
+            pdf.addImage(sliceData, 'PNG', x, margin, pdfContentWidth, pdfSliceHeight);
+          }
+          
+          heightLeft -= sliceHeight;
+          position += sliceHeight;
+          pageIndex++;
+        }
+      }
+      
+      pdf.save(`Daily-Machine-Plan-${selectedDate}.pdf`);
+
+    } catch (err) {
+      console.error("PDF Generation failed", err);
+      alert("Failed to generate PDF. Please try again.");
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 py-6 px-2 sm:px-6">
       {/* Inject global styles to hide number input spinners */}
@@ -1260,13 +1507,14 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
             </button>
           </div>
           <button
-            onClick={() => window.print()}
-            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
+            onClick={handleDownloadPDF}
+            disabled={isDownloading}
+            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm disabled:opacity-50"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
-            Export PDF
+            {isDownloading ? 'Processing...' : 'Export PDF'}
           </button>
         </div>
 
@@ -1278,7 +1526,12 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         )}
         
         {/* Excel-like Table */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+        <div ref={printRef} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+            {/* Header for PDF only */}
+            <div className="hidden print-header mb-4 text-center border-b border-slate-100 pb-4">
+                <h1 className="text-xl font-bold text-slate-800 uppercase tracking-wide">Daily Machine Plan</h1>
+                <p className="text-sm text-slate-500">Date: {new Date(selectedDate).toLocaleDateString('en-GB', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+            </div>
           <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-sm bg-white" onBlurCapture={handleGridBlur}>
             <table className="w-full text-xs text-center border-collapse min-w-[1100px]">
               <thead className="bg-slate-50 text-slate-700 font-bold">
@@ -1593,21 +1846,22 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
               <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-slate-200">
                  <div className="p-4 flex flex-col justify-center items-center bg-yellow-50/30">
-                   <span className="text-xs text-amber-900/60 font-bold uppercase tracking-wider mb-1">انتاج البوص (Bous)</span>
+                   <span className="text-xs text-amber-900/60 font-bold mb-1">انتاج البوص (Bous)</span>
                    <span className="text-2xl font-bold text-amber-700">{bousProduction.toLocaleString()}</span>
                  </div>
                  <div className="p-4 flex flex-col justify-center items-center">
-                   <span className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1">مكن عريض (Wide)</span>
+                   <span className="text-xs text-slate-400 font-bold mb-1">مكن عريض (Wide)</span>
                    <span className="text-2xl font-bold text-slate-700">{wideProduction.toLocaleString()}</span>
                  </div>
                  <div className="p-4 flex flex-col justify-center items-center hover:bg-blue-50/50 transition-colors group cursor-pointer relative">
-                   <span className="text-xs text-blue-900/60 font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
+                   <span className="text-xs text-blue-900/60 font-bold mb-1 flex items-center gap-1">
                      خارجي (External)
                    </span>
                    <input 
                       type="number" 
                       value={externalProduction}
                       onChange={(e) => setExternalProduction(Number(e.target.value))}
+                      onBlur={handleExternalProductionBlur}
                       className="w-full text-center bg-transparent font-bold text-2xl text-blue-700 outline-none border-b border-transparent group-hover:border-blue-300 focus:border-blue-500"
                    />
                  </div>
@@ -1618,7 +1872,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                           <span className="font-bold text-white">{totalScrap} ({scrapPercentage.toFixed(2)}%)</span>
                       </div>
                    </div>
-                   <span className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1">الاجمالي (Total)</span>
+                   <span className="text-xs text-slate-400 font-bold mb-1">الاجمالي (Total)</span>
                    <span className="text-3xl font-bold">{totalProduction.toLocaleString()}</span>
                  </div>
               </div>

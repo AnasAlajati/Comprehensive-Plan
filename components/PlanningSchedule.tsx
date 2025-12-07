@@ -540,78 +540,170 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
     setIsDownloading(true);
 
     try {
+      const element = scheduleRef.current;
+      
+      const canvas = await html2canvas(element, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        windowWidth: element.scrollWidth + 100,
+        onclone: (clonedDoc) => {
+          // --- FIX: Sanitize OKLCH colors for html2canvas ---
+          const ctx = document.createElement('canvas').getContext('2d');
+          
+          const safeColor = (c: string) => {
+             if (!c || typeof c !== 'string') return c;
+             if (!ctx) return c; 
+             
+             if (c.includes('oklch') || c.includes('lab(') || c.includes('lch(')) {
+                  try {
+                    ctx.clearRect(0, 0, 1, 1);
+                    ctx.fillStyle = c;
+                    ctx.fillRect(0, 0, 1, 1);
+                    const data = ctx.getImageData(0, 0, 1, 1).data;
+                    return `rgba(${data[0]}, ${data[1]}, ${data[2]}, ${data[3] / 255})`;
+                  } catch (e) {
+                    console.warn('Color conversion failed', e);
+                    return '#000000'; 
+                  }
+             }
+             return c;
+          };
+
+          try {
+            if (ctx) {
+              ctx.canvas.width = 1;
+              ctx.canvas.height = 1;
+              
+              const allElements = clonedDoc.querySelectorAll('*');
+              allElements.forEach((el) => {
+                const style = (el as HTMLElement).style;
+                const computed = getComputedStyle(el);
+                
+                if (computed.backgroundColor) style.backgroundColor = safeColor(computed.backgroundColor);
+                if (computed.color) style.color = safeColor(computed.color);
+                if (computed.borderColor) style.borderColor = safeColor(computed.borderColor);
+                if (computed.outlineColor) style.outlineColor = safeColor(computed.outlineColor);
+                
+                if (computed.boxShadow && computed.boxShadow.includes('oklch')) {
+                   style.boxShadow = 'none'; 
+                }
+              });
+            }
+          } catch (e) {
+            console.error('Error in PDF color sanitization:', e);
+          }
+          // --------------------------------------------------
+
+          // Remove Actions column (last th/td in each row)
+          const rows = clonedDoc.querySelectorAll('tr');
+          rows.forEach(row => {
+            if (row.lastElementChild) {
+              (row.lastElementChild as HTMLElement).style.display = 'none';
+            }
+          });
+
+          // Hide buttons and drag handles
+          const toHide = clonedDoc.querySelectorAll('button, .drag-handle, .no-print');
+          toHide.forEach(el => (el as HTMLElement).style.display = 'none');
+
+          // Replace inputs with text
+          const inputs = clonedDoc.querySelectorAll('input, textarea, select');
+          inputs.forEach((input: any) => {
+            const span = clonedDoc.createElement('span');
+            span.textContent = input.value;
+            span.className = input.className;
+            span.style.border = 'none';
+            span.style.background = 'transparent';
+            span.style.textAlign = 'center';
+            span.style.padding = '0';
+            span.style.margin = '0';
+            span.style.display = 'inline-block';
+            
+            // Preserve font styles
+            const computed = getComputedStyle(input);
+            span.style.fontSize = computed.fontSize;
+            span.style.fontWeight = computed.fontWeight;
+            span.style.color = safeColor(computed.color);
+
+            if (input.tagName === 'TEXTAREA') {
+                span.style.whiteSpace = 'pre-wrap';
+            }
+            if(input.parentNode) input.parentNode.replaceChild(span, input);
+          });
+          
+          // Ensure full width
+          const scrollables = clonedDoc.querySelectorAll('.overflow-x-auto');
+          scrollables.forEach(el => {
+             (el as HTMLElement).style.overflow = 'visible';
+             (el as HTMLElement).style.display = 'block';
+             (el as HTMLElement).style.width = 'fit-content';
+          });
+        }
+      });
+
       const pdf = new jsPDF('l', 'mm', 'a4');
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
       const margin = 10;
+      const maxContentWidth = pageWidth - (margin * 2);
+      const maxContentHeight = pageHeight - (margin * 2);
+
+      const imgWidth = canvas.width;
+      const imgHeight = canvas.height;
       
-      // Use filteredMachines for PDF export so it matches what the user sees
-      const printableMachines = filteredMachines.filter(m => m.type !== 'BOUS');
-      
-      const machinesByType = printableMachines.reduce((acc, m) => {
-        if (!acc[m.type]) acc[m.type] = [];
-        acc[m.type].push(m);
-        return acc;
-      }, {} as Record<string, PlanningMachine[]>);
+      // Calculate scale to fit width
+      let pdfContentWidth = maxContentWidth;
+      let pdfContentHeight = (imgHeight * maxContentWidth) / imgWidth;
 
-      const types = Object.keys(machinesByType).sort();
-      let isFirstPage = true;
+      // Enforce max 2 pages constraint (optional, but good for consistency)
+      const maxTotalHeight = maxContentHeight * 2;
+      if (pdfContentHeight > maxTotalHeight) {
+        const scaleFactor = maxTotalHeight / pdfContentHeight;
+        pdfContentWidth = pdfContentWidth * scaleFactor;
+        pdfContentHeight = maxTotalHeight;
+      }
 
-      for (const type of types) {
-        if (!isFirstPage) pdf.addPage();
-        isFirstPage = false;
-
-        pdf.setFontSize(16);
-        pdf.text(`${type} MACHINES SCHEDULE`, margin, margin + 5);
+      if (pdfContentHeight <= maxContentHeight) {
+        const x = margin + (maxContentWidth - pdfContentWidth) / 2;
+        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', x, margin, pdfContentWidth, pdfContentHeight);
+      } else {
+        let heightLeft = imgHeight;
+        let position = 0;
         
-        const typeGroup = machinesByType[type];
-        let currentY = margin + 15;
+        const scaleRatio = imgHeight / pdfContentHeight;
+        const pageCanvasHeight = maxContentHeight * scaleRatio;
 
-        for (const machine of typeGroup) {
-          const elementId = `machine-schedule-card-${machine.id}`;
-          const element = document.getElementById(elementId);
+        let pageIndex = 0;
+        while (heightLeft > 0) {
+          const pageCanvas = document.createElement('canvas');
+          pageCanvas.width = imgWidth;
+          const sliceHeight = Math.min(heightLeft, pageCanvasHeight);
+          pageCanvas.height = sliceHeight;
           
-          if (element) {
-            const canvas = await html2canvas(element, {
-              scale: 1.5,
-              useCORS: true,
-              backgroundColor: '#ffffff',
-              onclone: (clonedDoc) => {
-                 const btns = clonedDoc.querySelectorAll('button');
-                 btns.forEach(b => (b as HTMLElement).style.display = 'none');
-                 const inputs = clonedDoc.querySelectorAll('input, textarea');
-                 inputs.forEach((input: any) => {
-                    const span = clonedDoc.createElement('span');
-                    span.textContent = input.value;
-                    span.className = input.className;
-                    span.style.border = 'none';
-                    span.style.background = 'transparent';
-                    span.style.textAlign = 'center';
-                    if (input.tagName === 'TEXTAREA') {
-                        span.style.whiteSpace = 'pre-wrap';
-                        span.style.textAlign = 'right';
-                    }
-                    if(input.parentNode) input.parentNode.replaceChild(span, input);
-                 });
-              }
-            });
-
-            const imgData = canvas.toDataURL('image/png');
-            const imgProps = pdf.getImageProperties(imgData);
+          const pageCtx = pageCanvas.getContext('2d');
+          if (pageCtx) {
+            pageCtx.drawImage(
+              canvas, 
+              0, position, imgWidth, sliceHeight, 
+              0, 0, imgWidth, sliceHeight
+            );
             
-            const contentWidth = pageWidth - (margin * 2);
-            const contentHeight = (imgProps.height * contentWidth) / imgProps.width;
-
-            if (currentY + contentHeight > pageHeight - margin) {
-              pdf.addPage();
-              currentY = margin;
-            }
-
-            pdf.addImage(imgData, 'PNG', margin, currentY, contentWidth, contentHeight);
-            currentY += contentHeight + 5;
+            const sliceData = pageCanvas.toDataURL('image/png');
+            const pdfSliceHeight = sliceHeight / scaleRatio;
+            
+            if (pageIndex > 0) pdf.addPage();
+            
+            const x = margin + (maxContentWidth - pdfContentWidth) / 2;
+            pdf.addImage(sliceData, 'PNG', x, margin, pdfContentWidth, pdfSliceHeight);
           }
+          
+          heightLeft -= sliceHeight;
+          position += sliceHeight;
+          pageIndex++;
         }
       }
+      
       pdf.save('production-schedule.pdf');
     } catch (err) {
       console.error("PDF Error:", err);

@@ -201,5 +201,18 @@ export const DataService = {
   async updateOrder(orderId: string, updates: Partial<Order>): Promise<void> {
     const docRef = doc(db, 'orders', orderId);
     await setDoc(docRef, { ...updates, lastUpdated: Timestamp.now() }, { merge: true });
+  },
+
+  async getDailySummary(date: string): Promise<{ externalProduction: number } | null> {
+    const docRef = doc(db, 'DailySummaries', date);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return docSnap.data() as { externalProduction: number };
+    }
+    return null;
+  },
+
+  async updateDailySummary(date: string, data: { externalProduction: number }): Promise<void> {
+    await setDoc(doc(db, 'DailySummaries', date), data, { merge: true });
   }
 };
