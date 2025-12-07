@@ -1,0 +1,21 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./**/*.{js,ts,jsx,tsx}",
+  ],
+  theme: {
+    extend: {
+      colors: {
+        firebase: {
+          yellow: '#FFCA28',
+          amber: '#FFA000',
+          orange: '#F57C00',
+          navy: '#039BE5',
+          coral: '#FF8A65',
+        }
+      }
+    },
+  },
+  plugins: [],
+}

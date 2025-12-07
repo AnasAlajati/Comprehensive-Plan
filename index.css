@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@theme {
+  --color-firebase-yellow: #FFCA28;
+  --color-firebase-amber: #FFA000;
+  --color-firebase-orange: #F57C00;
+  --color-firebase-navy: #039BE5;
+  --color-firebase-coral: #FF8A65;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}

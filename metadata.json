@@ -1,0 +1,5 @@
+{
+  "name": "Firestore Connectivity Demo",
+  "description": "A diagnostic and demonstration tool to verify Firebase configuration and showcase real-time Firestore operations (Create, Read, Delete).",
+  "requestFramePermissions": []
+}
