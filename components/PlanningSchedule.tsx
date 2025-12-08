@@ -595,6 +595,15 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
           }
           // --------------------------------------------------
 
+          // --- COMPACT LAYOUT ADJUSTMENTS ---
+          // Reduce padding in table cells
+          const cells = clonedDoc.querySelectorAll('th, td');
+          cells.forEach((cell) => {
+            (cell as HTMLElement).style.padding = '4px'; // Reduced padding
+            (cell as HTMLElement).style.fontSize = '10px'; // Smaller font
+          });
+          // ----------------------------------
+
           // Remove Actions column (last th/td in each row)
           const rows = clonedDoc.querySelectorAll('tr');
           rows.forEach(row => {
@@ -622,7 +631,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
             
             // Preserve font styles
             const computed = getComputedStyle(input);
-            span.style.fontSize = computed.fontSize;
+            span.style.fontSize = 'inherit'; // Inherit from parent (which we set to 10px)
             span.style.fontWeight = computed.fontWeight;
             span.style.color = safeColor(computed.color);
 
@@ -645,7 +654,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
       const pdf = new jsPDF('l', 'mm', 'a4');
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const margin = 10;
+      const margin = 5; // Reduced margin
       const maxContentWidth = pageWidth - (margin * 2);
       const maxContentHeight = pageHeight - (margin * 2);
 
@@ -656,53 +665,19 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
       let pdfContentWidth = maxContentWidth;
       let pdfContentHeight = (imgHeight * maxContentWidth) / imgWidth;
 
-      // Enforce max 2 pages constraint (optional, but good for consistency)
-      const maxTotalHeight = maxContentHeight * 2;
-      if (pdfContentHeight > maxTotalHeight) {
-        const scaleFactor = maxTotalHeight / pdfContentHeight;
+      // Enforce 1 page constraint
+      // If height exceeds page height, scale down to fit height
+      if (pdfContentHeight > maxContentHeight) {
+        const scaleFactor = maxContentHeight / pdfContentHeight;
         pdfContentWidth = pdfContentWidth * scaleFactor;
-        pdfContentHeight = maxTotalHeight;
+        pdfContentHeight = maxContentHeight;
       }
 
-      if (pdfContentHeight <= maxContentHeight) {
-        const x = margin + (maxContentWidth - pdfContentWidth) / 2;
-        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', x, margin, pdfContentWidth, pdfContentHeight);
-      } else {
-        let heightLeft = imgHeight;
-        let position = 0;
-        
-        const scaleRatio = imgHeight / pdfContentHeight;
-        const pageCanvasHeight = maxContentHeight * scaleRatio;
-
-        let pageIndex = 0;
-        while (heightLeft > 0) {
-          const pageCanvas = document.createElement('canvas');
-          pageCanvas.width = imgWidth;
-          const sliceHeight = Math.min(heightLeft, pageCanvasHeight);
-          pageCanvas.height = sliceHeight;
-          
-          const pageCtx = pageCanvas.getContext('2d');
-          if (pageCtx) {
-            pageCtx.drawImage(
-              canvas, 
-              0, position, imgWidth, sliceHeight, 
-              0, 0, imgWidth, sliceHeight
-            );
-            
-            const sliceData = pageCanvas.toDataURL('image/png');
-            const pdfSliceHeight = sliceHeight / scaleRatio;
-            
-            if (pageIndex > 0) pdf.addPage();
-            
-            const x = margin + (maxContentWidth - pdfContentWidth) / 2;
-            pdf.addImage(sliceData, 'PNG', x, margin, pdfContentWidth, pdfSliceHeight);
-          }
-          
-          heightLeft -= sliceHeight;
-          position += sliceHeight;
-          pageIndex++;
-        }
-      }
+      // Center horizontally and vertically
+      const x = margin + (maxContentWidth - pdfContentWidth) / 2;
+      const y = margin + (maxContentHeight - pdfContentHeight) / 2;
+      
+      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', x, y, pdfContentWidth, pdfContentHeight);
       
       pdf.save('production-schedule.pdf');
     } catch (err) {

@@ -1277,6 +1277,39 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           }
           // --------------------------------------------------
 
+          // --- COMPACT LAYOUT ADJUSTMENTS ---
+          // Reduce padding in table cells
+          const cells = clonedDoc.querySelectorAll('th, td');
+          cells.forEach((cell) => {
+            (cell as HTMLElement).style.padding = '4px'; // Reduced from p-2 (8px)
+            (cell as HTMLElement).style.fontSize = '10px'; // Smaller font
+          });
+
+          // Reduce footer padding and font sizes
+          const footerDivs = clonedDoc.querySelectorAll('.p-4');
+          footerDivs.forEach((div) => {
+             // Check if it's part of the footer stats
+             if (div.parentElement?.classList.contains('divide-slate-200')) {
+                (div as HTMLElement).style.padding = '8px'; // Reduced from p-4 (16px)
+             }
+          });
+
+          const largeTexts = clonedDoc.querySelectorAll('.text-2xl, .text-3xl');
+          largeTexts.forEach((el) => {
+             if (el.classList.contains('text-3xl')) {
+                (el as HTMLElement).style.fontSize = '1.25rem'; // Reduced from 1.875rem
+             } else {
+                (el as HTMLElement).style.fontSize = '1rem'; // Reduced from 1.5rem
+             }
+          });
+          
+          // Status overview section
+          const statusSection = clonedDoc.querySelector('.md\\:w-64');
+          if (statusSection) {
+             (statusSection as HTMLElement).style.padding = '8px';
+          }
+          // ----------------------------------
+
           // Replace inputs with text for clean PDF
           const inputs = clonedDoc.querySelectorAll('input, textarea');
           inputs.forEach((input: any) => {
@@ -1287,7 +1320,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
             span.style.justifyContent = 'center';
             span.style.width = '100%';
             span.style.height = '100%';
-            span.style.fontSize = getComputedStyle(input).fontSize;
+            span.style.fontSize = 'inherit';
             span.style.fontWeight = getComputedStyle(input).fontWeight;
             
             // Ensure color is safe here too
@@ -1315,7 +1348,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
             span.style.justifyContent = 'center';
             span.style.width = '100%';
             span.style.height = '100%';
-            span.style.fontSize = getComputedStyle(select).fontSize;
+            span.style.fontSize = 'inherit';
             span.style.fontWeight = 'bold';
             if (select.parentNode) {
               select.parentNode.replaceChild(span, select);
@@ -1355,7 +1388,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       const pdf = new jsPDF('l', 'mm', 'a4');
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const margin = 10;
+      const margin = 5; // Reduced margin
       const maxContentWidth = pageWidth - (margin * 2);
       const maxContentHeight = pageHeight - (margin * 2);
 
@@ -1367,67 +1400,19 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       let pdfContentWidth = maxContentWidth;
       let pdfContentHeight = (imgHeight * maxContentWidth) / imgWidth;
 
-      // Enforce max 2 pages constraint
-      // If height exceeds 2 pages, scale it down to fit exactly 2 pages
-      const maxTotalHeight = maxContentHeight * 2;
-      if (pdfContentHeight > maxTotalHeight) {
-        const scaleFactor = maxTotalHeight / pdfContentHeight;
+      // Enforce 1 page constraint
+      // If height exceeds page height, scale down to fit height
+      if (pdfContentHeight > maxContentHeight) {
+        const scaleFactor = maxContentHeight / pdfContentHeight;
         pdfContentWidth = pdfContentWidth * scaleFactor;
-        pdfContentHeight = maxTotalHeight;
+        pdfContentHeight = maxContentHeight;
       }
 
-      // If content fits on one page, just add it
-      if (pdfContentHeight <= maxContentHeight) {
-        // Center horizontally if scaled down
-        const x = margin + (maxContentWidth - pdfContentWidth) / 2;
-        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', x, margin, pdfContentWidth, pdfContentHeight);
-      } else {
-        // Multi-page logic (max 2 pages now guaranteed by scaling above)
-        let heightLeft = imgHeight;
-        let position = 0;
-        
-        // Calculate the height of one PDF page in canvas pixels (adjusted for the new scale)
-        // We need to map the PDF page height back to canvas pixels
-        // ratio = canvasPixels / pdfPixels
-        const scaleRatio = imgHeight / pdfContentHeight;
-        const pageCanvasHeight = maxContentHeight * scaleRatio;
-
-        let pageIndex = 0;
-        while (heightLeft > 0) {
-          // Create a temporary canvas for the slice
-          const pageCanvas = document.createElement('canvas');
-          pageCanvas.width = imgWidth;
-          // The height of the slice is either the full page height or the remaining height
-          const sliceHeight = Math.min(heightLeft, pageCanvasHeight);
-          pageCanvas.height = sliceHeight;
-          
-          const pageCtx = pageCanvas.getContext('2d');
-          if (pageCtx) {
-            // Draw the slice from the original canvas
-            pageCtx.drawImage(
-              canvas, 
-              0, position, imgWidth, sliceHeight, // Source
-              0, 0, imgWidth, sliceHeight         // Destination
-            );
-            
-            const sliceData = pageCanvas.toDataURL('image/png');
-            
-            // Calculate the height on the PDF
-            // pdfHeight = canvasHeight / scaleRatio
-            const pdfSliceHeight = sliceHeight / scaleRatio;
-            
-            if (pageIndex > 0) pdf.addPage();
-            
-            // Center horizontally
-            const x = margin + (maxContentWidth - pdfContentWidth) / 2;
-            pdf.addImage(sliceData, 'PNG', x, margin, pdfContentWidth, pdfSliceHeight);
-          }
-          
-          heightLeft -= sliceHeight;
-          position += sliceHeight;
-          pageIndex++;
-        }
-      }
+      // Center horizontally and vertically
+      const x = margin + (maxContentWidth - pdfContentWidth) / 2;
+      const y = margin + (maxContentHeight - pdfContentHeight) / 2;
+      
+      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', x, y, pdfContentWidth, pdfContentHeight);
       
       pdf.save(`Daily-Machine-Plan-${selectedDate}.pdf`);
 
