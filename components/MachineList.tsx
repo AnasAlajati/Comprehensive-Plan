@@ -1,9 +1,10 @@
 
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { MachineRow, MachineStatus } from '../types';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import { DataService } from '../services/dataService';
 
 interface MachineListProps {
   machines: MachineRow[];
@@ -124,15 +125,84 @@ interface MachineCardProps {
 
 const MachineCard: React.FC<MachineCardProps> = ({ machine, onUpdate, isEditing, onEditToggle }) => {
   const isWorking = machine.status === MachineStatus.WORKING;
+  const [localMachine, setLocalMachine] = useState(machine);
+  const [pendingRef, setPendingRef] = useState<string | null>(null);
+  const [showRefConfirm, setShowRefConfirm] = useState(false);
 
-  const handleUpdate = (field: keyof MachineRow, value: any) => {
-    if (onUpdate) onUpdate({ ...machine, [field]: value });
+  useEffect(() => {
+    if (!isEditing) {
+      setLocalMachine(machine);
+      setShowRefConfirm(false);
+      setPendingRef(null);
+    }
+  }, [machine, isEditing]);
+
+  const handleLocalUpdate = (field: keyof MachineRow, value: any) => {
+    setLocalMachine(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleSave = async () => {
+    if (!onUpdate) return;
+
+    // Check for OrderSS match if Working
+    if (localMachine.status === MachineStatus.WORKING && localMachine.client && localMachine.material) {
+      // Only check if we haven't already confirmed or if values changed significantly
+      const ref = await DataService.findOrderReference(localMachine.client, localMachine.material);
+      
+      if (ref && ref !== localMachine.orderReference) {
+        setPendingRef(ref);
+        setShowRefConfirm(true);
+        return; // Stop save to show confirmation
+      }
+    }
+
+    // Proceed with save
+    await onUpdate(localMachine);
+    onEditToggle();
+  };
+
+  const confirmReference = async (useReference: boolean) => {
+    const updatedMachine = { 
+      ...localMachine, 
+      orderReference: useReference && pendingRef ? pendingRef : localMachine.orderReference 
+    };
+    
+    if (onUpdate) await onUpdate(updatedMachine);
+    setShowRefConfirm(false);
+    onEditToggle();
   };
 
   if (isEditing) {
+    if (showRefConfirm) {
+      return (
+        <div className="bg-white border border-indigo-200 rounded-xl shadow-md p-4 flex flex-col gap-3 relative h-auto z-10 ring-2 ring-indigo-50 animate-in fade-in zoom-in duration-200">
+          <h3 className="font-bold text-indigo-800 border-b border-indigo-100 pb-2">Order Found!</h3>
+          <p className="text-sm text-slate-600">
+            Found existing order reference <span className="font-mono font-bold text-indigo-600 bg-indigo-50 px-1 rounded">{pendingRef}</span> for this client/fabric.
+          </p>
+          <p className="text-xs text-slate-500">Do you want to link this machine to that order?</p>
+          
+          <div className="flex gap-2 mt-2">
+            <button 
+              onClick={() => confirmReference(true)}
+              className="flex-1 bg-indigo-600 text-white text-xs font-bold py-2 rounded hover:bg-indigo-700 transition-colors"
+            >
+              Yes, Link Order
+            </button>
+            <button 
+              onClick={() => confirmReference(false)}
+              className="flex-1 bg-slate-100 text-slate-600 text-xs font-bold py-2 rounded hover:bg-slate-200 transition-colors"
+            >
+              No, Keep Separate
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="bg-white border border-slate-200 rounded-xl shadow-md p-4 flex flex-col gap-3 relative h-auto z-10 ring-2 ring-blue-50">
-        <button onClick={onEditToggle} className="absolute top-2 right-2 text-xs bg-white text-blue-700 px-2 py-1 font-semibold rounded-md hover:bg-slate-50 border border-slate-100">Done</button>
+        <button onClick={handleSave} className="absolute top-2 right-2 text-xs bg-blue-600 text-white px-3 py-1 font-semibold rounded-md hover:bg-blue-700 shadow-sm transition-colors">Save</button>
         <h3 className="font-semibold text-slate-800 border-b pb-2">Edit {machine.machineName}</h3>
         
         <div className="grid grid-cols-2 gap-2">
@@ -140,8 +210,8 @@ const MachineCard: React.FC<MachineCardProps> = ({ machine, onUpdate, isEditing,
             <label className="text-[10px] text-slate-500 font-bold block mb-1">Status</label>
             <select 
                 className="w-full border border-slate-300 rounded p-1.5 text-sm bg-white text-slate-900 outline-none focus:ring-2 focus:ring-blue-500"
-                value={machine.status}
-                onChange={(e) => handleUpdate('status', e.target.value)}
+                value={localMachine.status}
+                onChange={(e) => handleLocalUpdate('status', e.target.value)}
             >
                 {Object.values(MachineStatus).map(s => <option key={s} value={s}>{s}</option>)}
             </select>
@@ -151,8 +221,8 @@ const MachineCard: React.FC<MachineCardProps> = ({ machine, onUpdate, isEditing,
             <input 
                 type="number"
                 className="w-full border border-slate-300 rounded p-1.5 text-sm bg-white text-slate-900 outline-none focus:ring-2 focus:ring-blue-500"
-                value={machine.remainingMfg}
-                onChange={(e) => handleUpdate('remainingMfg', Number(e.target.value))}
+                value={localMachine.remainingMfg}
+                onChange={(e) => handleLocalUpdate('remainingMfg', Number(e.target.value))}
             />
             </div>
         </div>
@@ -161,8 +231,8 @@ const MachineCard: React.FC<MachineCardProps> = ({ machine, onUpdate, isEditing,
            <label className="text-[10px] text-slate-500 font-bold block mb-1">Material</label>
            <input 
              className="w-full border border-slate-300 rounded p-1.5 text-sm bg-white text-slate-900 outline-none focus:ring-2 focus:ring-blue-500"
-             value={machine.material}
-             onChange={(e) => handleUpdate('material', e.target.value)}
+             value={localMachine.material}
+             onChange={(e) => handleLocalUpdate('material', e.target.value)}
            />
         </div>
 
@@ -170,8 +240,8 @@ const MachineCard: React.FC<MachineCardProps> = ({ machine, onUpdate, isEditing,
            <label className="text-[10px] text-slate-500 font-bold block mb-1">Client</label>
            <input 
              className="w-full border border-slate-300 rounded p-1.5 text-sm bg-white text-slate-900 outline-none focus:ring-2 focus:ring-blue-500"
-             value={machine.client}
-             onChange={(e) => handleUpdate('client', e.target.value)}
+             value={localMachine.client}
+             onChange={(e) => handleLocalUpdate('client', e.target.value)}
            />
         </div>
       </div>

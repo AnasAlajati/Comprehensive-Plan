@@ -1,13 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { MachineRow, PlanItem, MachineStatus } from '../types';
+import { MachineRow, PlanItem, MachineStatus, CustomerOrder } from '../types';
 import { SmartPlanModal } from './SmartPlanModal';
 import { recalculateSchedule, addDays } from '../services/data';
 import { DataService } from '../services/dataService';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { Search } from 'lucide-react';
+import { Search, Play } from 'lucide-react';
 
 // Global CSS to hide number input spinners
 const globalStyles = `
@@ -31,6 +31,7 @@ interface SearchDropdownProps {
   onFocus?: () => void;
   placeholder?: string;
   className?: string;
+  extraInfo?: (option: any) => React.ReactNode;
 }
 
 const SearchDropdown: React.FC<SearchDropdownProps> = ({
@@ -42,7 +43,8 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
   onKeyDown,
   onFocus,
   placeholder = '---',
-  className
+  className,
+  extraInfo
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -146,9 +148,10 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
                 <div
                   key={opt.id}
                   onClick={() => handleSelect(opt.name)}
-                  className="px-2 py-1.5 hover:bg-blue-50 cursor-pointer text-xs border-b border-slate-100 last:border-b-0 text-left"
+                  className="px-2 py-1.5 hover:bg-blue-50 cursor-pointer text-xs border-b border-slate-100 last:border-b-0 text-left flex justify-between items-center"
                 >
-                  {opt.name}
+                  <span>{opt.name}</span>
+                  {extraInfo && extraInfo(opt)}
                 </div>
               ))}
               {searchTerm && !options.some(o => o.name.toLowerCase() === searchTerm.toLowerCase()) && (
@@ -184,6 +187,7 @@ type PlanningMachine = MachineRow & { machineSSId: string };
 
 export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) => {
   const [smartAddMachineId, setSmartAddMachineId] = useState<number | null>(null);
+  const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean; machine: any; plan?: any; isCurrent?: boolean; } | null>(null);
   const [draggedPlan, setDraggedPlan] = useState<{machineId: number, index: number} | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [machines, setMachines] = useState<PlanningMachine[]>([]);
@@ -200,6 +204,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
   // Data for Dropdowns
   const [fabrics, setFabrics] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
+  const [customerOrders, setCustomerOrders] = useState<CustomerOrder[]>([]);
 
   const scheduleRef = useRef<HTMLDivElement>(null);
 
@@ -217,18 +222,30 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [f, c] = await Promise.all([
+        const [f, c, o] = await Promise.all([
           DataService.getFabrics(),
-          DataService.getClients()
+          DataService.getClients(),
+          DataService.getCustomerOrders()
         ]);
         setFabrics(f);
         setClients(c);
+        setCustomerOrders(o);
       } catch (err) {
         console.error("Failed to load fabrics/clients", err);
       }
     };
     loadData();
   }, []);
+
+  const handleDateChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setActiveDay(val);
+    try {
+      await setDoc(doc(db, 'settings', 'global'), { activeDay: val }, { merge: true });
+    } catch (err) {
+      console.error("Failed to update active day", err);
+    }
+  };
 
   const handleCreateItem = async (type: 'fabric' | 'client', name: string) => {
     try {
@@ -395,7 +412,53 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
     };
   }, [mapMachineSSDocToMachineRow, activeDay]);
 
-  const handlePlanChange = (
+  const handleActivatePlan = async (e: React.MouseEvent, machine: PlanningMachine, plan: PlanItem, index: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!confirm(`Are you sure you want to start production for ${plan.fabric} (${plan.client}) on ${machine.machineName}? This will update the machine's current status.`)) {
+      return;
+    }
+
+    try {
+      const updates = {
+        status: 'Working',
+        client: plan.client,
+        material: plan.fabric,
+        fabric: plan.fabric,
+        currentOrder: plan.orderName,
+        orderReference: plan.orderReference || (plan.client && plan.fabric ? `${plan.client}-${plan.fabric.split(/[\s-]+/).map((w: string) => w[0]).join('')}` : ''), // NEW: Persist reference (auto-gen if missing)
+        remainingMfg: plan.remaining,
+        dayProduction: 0,
+        lastUpdated: new Date().toISOString(),
+        futurePlans: machine.futurePlans?.filter((_, i) => i !== index)
+      };
+
+      await DataService.updateMachineInMachineSS(machine.machineSSId, updates);
+      
+      setMachines(prev => prev.map(m => {
+        if (m.id === machine.id) {
+          return {
+            ...m,
+            status: MachineStatus.WORKING,
+            client: plan.client || '',
+            material: plan.fabric,
+            orderReference: updates.orderReference, // NEW: Update local state
+            remainingMfg: plan.remaining,
+            dayProduction: 0,
+            futurePlans: m.futurePlans?.filter((_, i) => i !== index) || []
+          };
+        }
+        return m;
+      }));
+
+    } catch (err) {
+      console.error("Failed to activate plan", err);
+      alert("Failed to activate plan");
+    }
+  };
+
+  const handlePlanChange = async (
     machine: PlanningMachine, 
     planIndex: number, 
     field: keyof PlanItem, 
@@ -409,10 +472,69 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
       if (field === 'quantity') {
         plan.remaining = value;
       }
+
+      // Auto-generate Order Reference
+      if (field === 'client' || field === 'fabric') {
+        const c = field === 'client' ? value : plan.client;
+        const f = field === 'fabric' ? value : plan.fabric;
+        if (c && f) {
+            // Logic: Client - Fabric Initials (e.g. OR - Single Jersey -> OR-SJ)
+            const fabricInitials = f.split(/[\s-]+/).map((w: string) => w[0]).join('');
+            plan.orderReference = `${c}-${fabricInitials}`;
+        }
+      }
       
       updated[planIndex] = plan;
       return updated;
     });
+
+    // Smart Connection: Auto-add fabric to Customer Order if not exists
+    if (field === 'fabric' || field === 'client') {
+       const currentPlan = machine.futurePlans?.[planIndex];
+       const clientName = field === 'client' ? value : currentPlan?.client;
+       const fabricName = field === 'fabric' ? value : currentPlan?.fabric;
+       
+       if (clientName && fabricName) {
+          // Check if order exists
+          const order = customerOrders.find(o => o.customerName === clientName);
+          const fabricExists = order?.fabrics.some(f => f.fabricName === fabricName);
+          
+          if (!fabricExists) {
+             try {
+                await DataService.addFabricToOrder(clientName, fabricName);
+                // Update local state optimistically
+                setCustomerOrders(prev => {
+                   const newOrders = [...prev];
+                   const existingOrderIndex = newOrders.findIndex(o => o.customerName === clientName);
+                   if (existingOrderIndex >= 0) {
+                      // Avoid duplicates in local state if multiple rapid updates
+                      if (!newOrders[existingOrderIndex].fabrics.some(f => f.fabricName === fabricName)) {
+                        newOrders[existingOrderIndex].fabrics.push({
+                            fabricName,
+                            totalQuantity: 0,
+                            remainingQuantity: 0,
+                            assignedMachines: []
+                        });
+                      }
+                   } else {
+                      newOrders.push({
+                         customerName: clientName,
+                         fabrics: [{
+                            fabricName,
+                            totalQuantity: 0,
+                            remainingQuantity: 0,
+                            assignedMachines: []
+                         }]
+                      });
+                   }
+                   return newOrders;
+                });
+             } catch (e) {
+                console.error("Failed to auto-add fabric to order", e);
+             }
+          }
+       }
+    }
   };
 
   const addPlan = (machine: PlanningMachine, type: 'PRODUCTION' | 'SETTINGS' = 'PRODUCTION') => {
@@ -542,142 +664,223 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
     try {
       const element = scheduleRef.current;
       
-      const canvas = await html2canvas(element, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: '#ffffff',
-        windowWidth: element.scrollWidth + 100,
-        onclone: (clonedDoc) => {
-          // --- FIX: Sanitize OKLCH colors for html2canvas ---
-          const ctx = document.createElement('canvas').getContext('2d');
-          
-          const safeColor = (c: string) => {
-             if (!c || typeof c !== 'string') return c;
-             if (!ctx) return c; 
-             
-             if (c.includes('oklch') || c.includes('lab(') || c.includes('lch(')) {
-                  try {
-                    ctx.clearRect(0, 0, 1, 1);
-                    ctx.fillStyle = c;
-                    ctx.fillRect(0, 0, 1, 1);
-                    const data = ctx.getImageData(0, 0, 1, 1).data;
-                    return `rgba(${data[0]}, ${data[1]}, ${data[2]}, ${data[3] / 255})`;
-                  } catch (e) {
-                    console.warn('Color conversion failed', e);
-                    return '#000000'; 
-                  }
-             }
-             return c;
-          };
-
-          try {
-            if (ctx) {
-              ctx.canvas.width = 1;
-              ctx.canvas.height = 1;
-              
-              const allElements = clonedDoc.querySelectorAll('*');
-              allElements.forEach((el) => {
-                const style = (el as HTMLElement).style;
-                const computed = getComputedStyle(el);
-                
-                if (computed.backgroundColor) style.backgroundColor = safeColor(computed.backgroundColor);
-                if (computed.color) style.color = safeColor(computed.color);
-                if (computed.borderColor) style.borderColor = safeColor(computed.borderColor);
-                if (computed.outlineColor) style.outlineColor = safeColor(computed.outlineColor);
-                
-                if (computed.boxShadow && computed.boxShadow.includes('oklch')) {
-                   style.boxShadow = 'none'; 
-                }
-              });
-            }
-          } catch (e) {
-            console.error('Error in PDF color sanitization:', e);
-          }
-          // --------------------------------------------------
-
-          // --- COMPACT LAYOUT ADJUSTMENTS ---
-          // Reduce padding in table cells
-          const cells = clonedDoc.querySelectorAll('th, td');
-          cells.forEach((cell) => {
-            (cell as HTMLElement).style.padding = '4px'; // Reduced padding
-            (cell as HTMLElement).style.fontSize = '10px'; // Smaller font
-          });
-          // ----------------------------------
-
-          // Remove Actions column (last th/td in each row)
-          const rows = clonedDoc.querySelectorAll('tr');
-          rows.forEach(row => {
-            if (row.lastElementChild) {
-              (row.lastElementChild as HTMLElement).style.display = 'none';
-            }
-          });
-
-          // Hide buttons and drag handles
-          const toHide = clonedDoc.querySelectorAll('button, .drag-handle, .no-print');
-          toHide.forEach(el => (el as HTMLElement).style.display = 'none');
-
-          // Replace inputs with text
-          const inputs = clonedDoc.querySelectorAll('input, textarea, select');
-          inputs.forEach((input: any) => {
-            const span = clonedDoc.createElement('span');
-            span.textContent = input.value;
-            span.className = input.className;
-            span.style.border = 'none';
-            span.style.background = 'transparent';
-            span.style.textAlign = 'center';
-            span.style.padding = '0';
-            span.style.margin = '0';
-            span.style.display = 'inline-block';
-            
-            // Preserve font styles
-            const computed = getComputedStyle(input);
-            span.style.fontSize = 'inherit'; // Inherit from parent (which we set to 10px)
-            span.style.fontWeight = computed.fontWeight;
-            span.style.color = safeColor(computed.color);
-
-            if (input.tagName === 'TEXTAREA') {
-                span.style.whiteSpace = 'pre-wrap';
-            }
-            if(input.parentNode) input.parentNode.replaceChild(span, input);
-          });
-          
-          // Ensure full width
-          const scrollables = clonedDoc.querySelectorAll('.overflow-x-auto');
-          scrollables.forEach(el => {
-             (el as HTMLElement).style.overflow = 'visible';
-             (el as HTMLElement).style.display = 'block';
-             (el as HTMLElement).style.width = 'fit-content';
-          });
-        }
-      });
-
+      // Define the types we want to group by
+      const machineTypes = ['SINGLE', 'DOUBLE', 'MELTON', 'INTERLOCK'];
+      
       const pdf = new jsPDF('l', 'mm', 'a4');
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const margin = 5; // Reduced margin
+      const margin = 5;
       const maxContentWidth = pageWidth - (margin * 2);
       const maxContentHeight = pageHeight - (margin * 2);
 
-      const imgWidth = canvas.width;
-      const imgHeight = canvas.height;
-      
-      // Calculate scale to fit width
-      let pdfContentWidth = maxContentWidth;
-      let pdfContentHeight = (imgHeight * maxContentWidth) / imgWidth;
+      let isFirstPage = true;
 
-      // Enforce 1 page constraint
-      // If height exceeds page height, scale down to fit height
-      if (pdfContentHeight > maxContentHeight) {
-        const scaleFactor = maxContentHeight / pdfContentHeight;
-        pdfContentWidth = pdfContentWidth * scaleFactor;
-        pdfContentHeight = maxContentHeight;
+      // Process each machine type separately
+      for (const type of machineTypes) {
+        // Check if we have any machines of this type
+        const hasMachines = element.querySelector(`[data-machine-type="${type}"]`);
+        if (!hasMachines) continue;
+
+        // Capture the specific type group
+        const canvas = await html2canvas(element, {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: '#ffffff',
+          windowWidth: element.scrollWidth + 100,
+          onclone: (clonedDoc) => {
+            // --- FIX: Sanitize OKLCH colors for html2canvas ---
+            const ctx = document.createElement('canvas').getContext('2d');
+            
+            const safeColor = (c: string) => {
+               if (!c || typeof c !== 'string') return c;
+               // Fast check for modern color spaces
+               if (!c.includes('ok') && !c.includes('lab') && !c.includes('lch')) return c;
+
+               if (c.includes('oklch') || c.includes('oklab') || c.includes('lab(') || c.includes('lch(')) {
+                    if (!ctx) return '#000000';
+                    try {
+                      ctx.clearRect(0, 0, 1, 1);
+                      ctx.fillStyle = c;
+                      ctx.fillRect(0, 0, 1, 1);
+                      const data = ctx.getImageData(0, 0, 1, 1).data;
+                      return `rgba(${data[0]}, ${data[1]}, ${data[2]}, ${data[3] / 255})`;
+                    } catch (e) {
+                      console.warn('Color conversion failed', e);
+                      return '#000000'; 
+                    }
+               }
+               return c;
+            };
+
+            try {
+              if (ctx) {
+                ctx.canvas.width = 1;
+                ctx.canvas.height = 1;
+                
+                const allElements = clonedDoc.querySelectorAll('*');
+                allElements.forEach((el) => {
+                  const htmlEl = el as HTMLElement;
+                  const style = htmlEl.style;
+                  const computed = getComputedStyle(el);
+                  
+                  // Handle basic colors
+                  if (computed.backgroundColor) style.backgroundColor = safeColor(computed.backgroundColor);
+                  if (computed.color) style.color = safeColor(computed.color);
+                  if (computed.borderColor) style.borderColor = safeColor(computed.borderColor);
+                  
+                  // Handle detailed borders if they differ
+                  if (computed.borderTopColor) style.borderTopColor = safeColor(computed.borderTopColor);
+                  if (computed.borderRightColor) style.borderRightColor = safeColor(computed.borderRightColor);
+                  if (computed.borderBottomColor) style.borderBottomColor = safeColor(computed.borderBottomColor);
+                  if (computed.borderLeftColor) style.borderLeftColor = safeColor(computed.borderLeftColor);
+
+                  if (computed.outlineColor) style.outlineColor = safeColor(computed.outlineColor);
+                  
+                  // Handle SVG colors
+                  if (computed.fill && computed.fill !== 'none') style.fill = safeColor(computed.fill);
+                  if (computed.stroke && computed.stroke !== 'none') style.stroke = safeColor(computed.stroke);
+
+                  // Handle shadows
+                  if (computed.boxShadow && (computed.boxShadow.includes('ok') || computed.boxShadow.includes('lab') || computed.boxShadow.includes('lch'))) {
+                     style.boxShadow = 'none'; 
+                  }
+                  
+                  // Handle gradients or images that might contain colors
+                  if (computed.backgroundImage && (computed.backgroundImage.includes('ok') || computed.backgroundImage.includes('lab') || computed.backgroundImage.includes('lch'))) {
+                     style.backgroundImage = 'none';
+                     style.backgroundColor = safeColor(computed.backgroundColor);
+                  }
+                });
+              }
+            } catch (e) {
+              console.error('Error in PDF color sanitization:', e);
+            }
+            // --------------------------------------------------
+
+            // --- HIDE OTHER TYPES ---
+            const allMachineCards = clonedDoc.querySelectorAll('[data-machine-type]');
+            allMachineCards.forEach((card) => {
+               if (card.getAttribute('data-machine-type') !== type) {
+                  (card as HTMLElement).style.display = 'none';
+               } else {
+                  // Ensure visible and add some spacing
+                  (card as HTMLElement).style.display = 'block';
+                  (card as HTMLElement).style.marginBottom = '10px';
+                  
+                  // Scale down content slightly for better fit
+                  const table = card.querySelector('table');
+                  if (table) {
+                     (table as HTMLElement).style.fontSize = '9px';
+                     const cells = table.querySelectorAll('th, td');
+                     cells.forEach(c => (c as HTMLElement).style.padding = '2px 4px');
+                  }
+               }
+            });
+            // ------------------------
+
+            // Remove Actions column (last th/td in each row)
+            const rows = clonedDoc.querySelectorAll('tr');
+            rows.forEach(row => {
+              if (row.lastElementChild) {
+                (row.lastElementChild as HTMLElement).style.display = 'none';
+              }
+            });
+
+            // Hide buttons and drag handles
+            const toHide = clonedDoc.querySelectorAll('button, .drag-handle, .no-print');
+            toHide.forEach(el => (el as HTMLElement).style.display = 'none');
+
+            // Replace inputs with text
+            const inputs = clonedDoc.querySelectorAll('input, textarea, select');
+            inputs.forEach((input: any) => {
+              const span = clonedDoc.createElement('span');
+              span.textContent = input.value;
+              span.className = input.className;
+              span.style.border = 'none';
+              span.style.background = 'transparent';
+              span.style.textAlign = 'center';
+              span.style.padding = '0';
+              span.style.margin = '0';
+              span.style.display = 'inline-block';
+              
+              // Preserve font styles
+              const computed = getComputedStyle(input);
+              span.style.fontSize = 'inherit'; 
+              span.style.fontWeight = computed.fontWeight;
+              span.style.color = safeColor(computed.color);
+
+              if (input.tagName === 'TEXTAREA') {
+                  span.style.whiteSpace = 'pre-wrap';
+              }
+              if(input.parentNode) input.parentNode.replaceChild(span, input);
+            });
+            
+            // Ensure full width
+            const scrollables = clonedDoc.querySelectorAll('.overflow-x-auto');
+            scrollables.forEach(el => {
+               (el as HTMLElement).style.overflow = 'visible';
+               (el as HTMLElement).style.display = 'block';
+               (el as HTMLElement).style.width = 'fit-content';
+            });
+          }
+        });
+
+        const imgWidth = canvas.width;
+        const imgHeight = canvas.height;
+        
+        // If the canvas is empty (height 0), skip
+        if (imgHeight === 0) continue;
+
+        // Calculate scale to fit width
+        let pdfContentWidth = maxContentWidth;
+        let pdfContentHeight = (imgHeight * maxContentWidth) / imgWidth;
+
+        // Multi-page logic for this type
+        let heightLeft = imgHeight;
+        let position = 0;
+        
+        const scaleRatio = imgHeight / pdfContentHeight;
+        const pageCanvasHeight = maxContentHeight * scaleRatio;
+
+        while (heightLeft > 0) {
+          // Add new page if not the very first page of the document
+          if (!isFirstPage) {
+             pdf.addPage();
+          }
+          isFirstPage = false;
+
+          const pageCanvas = document.createElement('canvas');
+          pageCanvas.width = imgWidth;
+          const sliceHeight = Math.min(heightLeft, pageCanvasHeight);
+          pageCanvas.height = sliceHeight;
+          
+          const pageCtx = pageCanvas.getContext('2d');
+          if (pageCtx) {
+            pageCtx.drawImage(
+              canvas, 
+              0, position, imgWidth, sliceHeight, 
+              0, 0, imgWidth, sliceHeight
+            );
+            
+            const sliceData = pageCanvas.toDataURL('image/png');
+            const pdfSliceHeight = sliceHeight / scaleRatio;
+            
+            // Add Type Header on the first page of the section
+            if (position === 0) {
+               pdf.setFontSize(14);
+               pdf.setTextColor(40, 40, 40);
+               pdf.text(`${type} MACHINES`, margin, margin - 2); // Just above content if possible, or rely on margin
+            }
+
+            const x = margin + (maxContentWidth - pdfContentWidth) / 2;
+            pdf.addImage(sliceData, 'PNG', x, margin, pdfContentWidth, pdfSliceHeight);
+          }
+          
+          heightLeft -= sliceHeight;
+          position += sliceHeight;
+        }
       }
-
-      // Center horizontally and vertically
-      const x = margin + (maxContentWidth - pdfContentWidth) / 2;
-      const y = margin + (maxContentHeight - pdfContentHeight) / 2;
-      
-      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', x, y, pdfContentWidth, pdfContentHeight);
       
       pdf.save('production-schedule.pdf');
     } catch (err) {
@@ -722,6 +925,12 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
               </div>
               
               <div className="flex gap-2 overflow-x-auto pb-2 sm:pb-0">
+                <input 
+                  type="date"
+                  value={activeDay}
+                  onChange={handleDateChange}
+                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:ring-2 focus:ring-blue-500 outline-none"
+                />
                 <select 
                   value={filterType}
                   onChange={(e) => setFilterType(e.target.value)}
@@ -784,6 +993,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
             <div 
               key={machine.id} 
               id={`machine-schedule-card-${machine.id}`}
+              data-machine-type={machine.type}
               className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden ring-1 ring-black/5"
             >
             <div className="bg-slate-800 px-4 sm:px-6 py-3 flex flex-col sm:flex-row justify-between sm:items-center text-white gap-2 sm:gap-0">
@@ -799,21 +1009,21 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-center border-collapse text-sm min-w-[800px]">
+              <table className="w-full text-center border-collapse text-sm">
                 <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
                   <tr>
-                    <th className="py-3 px-2 border-r border-slate-100 w-10 text-slate-400">::</th>
-                    <th className="py-3 px-2 border-r border-slate-100 w-28"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Start Date</span><span className="text-[10px] text-slate-400">تاريخ البدء</span></div></th>
-                    <th className="py-3 px-2 border-r border-slate-100 w-24"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Orig. Machine</span><span className="text-[10px] text-slate-400">الاصل</span></div></th>
-                    <th className="py-3 px-2 border-r border-slate-100 w-20"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Days</span><span className="text-[10px] text-slate-400">المدة</span></div></th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-10 text-slate-400 hidden md:table-cell">::</th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-28 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Start Date</span><span className="text-[10px] text-slate-400">تاريخ البدء</span></div></th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-28 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">End Date</span><span className="text-[10px] text-slate-400">تاريخ الانتهاء</span></div></th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-24 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Orig. Machine</span><span className="text-[10px] text-slate-400">الاصل</span></div></th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-20 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Days</span><span className="text-[10px] text-slate-400">المدة</span></div></th>
                     <th className="py-3 px-2 border-r border-slate-100 w-24"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Client</span><span className="text-[10px] text-slate-400">العميل</span></div></th>
-                    <th className="py-3 px-2 border-r border-slate-100 w-24"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Order</span><span className="text-[10px] text-slate-400">الطلبية</span></div></th>
-                    <th className="py-3 px-2 border-r border-slate-100 w-20"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Remaining</span><span className="text-[10px] text-slate-400">متبقي</span></div></th>
-                    <th className="py-3 px-2 border-r border-slate-100 w-20"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Remaining</span><span className="text-[10px] text-slate-400">متبقي</span></div></th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-20 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Ref</span><span className="text-[10px] text-slate-400">المرجع</span></div></th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-20 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Remaining</span><span className="text-[10px] text-slate-400">متبقي</span></div></th>
                     <th className="py-3 px-2 border-r border-slate-100 w-20"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Qty</span><span className="text-[10px] text-slate-400">الكمية</span></div></th>
-                    <th className="py-3 px-2 border-r border-slate-100 w-20"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Prod/Day</span><span className="text-[10px] text-slate-400">انتاج/يوم</span></div></th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-20 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Prod/Day</span><span className="text-[10px] text-slate-400">انتاج/يوم</span></div></th>
                     <th className="py-3 px-2 border-r border-slate-100"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Fabric / Notes</span><span className="text-[10px] text-slate-400">الخامة / ملاحظات</span></div></th>
-                    <th className="py-3 px-2 w-10 text-slate-400">#</th>
+                    <th className="py-3 px-2 w-10 text-slate-400 hidden md:table-cell">#</th>
                     <th className="py-3 px-2 w-20 text-slate-400">Actions</th>
                   </tr>
                 </thead>
@@ -821,23 +1031,32 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                   {/* Current Machine Status Row */}
                   {isWorking ? (
                     <tr className="bg-emerald-50 border-b-2 border-emerald-100 relative group">
-                      <td className="p-2 text-center align-middle"><span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-200 text-emerald-700 text-[10px] font-bold">Now</span></td>
-                      <td className="p-2 text-xs font-bold text-emerald-800 align-middle">{activeDay}</td>
-                      <td className="p-2 text-xs font-bold text-emerald-800 align-middle">{currentEndDate}</td>
-                      <td className="p-2 text-center text-xs text-slate-400 align-middle">-</td>
-                      <td className="p-2 text-center align-middle"><div className="text-emerald-700 text-xs font-bold bg-white/50 py-1 rounded border border-emerald-200 mx-auto w-12">{currentRemainingDays}</div></td>
+                      <td className="p-2 text-center align-middle hidden md:table-cell"><span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-200 text-emerald-700 text-[10px] font-bold">Now</span></td>
+                      <td className="p-2 text-xs font-bold text-emerald-800 align-middle hidden md:table-cell">{activeDay}</td>
+                      <td className="p-2 text-xs font-bold text-emerald-800 align-middle hidden md:table-cell">{currentEndDate}</td>
+                      <td className="p-2 text-center text-xs text-slate-400 align-middle hidden md:table-cell">-</td>
+                      <td className="p-2 text-center align-middle hidden md:table-cell"><div className="text-emerald-700 text-xs font-bold bg-white/50 py-1 rounded border border-emerald-200 mx-auto w-12">{currentRemainingDays}</div></td>
                       <td className="p-2 text-center text-xs font-bold text-blue-600 align-middle">{machine.client}</td>
-                      <td className="p-2 text-center text-xs font-bold text-emerald-700 align-middle">{machine.remainingMfg}</td>
+                      <td className="p-2 text-center text-xs font-mono text-slate-500 align-middle hidden md:table-cell">{machine.orderReference || '-'}</td>
+                      <td className="p-2 text-center text-xs font-bold text-emerald-700 align-middle hidden md:table-cell">{machine.remainingMfg}</td>
                       <td className="p-2 text-center text-xs text-slate-500 align-middle">-</td>
-                      <td className="p-2 text-center text-xs text-slate-600 align-middle">{machine.dayProduction}</td>
+                      <td className="p-2 text-center text-xs text-slate-600 align-middle hidden md:table-cell">{machine.dayProduction}</td>
                       <td className="p-2 text-right text-xs font-medium text-slate-800 align-middle dir-rtl"><div className="flex items-center justify-end gap-2"><span>{machine.material}</span><span className="px-2 py-0.5 bg-emerald-200 text-emerald-800 text-[9px] rounded-full uppercase font-bold tracking-wider">Active</span></div></td>
-                      <td className="p-2 text-center text-[10px] text-slate-400 align-middle">0</td>
-                      <td className="p-2 text-center text-[10px] text-slate-400 italic align-middle">Live</td>
+                      <td className="p-2 text-center text-[10px] text-slate-400 align-middle hidden md:table-cell">0</td>
+                      <td className="p-2 text-center text-[10px] text-slate-400 italic align-middle">
+                        <span className="hidden md:inline">Live</span>
+                        <button 
+                          onClick={() => setDetailsModal({ isOpen: true, machine, isCurrent: true })}
+                          className="md:hidden px-2 py-1 bg-emerald-100 text-emerald-700 rounded text-[10px] font-bold"
+                        >
+                          More
+                        </button>
+                      </td>
                     </tr>
                   ) : (
                     <tr className={`${isOther ? 'bg-purple-50/50 border-purple-100' : 'bg-amber-50/50 border-amber-100'} border-b`}>
-                      <td className="p-2 text-center align-middle"><span className={`w-2 h-2 rounded-full inline-block ${isOther ? 'bg-purple-400' : 'bg-amber-400'}`}></span></td>
-                      <td colSpan={11} className={`p-3 text-center text-sm font-medium ${isOther ? 'text-purple-700' : 'text-amber-700'}`}>
+                      <td className="p-2 text-center align-middle hidden md:table-cell"><span className={`w-2 h-2 rounded-full inline-block ${isOther ? 'bg-purple-400' : 'bg-amber-400'}`}></span></td>
+                      <td colSpan={12} className={`p-3 text-center text-sm font-medium ${isOther ? 'text-purple-700' : 'text-amber-700'}`}>
                          Machine Status: <span className="font-bold">{machine.status}</span> 
                          {isOther && machine.customStatusNote && <span className="block text-xs font-normal mt-1 italic">"{machine.customStatusNote}"</span>}
                          {!isOther && " — No Active Production"}
@@ -863,10 +1082,10 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                         onDragOver={handleDragOver}
                         onDrop={(e) => handleDrop(e, machine.id, index)}
                       >
-                        <td className="p-2 text-slate-300 cursor-move hover:text-slate-500 drag-handle align-middle">⠿</td>
-                        <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50 align-middle">{plan.startDate || '-'}</td>
-                        <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50 align-middle">{plan.endDate || '-'}</td>
-                        <td className="p-1 align-middle">
+                        <td className="p-2 text-slate-300 cursor-move hover:text-slate-500 drag-handle align-middle hidden md:table-cell">⠿</td>
+                        <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50 align-middle hidden md:table-cell">{plan.startDate || '-'}</td>
+                        <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50 align-middle hidden md:table-cell">{plan.endDate || '-'}</td>
+                        <td className="p-1 align-middle hidden md:table-cell">
                           {!isSettings && (
                             <input 
                               type="text"
@@ -877,7 +1096,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                             />
                           )}
                         </td>
-                        <td className="p-1 align-middle">
+                        <td className="p-1 align-middle hidden md:table-cell">
                           {isSettings ? (
                              <input type="number" min="1" max="30" className="w-full text-center py-1.5 px-2 rounded bg-white border border-amber-200 focus:ring-1 focus:ring-amber-500 outline-none font-bold text-amber-700" value={plan.days} onChange={(e) => handlePlanChange(machine, index, 'days', Number(e.target.value))} />
                           ) : (
@@ -895,16 +1114,25 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                             className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent font-bold text-slate-700"
                           />}
                         </td>
-                        <td className="p-1 align-middle">
-                          {!isSettings && <input type="text" className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent font-bold text-blue-600" value={plan.orderName || ''} onChange={(e) => handlePlanChange(machine, index, 'orderName', e.target.value)} placeholder="-" />}
+                        <td className="p-1 align-middle hidden md:table-cell">
+                          {!isSettings && (
+                            <input 
+                              type="text"
+                              className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-500 text-xs font-mono"
+                              value={plan.orderReference || ''}
+                              onChange={(e) => handlePlanChange(machine, index, 'orderReference', e.target.value)}
+                              placeholder="-"
+                              title="Order Reference (Auto-generated)"
+                            />
+                          )}
                         </td>
-                        <td className="p-1 align-middle">
+                        <td className="p-1 align-middle hidden md:table-cell">
                           {!isSettings && <input type="number" className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-600" value={plan.remaining} onChange={(e) => handlePlanChange(machine, index, 'remaining', Number(e.target.value))} />}
                         </td>
                         <td className="p-1 align-middle">
                           {!isSettings && <input type="number" className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-600 font-medium" value={plan.quantity} onChange={(e) => handlePlanChange(machine, index, 'quantity', Number(e.target.value))} />}
                         </td>
-                        <td className="p-1 align-middle">
+                        <td className="p-1 align-middle hidden md:table-cell">
                            {!isSettings && <input type="number" className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-600" value={plan.productionPerDay} onChange={(e) => handlePlanChange(machine, index, 'productionPerDay', Number(e.target.value))} />}
                         </td>
                         <td className="p-1 align-middle relative">
@@ -928,12 +1156,32 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                                 onCreateNew={() => handleCreateItem('fabric', plan.fabric || '')}
                                 placeholder="-"
                                 className="w-full text-right py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-sm text-slate-700 leading-tight"
+                                extraInfo={(opt) => {
+                                   const clientName = plan.client;
+                                   if (!clientName) return null;
+                                   const order = customerOrders.find(o => o.customerName === clientName);
+                                   const fabricInOrder = order?.fabrics.find(f => f.fabricName === opt.name);
+                                   
+                                   if (fabricInOrder) {
+                                     return <span className="text-[10px] text-slate-400 ml-2">Rem: {fabricInOrder.remainingQuantity}kg</span>;
+                                   }
+                                   return null;
+                                }}
                              />
                           )}
                         </td>
-                        <td className="p-2 text-xs text-slate-300 font-mono align-middle">{index + 1}</td>
+                        <td className="p-2 text-xs text-slate-300 font-mono align-middle hidden md:table-cell">{index + 1}</td>
                         <td className="p-1 align-middle">
                            <div className="flex items-center justify-center gap-1">
+                              <button 
+                                type="button"
+                                onMouseDown={(e) => e.stopPropagation()} 
+                                onClick={(e) => handleActivatePlan(e, machine, plan, index)}
+                                className="p-1 text-slate-300 hover:text-emerald-500 hover:bg-emerald-50 rounded transition-colors"
+                                title="Start Production"
+                              >
+                                <Play className="w-4 h-4" />
+                              </button>
                               <button 
                               type="button"
                               onMouseDown={(e) => e.stopPropagation()} 
@@ -942,6 +1190,14 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                               title="Delete Plan"
                               >
                               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                              </button>
+                              <button 
+                                onClick={() => setDetailsModal({ isOpen: true, machine, plan, isCurrent: false })}
+                                className="md:hidden p-1 text-blue-500 hover:text-blue-700 transition-colors"
+                              >
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
                               </button>
                           </div>
                         </td>
@@ -977,6 +1233,95 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
         }
       })}
       </div>
+      )}
+
+      {detailsModal && detailsModal.isOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm overflow-hidden">
+            <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex justify-between items-center">
+              <h3 className="font-bold text-slate-800">
+                {detailsModal.machine.machineName} Details
+              </h3>
+              <button 
+                onClick={() => setDetailsModal(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="p-4 space-y-4 max-h-[70vh] overflow-y-auto">
+              {detailsModal.isCurrent ? (
+                <>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Start Date</label>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-sm">{activeDay}</div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">End Date</label>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-sm">{detailsModal.machine.lastLogData?.endDate || '-'}</div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Remaining</label>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-sm">{detailsModal.machine.remainingMfg}</div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Ref</label>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-sm">{detailsModal.machine.orderReference || '-'}</div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Prod/Day</label>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-sm">{detailsModal.machine.dayProduction}</div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Start Date</label>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-sm">{detailsModal.plan.startDate || '-'}</div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">End Date</label>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-sm">{detailsModal.plan.endDate || '-'}</div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Original Machine</label>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-sm">{detailsModal.plan.originalSampleMachine || '-'}</div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Days</label>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-sm">{detailsModal.plan.days}</div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Ref</label>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-sm">{detailsModal.plan.orderReference || '-'}</div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Remaining</label>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-sm">{detailsModal.plan.remaining}</div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Prod/Day</label>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-sm">{detailsModal.plan.productionPerDay}</div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Index</label>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-sm">{(detailsModal.machine.futurePlans?.indexOf(detailsModal.plan) || 0) + 1}</div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="bg-slate-50 px-4 py-3 border-t border-slate-200 flex justify-end">
+              <button
+                onClick={() => setDetailsModal(null)}
+                className="px-4 py-2 bg-blue-600 text-white rounded font-medium text-sm"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {smartAddMachineId !== null && (

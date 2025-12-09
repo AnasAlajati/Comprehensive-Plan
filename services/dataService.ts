@@ -15,6 +15,8 @@ import {
   Fabric,
   Yarn,
   Order,
+  CustomerOrder,
+  OrderFabric,
   DailyLog,
   PlanItem,
   MachineRow
@@ -214,5 +216,107 @@ export const DataService = {
 
   async updateDailySummary(date: string, data: { externalProduction: number }): Promise<void> {
     await setDoc(doc(db, 'DailySummaries', date), data, { merge: true });
+  },
+
+  // --- OrderSS Methods ---
+
+  async getCustomerOrders(): Promise<CustomerOrder[]> {
+    const snapshot = await getDocs(collection(db, 'OrderSS'));
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as CustomerOrder));
+  },
+
+  async ensureCustomerOrder(customerName: string): Promise<void> {
+    const docRef = doc(db, 'OrderSS', customerName);
+    const snapshot = await getDoc(docRef);
+    if (!snapshot.exists()) {
+      await setDoc(docRef, {
+        customerName,
+        fabrics: [],
+        lastUpdated: new Date().toISOString()
+      });
+    }
+  },
+
+  async addFabricToOrder(customerName: string, fabricName: string, initialQuantity: number = 0): Promise<void> {
+    const docRef = doc(db, 'OrderSS', customerName);
+    const snapshot = await getDoc(docRef);
+    
+    if (snapshot.exists()) {
+      const data = snapshot.data() as CustomerOrder;
+      const exists = data.fabrics.some(f => f.fabricName === fabricName);
+      
+      if (!exists) {
+        // Generate Unique Reference: [Client]-[Fabric]-[Random 3 chars]
+        const clientCode = customerName.substring(0, 3).toUpperCase();
+        const fabricCode = fabricName.split(/[\s-]+/).map(w => w[0]).join('').substring(0, 3).toUpperCase();
+        const uniqueSuffix = Math.floor(100 + Math.random() * 900); // 3 digit random
+        const orderReference = `${clientCode}-${fabricCode}-${uniqueSuffix}`;
+
+        const newFabric: OrderFabric = {
+          fabricName,
+          orderReference,
+          totalQuantity: initialQuantity,
+          remainingQuantity: initialQuantity,
+          assignedMachines: []
+        };
+        const updatedFabrics = [...data.fabrics, newFabric];
+        await setDoc(docRef, { fabrics: updatedFabrics, lastUpdated: new Date().toISOString() }, { merge: true });
+      }
+    } else {
+      // Create new if doesn't exist
+      const clientCode = customerName.substring(0, 3).toUpperCase();
+      const fabricCode = fabricName.split(/[\s-]+/).map(w => w[0]).join('').substring(0, 3).toUpperCase();
+      const uniqueSuffix = Math.floor(100 + Math.random() * 900);
+      const orderReference = `${clientCode}-${fabricCode}-${uniqueSuffix}`;
+
+      await setDoc(docRef, {
+        customerName,
+        fabrics: [{
+          fabricName,
+          orderReference,
+          totalQuantity: initialQuantity,
+          remainingQuantity: initialQuantity,
+          assignedMachines: []
+        }],
+        lastUpdated: new Date().toISOString()
+      });
+    }
+  },
+  
+  async updateOrderFabric(customerName: string, fabricName: string, updates: Partial<OrderFabric>): Promise<void> {
+     const docRef = doc(db, 'OrderSS', customerName);
+     const snapshot = await getDoc(docRef);
+     
+     if (snapshot.exists()) {
+        const data = snapshot.data() as CustomerOrder;
+        const updatedFabrics = data.fabrics.map(f => {
+           if (f.fabricName === fabricName) {
+              return { ...f, ...updates };
+           }
+           return f;
+        });
+        await setDoc(docRef, { fabrics: updatedFabrics, lastUpdated: new Date().toISOString() }, { merge: true });
+     }
+  },
+
+  async findOrderReference(customerName: string, fabricName: string): Promise<string | null> {
+    try {
+      const docRef = doc(db, 'OrderSS', customerName);
+      const snapshot = await getDoc(docRef);
+      
+      if (snapshot.exists()) {
+        const data = snapshot.data() as CustomerOrder;
+        const fabric = data.fabrics.find(f => f.fabricName === fabricName);
+        return fabric?.orderReference || null;
+      }
+      return null;
+    } catch (error) {
+      console.error("Error finding order reference:", error);
+      return null;
+    }
+  },
+
+  async updateGlobalSettings(settings: any): Promise<void> {
+    await setDoc(doc(db, 'settings', 'global'), settings, { merge: true });
   }
 };

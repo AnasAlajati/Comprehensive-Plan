@@ -1,6 +1,6 @@
 
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   collection, 
   onSnapshot, 
@@ -26,6 +26,9 @@ import { getScheduleRecommendations } from './services/ai';
 import AddDataPage from './components/AddDataPage';
 import FetchDataPage from './components/FetchDataPage';
 import { CustomersPage } from './components/CustomersPage';
+import { OrderSSPage } from './components/OrderSSPage';
+import { Send, CheckCircle } from 'lucide-react';
+import { MachineStatus } from './types';
 
 const App: React.FC = () => {
   const [rawMachines, setRawMachines] = useState<any[]>([]);
@@ -34,14 +37,16 @@ const App: React.FC = () => {
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [connectionError, setConnectionError] = useState<string>('');
   const [machineLoading, setMachineLoading] = useState<boolean>(true);
-  
+  const [globalActiveDay, setGlobalActiveDay] = useState<string | null>(null);
+  const notificationCooldown = useRef<Set<string>>(new Set()); // Prevent notification loops
+
   // AI State
   const [showInsights, setShowInsights] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<any[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'customers'>('planning'); 
+  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'customers' | 'orders'>('planning'); 
   
   // External Production State
   const [externalProduction, setExternalProduction] = useState<number>(0);
@@ -49,21 +54,42 @@ const App: React.FC = () => {
   // UI State
   const [isAddMachineOpen, setIsAddMachineOpen] = useState(false);
 
-  // 1. Test Connection on Mount
+  // 1. Test Connection on Mount & Monitor Network Status
   useEffect(() => {
-    const testConnection = async () => {
-      try {
-        const machinesRef = collection(db, 'MachineSS');
-        await getDocs(query(machinesRef, limit(1)));
-        setIsConnected(true);
-      } catch (error: any) {
-        console.error("Firebase Connection Error:", error);
-        setIsConnected(false);
-        setConnectionError(error.message || "Unknown error occurred");
-      }
+    // Network Status Handlers
+    const handleOnline = () => {
+      console.log("Network Status: Online");
+      setIsConnected(true);
+      setConnectionError("");
     };
 
-    testConnection();
+    const handleOffline = () => {
+      console.log("Network Status: Offline");
+      setIsConnected(false);
+      setConnectionError("No internet connection");
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    // Initial Network Check
+    if (!navigator.onLine) {
+      handleOffline();
+    } else {
+      // If physically connected, verify Firestore access
+      const testConnection = async () => {
+        try {
+          const machinesRef = collection(db, 'MachineSS');
+          await getDocs(query(machinesRef, limit(1)));
+          setIsConnected(true);
+        } catch (error: any) {
+          console.error("Firebase Connection Error:", error);
+          setIsConnected(false);
+          setConnectionError(error.message || "Unknown error occurred");
+        }
+      };
+      testConnection();
+    }
 
     // Listen to Active Day from Settings
     const unsubSettings = onSnapshot(doc(db, 'settings', 'global'), (docSnap) => {
@@ -71,11 +97,16 @@ const App: React.FC = () => {
         const data = docSnap.data();
         if (data.activeDay) {
           setSelectedDate(data.activeDay);
+          setGlobalActiveDay(data.activeDay);
         }
       }
     });
 
-    return () => unsubSettings();
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      unsubSettings();
+    };
   }, []);
 
   // 2. Setup Real-time Listeners
@@ -191,8 +222,14 @@ const App: React.FC = () => {
               shouldCalculate = true;
           }
 
-          // Apply the subtraction if we have a valid base to work from
-          if (shouldCalculate) {
+          // Check if this is a manual override of Remaining (User changed Remaining but NOT Production)
+          // If so, we trust the user's input and skip calculation
+          const isManualRemainingUpdate = existingLog && 
+                                          updatedMachine.remainingMfg !== existingLog.remainingMfg &&
+                                          updatedMachine.dayProduction === existingLog.dayProduction;
+
+          // Apply the subtraction if we have a valid base AND it's not a manual override
+          if (shouldCalculate && !isManualRemainingUpdate) {
              calculatedRemaining = baseRemaining - newProduction;
              if (calculatedRemaining < 0) calculatedRemaining = 0; // Prevent negative
           }
@@ -217,7 +254,6 @@ const App: React.FC = () => {
         timestamp: new Date().toISOString()
       };
 
-      const updatedLogs = [...currentLogs];
       if (logIndex >= 0) {
         updatedLogs[logIndex] = { ...updatedLogs[logIndex], ...newLogEntry };
       } else {
@@ -337,6 +373,8 @@ const App: React.FC = () => {
     }
   };
 
+
+
   const handleAnalyze = async () => {
     setIsAnalyzing(true);
     const result = await getScheduleRecommendations(machines);
@@ -393,7 +431,7 @@ const App: React.FC = () => {
            <div className="flex flex-col gap-2 w-full xl:w-auto">
              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider whitespace-nowrap">Modules:</span>
              <div className="flex flex-wrap gap-2">
-               <div className="bg-slate-100/50 p-1 rounded-lg flex gap-1 border border-slate-100">
+               <div className="bg-slate-100/50 p-1 rounded-lg flex flex-wrap gap-1 border border-slate-100">
                   <button 
                     onClick={() => setViewMode('planning')}
                     className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${viewMode === 'planning' ? 'bg-white shadow text-slate-800 ring-1 ring-black/5' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'}`}
@@ -414,7 +452,7 @@ const App: React.FC = () => {
                   </button>
                </div>
                
-               <div className="bg-slate-100/50 p-1 rounded-lg flex gap-1 border border-slate-100">
+               <div className="bg-slate-100/50 p-1 rounded-lg flex flex-wrap gap-1 border border-slate-100">
                   <button 
                     onClick={() => setViewMode('customers')}
                     className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${viewMode === 'customers' ? 'bg-blue-100 text-blue-900 ring-1 ring-blue-300 shadow' : 'text-slate-500 hover:text-blue-700 hover:bg-blue-50'}`}
@@ -438,6 +476,12 @@ const App: React.FC = () => {
                     className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${viewMode === 'add' ? 'bg-emerald-100 text-emerald-900 ring-1 ring-emerald-300 shadow' : 'text-slate-500 hover:text-emerald-700 hover:bg-emerald-50'}`}
                   >
                     ➕ ADD Data
+                  </button>
+                  <button 
+                    onClick={() => setViewMode('orders')}
+                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${viewMode === 'orders' ? 'bg-orange-100 text-orange-900 ring-1 ring-orange-300 shadow' : 'text-slate-500 hover:text-orange-700 hover:bg-orange-50'}`}
+                  >
+                    📦 OrderSS
                   </button>
                </div>
                
@@ -463,7 +507,8 @@ const App: React.FC = () => {
 
             {viewMode === 'excel' && (
               <FetchDataPage 
-                selectedDate={selectedDate} 
+                selectedDate={selectedDate}
+                machines={machines}
               />
             )}
 
@@ -488,6 +533,10 @@ const App: React.FC = () => {
 
             {viewMode === 'add' && (
               <AddDataPage />
+            )}
+
+            {viewMode === 'orders' && (
+              <OrderSSPage />
             )}
         </div>
       </main>

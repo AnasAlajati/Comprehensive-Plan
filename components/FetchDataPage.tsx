@@ -2,9 +2,11 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { writeBatch, doc, getDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
+import { TelegramService } from '../services/telegramService';
 import { PlanItem, MachineStatus } from '../types';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import { CheckCircle, Send } from 'lucide-react';
 
 // Navigable fields across the whole row (including read-only) for smooth Excel-like movement
 const NAVIGABLE_FIELDS: (keyof any)[] = [
@@ -246,15 +248,90 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
 
 interface FetchDataPageProps {
   selectedDate?: string;
+  machines?: any[];
 }
 
 const FetchDataPage: React.FC<FetchDataPageProps> = ({ 
-  selectedDate: propSelectedDate 
+  selectedDate: propSelectedDate,
+  machines = []
 }) => {
   const [selectedDate, setSelectedDate] = useState<string>(propSelectedDate || new Date().toISOString().split('T')[0]);
   const [activeDay, setActiveDay] = useState<string>('');
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isSendingReport, setIsSendingReport] = useState(false);
+  const [isReportSent, setIsReportSent] = useState(false);
   const printRef = useRef<HTMLDivElement>(null);
+
+  const handleSendReport = async () => {
+    if (isReportSent) return; // Prevent double send if already sent
+    setIsSendingReport(true);
+    try {
+      const lowStockMachines = machines.filter(m => 
+        m.status === 'Working' && 
+        m.remainingMfg < 100 && 
+        m.remainingMfg > 0
+      );
+
+      const finishedMachines = machines.filter(m => 
+        (Number(m.remainingMfg) || 0) === 0 && 
+        (Number(m.dayProduction) || 0) > 0
+      );
+
+      const date = new Date().toLocaleDateString('en-GB');
+      let message = `📅 <b>Daily Report Submitted: ${date}</b>\n\n`;
+
+      // Section 1: Finished Machines
+      if (finishedMachines.length > 0) {
+        message += `🏁 <b>Finished Today:</b>\n`;
+        finishedMachines.forEach((m, idx) => {
+           // Use m.material (mapped from App.tsx) or fallback to m.fabric if available
+           const fabricName = m.material || m.fabric || 'Unknown';
+           message += `${idx + 1}. <b>${m.machineName}</b> (${fabricName})\n`;
+           
+           const hasPlans = m.futurePlans && m.futurePlans.length > 0;
+           if (hasPlans) {
+             const nextPlan = m.futurePlans[0];
+             message += `   ↳ 📅 Next: ${nextPlan.fabric} (${nextPlan.client})\n`;
+           } else {
+             message += `   ↳ 🛑 No future plans.\n`;
+           }
+        });
+        message += `\n`;
+      }
+
+      // Section 2: Low Stock
+      if (lowStockMachines.length > 0) {
+        message += `⚠️ <b>Low Stock Alerts (&lt;100kg):</b>\n`;
+        
+        lowStockMachines.forEach((m, idx) => {
+          message += `${idx + 1}. <b>${m.machineName}</b> (Rem: ${m.remainingMfg}kg)\n`;
+          
+          const hasPlans = m.futurePlans && m.futurePlans.length > 0;
+          if (hasPlans) {
+            const nextPlan = m.futurePlans[0];
+            message += `   ↳ 📅 Next: ${nextPlan.fabric} (${nextPlan.client})\n`;
+          } else {
+            message += `   ↳ 🛑 No future plans scheduled.\n`;
+          }
+          message += `\n`;
+        });
+      }
+
+      if (lowStockMachines.length === 0 && finishedMachines.length === 0) {
+        message += `✅ <b>All Systems Go!</b>\nNo low stock alerts or finished machines reported.`;
+      }
+
+      await TelegramService.send(message);
+      setIsReportSent(true);
+      // alert("Report sent to Telegram successfully!"); // Removed alert to be less intrusive
+
+    } catch (error) {
+      console.error("Failed to send report:", error);
+      alert("Failed to send report.");
+    } finally {
+      setIsSendingReport(false);
+    }
+  };
   
   // Filter State
   const [searchTerm, setSearchTerm] = useState('');
@@ -272,6 +349,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [inlineCreateForm, setInlineCreateForm] = useState({ name: '' });
   const [plansModalOpen, setPlansModalOpen] = useState<{ isOpen: boolean; machineId: string; machineName: string; plans: PlanItem[] }>({ isOpen: false, machineId: '', machineName: '', plans: [] });
   const [addPlanModal, setAddPlanModal] = useState<{ isOpen: boolean; type: 'PRODUCTION' | 'SETTINGS' }>({ isOpen: false, type: 'PRODUCTION' });
+  const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean; log: any; index: number } | null>(null);
   const [newPlan, setNewPlan] = useState<Partial<PlanItem>>({
     type: 'PRODUCTION',
     fabric: '',
@@ -502,16 +580,61 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     }
   };
 
+  const [customerOrders, setCustomerOrders] = useState<any[]>([]);
+
   const loadFabricsAndClients = async () => {
     try {
-      const [fabricsData, clientsData] = await Promise.all([
+      const [fabricsData, clientsData, ordersData] = await Promise.all([
         DataService.getFabrics(),
-        DataService.getClients()
+        DataService.getClients(),
+        DataService.getCustomerOrders()
       ]);
       setFabrics(fabricsData);
       setClients(clientsData);
+      setCustomerOrders(ordersData);
     } catch (error) {
       console.error('Error loading fabrics and clients:', error);
+    }
+  };
+
+  // Smart Linker: Check if Client+Fabric matches an existing Order Reference
+  const checkSmartLink = async (machineId: string, logId: string, client: string, fabric: string) => {
+    if (!client || !fabric) return;
+
+    // Find existing order
+    const order = customerOrders.find(o => o.customerName === client);
+    if (order) {
+      const fabricEntry = order.fabrics.find((f: any) => f.fabricName === fabric);
+      if (fabricEntry && fabricEntry.orderReference) {
+        // Found a match! Auto-link it.
+        // We don't need to ask the user if it's an exact match, just link it.
+        // But if we want to be "Excel-like", we just do it silently or show a toast.
+        console.log(`Auto-linking to ${fabricEntry.orderReference}`);
+        // Update the log with this reference (if we had a field for it)
+        // For now, we just ensure the order exists in OrderSS
+      } else if (!fabricEntry) {
+        // Client exists, Fabric doesn't. Auto-create?
+        // User said: "be able to create it right there"
+        try {
+           await DataService.addFabricToOrder(client, fabric);
+           showMessage(`✅ Linked new fabric to ${client}`);
+           // Refresh orders
+           const newOrders = await DataService.getCustomerOrders();
+           setCustomerOrders(newOrders);
+        } catch (e) {
+           console.error("Auto-link failed", e);
+        }
+      }
+    } else {
+      // Client doesn't exist in OrderSS. Auto-create?
+      try {
+         await DataService.addFabricToOrder(client, fabric);
+         showMessage(`✅ Created new order for ${client}`);
+         const newOrders = await DataService.getCustomerOrders();
+         setCustomerOrders(newOrders);
+      } catch (e) {
+         console.error("Auto-create failed", e);
+      }
     }
   };
 
@@ -693,10 +816,14 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const handleUpdateLog = async (machineId: string, logId: string, field: string, newValue: any) => {
     // Optimistic Update
     let calculatedRemaining: number | undefined;
+    let currentClient = '';
+    let currentFabric = '';
 
     setAllLogs(prevLogs => prevLogs.map(log => {
       if (log.machineId === machineId && log.id === logId) {
         const updatedLog = { ...log, [field]: newValue };
+        currentClient = updatedLog.client;
+        currentFabric = updatedLog.fabric;
         
         if (field === 'dayProduction') {
            const oldRemaining = Number(log.remainingMfg) || 0;
@@ -755,7 +882,12 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         }
       }
       
-      await DataService.updateMachineInMachineSS(machineId, {
+      // Trigger Smart Link Check if Client or Fabric changed
+      if (field === 'client' || field === 'fabric') {
+         checkSmartLink(machineId, logId, currentClient, currentFabric);
+      }
+
+      const updatePayload: any = {
         dailyLogs: updatedLogs,
         lastLogDate: updatedLogs[logIndex].date,
         lastLogData: {
@@ -765,10 +897,25 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           status: updatedLogs[logIndex].status,
           fabric: updatedLogs[logIndex].fabric,
           client: updatedLogs[logIndex].client,
-          remainingMfg: updatedLogs[logIndex].remainingMfg
+          remainingMfg: updatedLogs[logIndex].remainingMfg,
+          reason: updatedLogs[logIndex].reason,
+          customStatusNote: updatedLogs[logIndex].customStatusNote
         },
         lastUpdated: new Date().toISOString()
-      });
+      };
+
+      // Sync with Root Machine Fields if this is the Active Day
+      if (updatedLogs[logIndex].date === activeDay) {
+          updatePayload.status = updatedLogs[logIndex].status;
+          updatePayload.client = updatedLogs[logIndex].client;
+          updatePayload.material = updatedLogs[logIndex].fabric;
+          updatePayload.remainingMfg = updatedLogs[logIndex].remainingMfg;
+          updatePayload.dayProduction = updatedLogs[logIndex].dayProduction;
+          updatePayload.reason = updatedLogs[logIndex].reason;
+          updatePayload.customStatusNote = updatedLogs[logIndex].customStatusNote;
+      }
+
+      await DataService.updateMachineInMachineSS(machineId, updatePayload);
 
       // Optimistic update already handled the UI. No need to re-fetch immediately.
       showMessage('✅ Updated');
@@ -823,16 +970,42 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         await DataService.addFabric({ name: newName });
         const updatedFabrics = await DataService.getFabrics();
         setFabrics(updatedFabrics);
+        
+        // Trigger Smart Link Check
+        const currentClient = updatedLogs[logIndex].client;
+        if (currentClient) {
+            checkSmartLink(machineId, logId, currentClient, newName);
+        }
+
       } else if (field === 'client') {
         await DataService.addClient({ name: newName });
         const updatedClients = await DataService.getClients();
         setClients(updatedClients);
+
+        // Trigger Smart Link Check
+        const currentFabric = updatedLogs[logIndex].fabric;
+        if (currentFabric) {
+            checkSmartLink(machineId, logId, newName, currentFabric);
+        }
       }
 
-      await DataService.updateMachineInMachineSS(machineId, {
+      const updatePayload: any = {
         dailyLogs: updatedLogs,
         lastUpdated: new Date().toISOString()
-      });
+      };
+
+      // Sync with Root Machine Fields if this is the Active Day
+      if (selectedDate === activeDay) {
+          const currentLog = updatedLogs[logIndex];
+          updatePayload.status = currentLog.status;
+          updatePayload.client = currentLog.client;
+          updatePayload.material = currentLog.fabric;
+          updatePayload.remainingMfg = currentLog.remainingMfg;
+          updatePayload.dayProduction = currentLog.dayProduction;
+          updatePayload.reason = currentLog.reason;
+      }
+
+      await DataService.updateMachineInMachineSS(machineId, updatePayload);
 
       setInlineCreateModal({ type: null, isOpen: false, machineId: '', logId: '' });
       setInlineCreateForm({ name: '' });
@@ -1491,16 +1664,39 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
               <span>↺</span> Fetch Yesterday
             </button>
           </div>
-          <button
-            onClick={handleDownloadPDF}
-            disabled={isDownloading}
-            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm disabled:opacity-50"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            {isDownloading ? 'Processing...' : 'Export PDF'}
-          </button>
+          <div className="flex gap-3">
+            <button
+              onClick={handleSendReport}
+              disabled={isSendingReport || isReportSent}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-bold transition-all shadow-sm border ${
+                isReportSent
+                  ? 'bg-emerald-100 text-emerald-700 border-emerald-300 cursor-default'
+                  : isSendingReport 
+                    ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
+                    : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50 hover:text-slate-800'
+              }`}
+            >
+              {isReportSent ? (
+                <CheckCircle className="w-3 h-3" />
+              ) : isSendingReport ? (
+                <Send className="w-3 h-3 animate-pulse" />
+              ) : (
+                <Send className="w-3 h-3" />
+              )}
+              
+              {isReportSent ? 'Sent' : isSendingReport ? 'Sending...' : 'Finished'}
+            </button>
+            <button
+              onClick={handleDownloadPDF}
+              disabled={isDownloading}
+              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm disabled:opacity-50"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              {isDownloading ? 'Processing...' : 'Export PDF'}
+            </button>
+          </div>
         </div>
 
         {/* Messages */}
@@ -1518,25 +1714,25 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 <p className="text-sm text-slate-500">Date: {new Date(selectedDate).toLocaleDateString('en-GB', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
             </div>
           <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-sm bg-white" onBlurCapture={handleGridBlur}>
-            <table className="w-full text-xs text-center border-collapse min-w-[1100px]">
+            <table className="w-full text-xs text-center border-collapse">
               <thead className="bg-slate-50 text-slate-700 font-bold">
                 <tr>
-                  <th className="p-2 border border-slate-200 w-8">::</th>
-                  <th className="p-2 border border-slate-200 w-10">ر</th>
-                  <th className="p-2 border border-slate-200 w-20">الماركة</th>
-                  <th className="p-2 border border-slate-200 w-20">النوع</th>
+                  <th className="p-2 border border-slate-200 w-8 hidden md:table-cell">::</th>
+                  <th className="p-2 border border-slate-200 w-10 hidden md:table-cell">ر</th>
+                  <th className="p-2 border border-slate-200 w-20 hidden md:table-cell">الماركة</th>
+                  <th className="p-2 border border-slate-200 w-20 hidden md:table-cell">النوع</th>
                   <th className="p-2 border border-slate-200 w-32">اسم الماكينة</th>
                   <th className="p-2 border border-slate-200 w-32">الحالة</th>
-                  <th className="p-2 border border-slate-200 w-20">متوسط الانتاج</th>
+                  <th className="p-2 border border-slate-200 w-20 hidden md:table-cell">متوسط الانتاج</th>
                   <th className="p-2 border border-slate-200 w-20">انتاج اليوم</th>
-                  <th className="p-2 border border-slate-200 w-16 text-red-600">الفرق</th>
-                  <th className="p-2 border border-slate-200 min-w-[160px]">الخامة</th>
+                  <th className="p-2 border border-slate-200 w-16 text-red-600 hidden md:table-cell">الفرق</th>
+                  <th className="p-2 border border-slate-200 min-w-[100px]">الخامة</th>
                   <th className="p-2 border border-slate-200 w-28">العميل</th>
                   <th className="p-2 border border-slate-200 w-20">المتبقي</th>
-                  <th className="p-2 border border-slate-200 w-16">السقط</th>
-                  <th className="p-2 border border-slate-200 min-w-[140px]">السبب</th>
-                  <th className="p-2 border border-slate-200 w-28 text-center">تاريخ الانتهاء</th>
-                  <th className="p-2 border border-slate-200 w-20 text-center">خطط</th>
+                  <th className="p-2 border border-slate-200 w-16 hidden md:table-cell">السقط</th>
+                  <th className="p-2 border border-slate-200 min-w-[100px] hidden md:table-cell">السبب</th>
+                  <th className="p-2 border border-slate-200 w-28 text-center hidden md:table-cell">تاريخ الانتهاء</th>
+                  <th className="p-2 border border-slate-200 w-20 text-center">خطط / تفاصيل</th>
                 </tr>
               </thead>
               <tbody>
@@ -1564,15 +1760,15 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         className={`hover:bg-blue-50/50 transition-colors align-middle ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'}`}
                       >
                         {/* Drag Handle */}
-                        <td className="border border-slate-200 p-0 text-slate-400 cursor-move text-lg select-none">⋮⋮</td>
+                        <td className="border border-slate-200 p-0 text-slate-400 cursor-move text-lg select-none hidden md:table-cell">⋮⋮</td>
 
                         {/* Index */}
-                        <td className="border border-slate-200 p-2 font-semibold text-slate-500">{idx + 1}</td>
+                        <td className="border border-slate-200 p-2 font-semibold text-slate-500 hidden md:table-cell">{idx + 1}</td>
 
                         {/* Brand */}
                         <td
                           id={getCellId(log.machineId, 'machineBrand')}
-                          className="border border-slate-200 p-2 text-xs text-slate-600 cursor-pointer hover:bg-blue-50 focus:outline-2 focus:outline-blue-500"
+                          className="border border-slate-200 p-2 text-xs text-slate-600 cursor-pointer hover:bg-blue-50 focus:outline-2 focus:outline-blue-500 hidden md:table-cell"
                           tabIndex={0}
                           onFocus={() => handleCellFocus(idx, 'machineBrand')}
                           onKeyDown={(e) => handleKeyDown(e, idx, 'machineBrand')}
@@ -1583,7 +1779,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         {/* Type */}
                         <td
                           id={getCellId(log.machineId, 'machineType')}
-                          className="border border-slate-200 p-2 text-xs text-slate-600 cursor-pointer hover:bg-blue-50 focus:outline-2 focus:outline-blue-500"
+                          className="border border-slate-200 p-2 text-xs text-slate-600 cursor-pointer hover:bg-blue-50 focus:outline-2 focus:outline-blue-500 hidden md:table-cell"
                           tabIndex={0}
                           onFocus={() => handleCellFocus(idx, 'machineType')}
                           onKeyDown={(e) => handleKeyDown(e, idx, 'machineType')}
@@ -1635,7 +1831,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         </td>
 
                         {/* Avg Production */}
-                        <td className="border border-slate-200 p-0">
+                        <td className="border border-slate-200 p-0 hidden md:table-cell">
                           <input
                             id={getCellId(log.machineId, 'avgProduction')}
                             type="number"
@@ -1671,7 +1867,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         {/* Difference */}
                         <td
                           id={getCellId(log.machineId, 'difference')}
-                          className={`border border-slate-200 p-2 font-bold cursor-pointer hover:bg-blue-50 focus:outline-2 focus:outline-blue-500 ${parseFloat(diff) < 0 ? 'text-red-500' : 'text-emerald-600'}`}
+                          className={`border border-slate-200 p-2 font-bold cursor-pointer hover:bg-blue-50 focus:outline-2 focus:outline-blue-500 hidden md:table-cell ${parseFloat(diff) < 0 ? 'text-red-500' : 'text-emerald-600'}`}
                           tabIndex={0}
                           onFocus={() => handleCellFocus(idx, 'difference')}
                           onKeyDown={(e) => handleKeyDown(e, idx, 'difference')}
@@ -1697,7 +1893,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         </td>
 
                         {/* Client */}
-                        <td className="border border-slate-200 p-0 relative">
+                        <td className="border border-slate-200 p-0 relative group" title={log.client && log.fabric ? `Ref: ${log.client}-${log.fabric.split(/[\s-]+/).map((w: any) => w[0]).join('')}` : ''}>
                           <SearchDropdown
                             id={getCellId(log.machineId, 'client')}
                             options={clients}
@@ -1711,6 +1907,11 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             onFocus={() => handleCellFocus(idx, 'client')}
                             placeholder="---"
                           />
+                          {log.client && log.fabric && (
+                             <div className="absolute top-0 right-0 text-[9px] text-slate-400 bg-white/80 px-1 rounded opacity-0 group-hover:opacity-100 pointer-events-none z-10 border border-slate-200 shadow-sm">
+                                {log.client}-{log.fabric.split(/[\s-]+/).map((w: any) => w[0]).join('')}
+                             </div>
+                          )}
                         </td>
 
                         {/* Remaining */}
@@ -1719,17 +1920,29 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             key={`${log.machineId}-remaining-${log.remainingMfg}`}
                             id={getCellId(log.machineId, 'remainingMfg')}
                             type="text"
-                            defaultValue={(Number(log.remainingMfg) || 0) === 0 ? "خلصت" : log.remainingMfg}
+                            defaultValue={(() => {
+                              const r = Number(log.remainingMfg) || 0;
+                              const p = Number(log.dayProduction) || 0;
+                              const isNotWorking = log.status !== 'Working';
+                              
+                              if (r === 0) {
+                                if (p > 0) return "خلصت";
+                                if (isNotWorking) return "-";
+                                return "0";
+                              }
+                              return r;
+                            })()}
                             data-force-nav="true"
                             onFocus={(e) => {
-                              if (e.target.value === "خلصت") e.target.value = "0";
+                              const val = e.target.value;
+                              if (val === "خلصت" || val === "-") e.target.value = "0";
                               e.target.select();
                               handleCellFocus(idx, 'remainingMfg');
                               window.dispatchEvent(new Event('searchdropdown:forceclose'));
                             }}
                             onBlur={(e) => {
                                 let val = e.target.value;
-                                if (val === "خلصت") val = "0";
+                                if (val === "خلصت" || val === "-") val = "0";
                                 const numVal = Number(val);
                                 const finalVal = isNaN(numVal) ? 0 : numVal;
                                 if (log.remainingMfg !== finalVal) {
@@ -1737,12 +1950,18 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                                 }
                             }}
                             onKeyDown={(e) => handleKeyDown(e, idx, 'remainingMfg')}
-                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none ${(Number(log.remainingMfg) || 0) === 0 ? 'text-green-600 font-bold' : ''}`}
+                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none ${
+                              (Number(log.remainingMfg) || 0) === 0 && (Number(log.dayProduction) || 0) > 0 
+                                ? 'text-green-600 font-bold' 
+                                : (Number(log.remainingMfg) || 0) === 0 && log.status !== 'Working'
+                                  ? 'text-slate-400'
+                                  : ''
+                            }`}
                           />
                         </td>
 
                         {/* Scrap */}
-                        <td className="border border-slate-200 p-0">
+                        <td className="border border-slate-200 p-0 hidden md:table-cell">
                           <input
                             id={getCellId(log.machineId, 'scrap')}
                             type="number"
@@ -1759,7 +1978,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         </td>
 
                         {/* Reason */}
-                        <td className="border border-slate-200 p-0">
+                        <td className="border border-slate-200 p-0 hidden md:table-cell">
                           <input
                             id={getCellId(log.machineId, 'reason')}
                             type="text"
@@ -1779,7 +1998,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         {/* End Date (Calculated) */}
                         <td
                           id={getCellId(log.machineId, 'endDate')}
-                          className="border border-slate-200 p-2 text-center font-semibold text-blue-700 cursor-pointer hover:bg-blue-50 focus:outline-2 focus:outline-blue-500"
+                          className="border border-slate-200 p-2 text-center font-semibold text-blue-700 cursor-pointer hover:bg-blue-50 focus:outline-2 focus:outline-blue-500 hidden md:table-cell"
                           tabIndex={0}
                           onFocus={() => handleCellFocus(idx, 'endDate')}
                           onKeyDown={(e) => handleKeyDown(e, idx, 'endDate')}
@@ -1789,22 +2008,30 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
                         {/* Plans Button */}
                         <td className="border border-slate-200 p-2">
-                          <button
-                            id={getCellId(log.machineId, 'plans')}
-                            onFocus={() => handleCellFocus(idx, 'plans')}
-                            onClick={() => openPlansModal(log.machineId, log.machineName)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault();
-                                openPlansModal(log.machineId, log.machineName);
-                              } else {
-                                handleKeyDown(e, idx, 'plans');
-                              }
-                            }}
-                            className="w-full px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-bold transition-colors focus:outline-2 focus:outline-blue-500"
-                          >
-                            خطط
-                          </button>
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              id={getCellId(log.machineId, 'plans')}
+                              onFocus={() => handleCellFocus(idx, 'plans')}
+                              onClick={() => openPlansModal(log.machineId, log.machineName)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  openPlansModal(log.machineId, log.machineName);
+                                } else {
+                                  handleKeyDown(e, idx, 'plans');
+                                }
+                              }}
+                              className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-bold transition-colors focus:outline-2 focus:outline-blue-500"
+                            >
+                              خطط
+                            </button>
+                            <button
+                              onClick={() => setDetailsModal({ isOpen: true, log, index: idx })}
+                              className="md:hidden px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-xs font-bold transition-colors"
+                            >
+                              تفاصيل
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -2302,7 +2529,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-slate-700 mb-1">Quantity</label>
                         <input
@@ -2332,7 +2559,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-slate-700 mb-1">Start Date</label>
                         <input
@@ -2353,7 +2580,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-slate-700 mb-1">Remaining</label>
                         <input
@@ -2387,7 +2614,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                       />
                     </div>
 
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-slate-700 mb-1">Days</label>
                         <input
@@ -2433,6 +2660,66 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50"
                 >
                   {loading ? 'Adding...' : 'Add Plan'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Mobile Details Modal */}
+        {detailsModal && detailsModal.isOpen && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-sm overflow-hidden">
+              <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex justify-between items-center">
+                <h3 className="font-bold text-slate-800">
+                  {detailsModal.log.machineName} Details
+                </h3>
+                <button 
+                  onClick={() => setDetailsModal(null)}
+                  className="text-slate-400 hover:text-slate-600"
+                >
+                  ✕
+                </button>
+              </div>
+              
+              <div className="p-4 space-y-4">
+                {/* Scrap */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">Scrap (السقط)</label>
+                  <input
+                    type="number"
+                    defaultValue={detailsModal.log.scrap || 0}
+                    onBlur={(e) => handleBlur(e, detailsModal.log.machineId, detailsModal.log.id, 'scrap')}
+                    className="w-full p-2 border border-slate-300 rounded text-center font-bold"
+                  />
+                </div>
+
+                {/* Reason */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">Reason (السبب)</label>
+                  <input
+                    type="text"
+                    defaultValue={detailsModal.log.reason || ''}
+                    onBlur={(e) => handleBlur(e, detailsModal.log.machineId, detailsModal.log.id, 'reason')}
+                    placeholder="السبب..."
+                    className="w-full p-2 border border-slate-300 rounded text-right"
+                  />
+                </div>
+
+                {/* End Date */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">End Date (تاريخ الانتهاء)</label>
+                  <div className="w-full p-2 bg-slate-50 border border-slate-200 rounded text-center font-semibold text-blue-700">
+                    {calculateEndDate(detailsModal.log.date || selectedDate, detailsModal.log.remainingMfg || 0, detailsModal.log.dayProduction || 0)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 px-4 py-3 border-t border-slate-200 flex justify-end">
+                <button
+                  onClick={() => setDetailsModal(null)}
+                  className="px-4 py-2 bg-blue-600 text-white rounded font-medium text-sm"
+                >
+                  Done
                 </button>
               </div>
             </div>

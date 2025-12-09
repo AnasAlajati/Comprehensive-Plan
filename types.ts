@@ -31,8 +31,37 @@ export interface PlanItem {
   client?: string;       // NEW: Client Name
   originalSampleMachine?: string; // New Field: Original Sample Machine
   notes?: string;        // New Field: Notes for Settings/Maintenance
+  orderReference?: string; // NEW: Generated reference (e.g., OR-Sj)
   orderId?: string;      // NEW: Link to orders collection
   fabricId?: string;     // NEW: Link to fabrics collection
+}
+
+export interface OrderFabric {
+  fabricName: string;
+  orderReference?: string; // NEW: Unique Reference Code (e.g., ZARA-SJ-001)
+  totalQuantity: number;
+  remainingQuantity: number;
+  assignedMachines: string[];
+}
+
+export interface CustomerOrder {
+  id?: string;
+  customerName: string;
+  fabrics: OrderFabric[];
+  lastUpdated?: string;
+}
+
+export interface DailyLogEntry {
+  date: string;
+  dayProduction: number;
+  scrap: number;
+  status: MachineStatus;
+  remainingMfg?: number;
+  reason?: string;
+  fabric?: string;
+  client?: string;
+  customStatusNote?: string;
+  lowStockAlertSent?: boolean; // NEW: Track if alert was sent
 }
 
 export interface MachineRow {
@@ -50,6 +79,7 @@ export interface MachineRow {
   reason: string;
   material: string;
   client: string;
+  orderReference?: string; // NEW: Active Order Reference
   futurePlans: PlanItem[];
   dailyLogs?: DailyLogEntry[]; // Array of daily log objects
   lastLogDate?: string; // YYYY-MM-DD: Latest daily log date for quick filtering
@@ -60,6 +90,7 @@ export interface MachineRow {
     status: MachineStatus;
     fabric: string;
     client: string;
+    lowStockAlertSent?: boolean; // NEW
   };
 }
 
