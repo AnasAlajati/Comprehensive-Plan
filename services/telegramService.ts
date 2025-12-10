@@ -8,11 +8,15 @@
  */
 
 const BOT_TOKEN = '8527491181:AAEpbfxewnQjTzxp5U5IHazie5Qw7TRaKhg'; 
-const CHAT_ID = '8403312728';
+// Add multiple Chat IDs here. Each user must start a chat with the bot first!
+const CHAT_IDS = [
+  '8403312728', // Main Admin
+  '7053968926', // Hadi
+];
 
 export const TelegramService = {
   /**
-   * Sends a message to your Telegram Chat.
+   * Sends a message to all configured Telegram Chats.
    * @param message The text to send
    */
   send: async (message: string) => {
@@ -25,29 +29,37 @@ export const TelegramService = {
 
     const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
     
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          chat_id: CHAT_ID,
-          text: message,
-          parse_mode: 'HTML' // Allows bold/italic text
-        })
-      });
+    // Send to all users in parallel
+    const promises = CHAT_IDS.map(async (chatId) => {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: message,
+            parse_mode: 'HTML' // Allows bold/italic text
+          })
+        });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error("Telegram API Error:", errorData);
-        throw new Error(`Telegram Error: ${errorData.description}`);
+        if (!response.ok) {
+          const errorData = await response.json();
+          console.error(`Telegram API Error (${chatId}):`, errorData);
+          // Alert the user if a specific ID fails (helps debug blocks/bans)
+          alert(`Failed to send to ${chatId === '8403312728' ? 'Main Admin' : 'User ' + chatId}:\n${errorData.description}`);
+          return false;
+        }
+        return true;
+      } catch (error) {
+        console.error(`Failed to send Telegram message to ${chatId}:`, error);
+        return false;
       }
+    });
 
-      return true;
-    } catch (error) {
-      console.error("Failed to send Telegram message:", error);
-      return false;
-    }
+    const results = await Promise.all(promises);
+    // Return true if at least one message was sent successfully
+    return results.some(result => result === true);
   }
 };

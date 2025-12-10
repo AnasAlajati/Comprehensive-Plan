@@ -60,6 +60,8 @@ export interface DailyLogEntry {
   reason?: string;
   fabric?: string;
   client?: string;
+  orderReference?: string; // NEW: Linked Order Reference
+  orderId?: string;        // NEW: Linked Order ID
   customStatusNote?: string;
   lowStockAlertSent?: boolean; // NEW: Track if alert was sent
 }

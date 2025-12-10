@@ -62,6 +62,11 @@ export const DataService = {
     return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
   },
 
+  async getScrapReasons(): Promise<{ id: string; name: string }[]> {
+    const snapshot = await getDocs(collection(db, 'scrap_reasons'));
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as { id: string; name: string }));
+  },
+
   async addFabric(fabric: Omit<Fabric, 'id'>): Promise<string> {
     const docRef = await addDoc(collection(db, 'fabrics'), {
       ...fabric,
@@ -91,6 +96,14 @@ export const DataService = {
       ...order,
       createdAt: Timestamp.now()
     }); v 
+    return docRef.id;
+  },
+
+  async addScrapReason(name: string): Promise<string> {
+    const docRef = await addDoc(collection(db, 'scrap_reasons'), {
+      name,
+      createdAt: Timestamp.now()
+    });
     return docRef.id;
   },
 

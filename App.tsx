@@ -17,7 +17,6 @@ import { DataService } from './services/dataService';
 import { MachineRow } from './types';
 import { StatusBadge } from './components/StatusBadge';
 import { MachineList } from './components/MachineList';
-import { AddMachineForm } from './components/AddMachineForm';
 import { PlanningSchedule } from './components/PlanningSchedule';
 import { MaintenanceDashboard } from './components/MaintenanceDashboard';
 import { IdleMachineMonitor } from './components/IdleMachineMonitor';
@@ -25,9 +24,24 @@ import { AIInsightsModal } from './components/AIInsightsModal';
 import { getScheduleRecommendations } from './services/ai';
 import AddDataPage from './components/AddDataPage';
 import FetchDataPage from './components/FetchDataPage';
-import { CustomersPage } from './components/CustomersPage';
 import { OrderSSPage } from './components/OrderSSPage';
-import { Send, CheckCircle } from 'lucide-react';
+import { CompareDaysPage } from './components/CompareDaysPage';
+import { ProductionHistoryPage } from './components/ProductionHistoryPage';
+import { 
+  Send, 
+  CheckCircle, 
+  LayoutGrid, 
+  Table, 
+  Calendar, 
+  Wrench, 
+  AlertCircle, 
+  PlusCircle, 
+  Package, 
+  GitCompare, 
+  History, 
+  BarChart3,
+  Sparkles
+} from 'lucide-react';
 import { MachineStatus } from './types';
 
 const App: React.FC = () => {
@@ -46,13 +60,10 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'customers' | 'orders'>('planning'); 
+  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'orders' | 'compare' | 'history'>('planning'); 
   
   // External Production State
   const [externalProduction, setExternalProduction] = useState<number>(0);
-
-  // UI State
-  const [isAddMachineOpen, setIsAddMachineOpen] = useState(false);
 
   // 1. Test Connection on Mount & Monitor Network Status
   useEffect(() => {
@@ -169,6 +180,7 @@ const App: React.FC = () => {
         reason: dailyLog?.reason || '',
         material: dailyLog?.fabric || '',
         client: dailyLog?.client || '',
+        orderReference: dailyLog?.orderReference || '',
         futurePlans: data.futurePlans || [],
         dailyLogs: data.dailyLogs || [],
         orderIndex: data.orderIndex,
@@ -309,61 +321,6 @@ const App: React.FC = () => {
     }
   };
 
-  // 6. Add Single Machine (Updated to use Service for initial create)
-  const handleAddSingleMachine = async (machine: MachineRow) => {
-    try {
-      // Convert MachineRow to MachineSS format
-      // Machine metadata should NOT include dayProduction - that goes in dailyLogs
-      const today = new Date().toISOString().split('T')[0];
-      
-      const machineForMachineSS = {
-        id: machine.id,
-        machineid: machine.id,
-        name: machine.machineName,
-        brand: machine.brand || 'Generic',
-        type: machine.type,
-        status: machine.status,
-        avgProduction: machine.avgProduction || 0,
-        futurePlans: machine.futurePlans || [],
-        dailyLogs: [
-          {
-            id: `log-${Date.now()}`,
-            date: today,
-            dayProduction: machine.dayProduction || 0,
-            scrap: machine.scrap || 0,
-            status: machine.status,
-            fabric: machine.material || '',
-            client: machine.client || '',
-            avgProduction: machine.avgProduction || 0,
-            remainingMfg: machine.remainingMfg || 0,
-            reason: machine.reason || '',
-            timestamp: new Date().toISOString()
-          }
-        ],
-        lastLogDate: today,
-        lastLogData: {
-          date: today,
-          dayProduction: machine.dayProduction || 0,
-          scrap: machine.scrap || 0,
-          status: machine.status,
-          fabric: machine.material || '',
-          client: machine.client || ''
-        },
-        lastUpdated: new Date().toISOString()
-      };
-
-      // Add to MachineSS collection
-      await DataService.addMachineToMachineSS(machineForMachineSS);
-      
-      setIsAddMachineOpen(false);
-      return true;
-    } catch (error) {
-      console.error("Error adding machine: ", error);
-      alert("Failed to add machine. Check console for details.");
-      return false;
-    }
-  };
-
   // 7. Update External Production
   const handleUpdateExternalProduction = async (value: number) => {
     try {
@@ -404,13 +361,13 @@ const App: React.FC = () => {
              <button
                 onClick={handleAnalyze}
                 disabled={isAnalyzing || machines.length === 0}
-                className="flex items-center gap-2 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white px-3 py-1.5 rounded-full text-xs sm:text-sm font-bold shadow-md transition-all disabled:opacity-50 hover:shadow-lg transform hover:-translate-y-0.5 whitespace-nowrap border border-white/10"
+                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
              >
                 {isAnalyzing ? (
                    <span className="flex items-center gap-2">Analyzing...</span>
                 ) : (
                    <>
-                     <span className="text-lg">✨</span>
+                     <Sparkles size={16} />
                      <span className="hidden sm:inline">AI Analyst</span>
                    </>
                 )}
@@ -424,73 +381,102 @@ const App: React.FC = () => {
 
       <main className="max-w-[98%] mx-auto px-2 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
         
-        {/* Actions & Filters Bar */}
-        <div className="bg-white p-3 sm:p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col xl:flex-row justify-between items-start gap-4">
-           
-           {/* View Modes */}
-           <div className="flex flex-col gap-2 w-full xl:w-auto">
-             <span className="text-xs font-bold text-slate-400 uppercase tracking-wider whitespace-nowrap">Modules:</span>
-             <div className="flex flex-wrap gap-2">
-               <div className="bg-slate-100/50 p-1 rounded-lg flex flex-wrap gap-1 border border-slate-100">
-                  <button 
-                    onClick={() => setViewMode('planning')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${viewMode === 'planning' ? 'bg-white shadow text-slate-800 ring-1 ring-black/5' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'}`}
-                  >
-                    Schedule
-                  </button>
-                  <button 
-                    onClick={() => setViewMode('excel')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${viewMode === 'excel' ? 'bg-white shadow text-slate-800 ring-1 ring-black/5' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'}`}
-                  >
-                    Excel
-                  </button>
+        {/* Professional Navigation Bar */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+           <div className="flex flex-col lg:flex-row items-center justify-between p-2 gap-2">
+             
+             {/* Primary Modules (Schedule & Excel) */}
+             <div className="flex items-center gap-2 w-full lg:w-auto p-1 bg-slate-100/50 rounded-lg">
+                <button 
+                  onClick={() => setViewMode('planning')}
+                  className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-md text-sm font-semibold transition-all ${
+                    viewMode === 'planning' 
+                      ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-black/5' 
+                      : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
+                  }`}
+                >
+                  <Calendar size={18} />
+                  Schedule
+                </button>
+                <button 
+                  onClick={() => setViewMode('excel')}
+                  className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-md text-sm font-semibold transition-all ${
+                    viewMode === 'excel' 
+                      ? 'bg-white text-emerald-600 shadow-sm ring-1 ring-black/5' 
+                      : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
+                  }`}
+                >
+                  <Table size={18} />
+                  Excel View
+                </button>
+             </div>
+
+             <div className="h-8 w-px bg-slate-200 hidden lg:block mx-2"></div>
+
+             {/* Secondary Tools */}
+             <div className="flex flex-wrap items-center justify-center gap-1 w-full lg:w-auto overflow-x-auto pb-1 lg:pb-0">
+                
+                {/* Management Group */}
+                <div className="flex items-center gap-1 px-2 border-r border-slate-100 last:border-0">
                   <button 
                     onClick={() => setViewMode('card')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${viewMode === 'card' ? 'bg-white shadow text-slate-800 ring-1 ring-black/5' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'}`}
+                    title="Machine Cards"
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'card' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
                   >
-                    Cards
-                  </button>
-               </div>
-               
-               <div className="bg-slate-100/50 p-1 rounded-lg flex flex-wrap gap-1 border border-slate-100">
-                  <button 
-                    onClick={() => setViewMode('customers')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${viewMode === 'customers' ? 'bg-blue-100 text-blue-900 ring-1 ring-blue-300 shadow' : 'text-slate-500 hover:text-blue-700 hover:bg-blue-50'}`}
-                  >
-                    👥 Customers
-                  </button>
-                  <button 
-                    onClick={() => setViewMode('maintenance')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${viewMode === 'maintenance' ? 'bg-purple-100 text-purple-900 ring-1 ring-purple-300 shadow' : 'text-slate-500 hover:text-purple-700 hover:bg-purple-50'}`}
-                  >
-                    🔄 Changeovers
-                  </button>
-                  <button 
-                    onClick={() => setViewMode('idle')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${viewMode === 'idle' ? 'bg-red-100 text-red-900 ring-1 ring-red-300 shadow' : 'text-slate-500 hover:text-red-700 hover:bg-red-50'}`}
-                  >
-                    Idle Machines
+                    <LayoutGrid size={20} />
                   </button>
                   <button 
                     onClick={() => setViewMode('add')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${viewMode === 'add' ? 'bg-emerald-100 text-emerald-900 ring-1 ring-emerald-300 shadow' : 'text-slate-500 hover:text-emerald-700 hover:bg-emerald-50'}`}
+                    title="Add Data"
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'add' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
                   >
-                    ➕ ADD Data
+                    <PlusCircle size={20} />
                   </button>
                   <button 
                     onClick={() => setViewMode('orders')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${viewMode === 'orders' ? 'bg-orange-100 text-orange-900 ring-1 ring-orange-300 shadow' : 'text-slate-500 hover:text-orange-700 hover:bg-orange-50'}`}
+                    title="Orders"
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'orders' ? 'bg-orange-50 text-orange-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
                   >
-                    📦 OrderSS
+                    <Package size={20} />
                   </button>
-               </div>
-               
-               <button 
-                  onClick={() => setIsAddMachineOpen(true)}
-                  className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm flex items-center gap-2 whitespace-nowrap transition-colors"
-                >
-                  <span>+</span> <span className="hidden sm:inline">New Machine</span><span className="sm:hidden">Add</span>
-                </button>
+                </div>
+
+                {/* Analysis Group */}
+                <div className="flex items-center gap-1 px-2 border-r border-slate-100 last:border-0">
+                  <button 
+                    onClick={() => setViewMode('compare')}
+                    title="Compare Days"
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'compare' ? 'bg-blue-50 text-blue-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    <GitCompare size={20} />
+                  </button>
+                  <button 
+                    onClick={() => setViewMode('history')}
+                    title="Production History"
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'history' ? 'bg-teal-50 text-teal-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    <History size={20} />
+                  </button>
+                </div>
+
+                {/* Monitoring Group */}
+                <div className="flex items-center gap-1 px-2">
+                  <button 
+                    onClick={() => setViewMode('maintenance')}
+                    title="Maintenance & Changeovers"
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'maintenance' ? 'bg-purple-50 text-purple-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    <Wrench size={20} />
+                  </button>
+                  <button 
+                    onClick={() => setViewMode('idle')}
+                    title="Idle Machines"
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'idle' ? 'bg-red-50 text-red-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    <AlertCircle size={20} />
+                  </button>
+                </div>
+
              </div>
            </div>
         </div>
@@ -527,16 +513,25 @@ const App: React.FC = () => {
               <IdleMachineMonitor />
             )}
 
-            {viewMode === 'customers' && (
-              <CustomersPage machines={machines} />
-            )}
-
             {viewMode === 'add' && (
               <AddDataPage />
             )}
 
             {viewMode === 'orders' && (
               <OrderSSPage />
+            )}
+
+            {viewMode === 'compare' && (
+              <CompareDaysPage 
+                allMachineData={rawMachines}
+                defaultDate1={selectedDate}
+              />
+            )}
+
+            {viewMode === 'history' && (
+              <ProductionHistoryPage 
+                machines={machines}
+              />
             )}
         </div>
       </main>
@@ -546,20 +541,6 @@ const App: React.FC = () => {
           onClose={() => setShowInsights(false)}
           recommendations={aiAnalysis}
         />
-      )}
-
-      {isAddMachineOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl my-auto animate-fadeIn">
-             <div className="flex justify-between items-center p-4 border-b border-slate-100 bg-slate-50 rounded-t-xl sticky top-0 z-10">
-                <h3 className="font-bold text-lg text-slate-800">Add New Machine</h3>
-                <button onClick={() => setIsAddMachineOpen(false)} className="text-slate-400 hover:text-slate-600 p-2">✕</button>
-             </div>
-             <div className="p-2 max-h-[80vh] overflow-y-auto">
-               <AddMachineForm onAdd={handleAddSingleMachine} isConnected={isConnected === true} />
-             </div>
-          </div>
-        </div>
       )}
     </div>
   );

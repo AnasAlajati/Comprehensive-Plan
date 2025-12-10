@@ -26,7 +26,7 @@ interface SearchDropdownProps {
   options: any[];
   value: string;
   onChange: (value: string) => void;
-  onCreateNew: () => void;
+  onCreateNew: (newValue: string) => void;
   onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
   onFocus?: () => void;
   placeholder?: string;
@@ -100,8 +100,8 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
 
   const handleCreateNew = () => {
     if (inputValue.trim()) {
-      onCreateNew();
-      setInputValue('');
+      onCreateNew(inputValue);
+      // Don't clear inputValue here, let the parent update the value prop
       setSearchTerm('');
       setIsOpen(false);
     }
@@ -321,6 +321,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
 
     return {
       id: machineNumericId,
+      orderIndex: machine.orderIndex,
       machineSSId,
       brand: machine.brand || '—',
       type: machine.type || '—',
@@ -392,6 +393,13 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
         const machineDocs = await DataService.getMachinesFromMachineSS();
         if (!isMounted) return;
         const mapped = machineDocs.map((machine: any, idx: number) => mapMachineSSDocToMachineRow(machine, idx, activeDay));
+        
+        mapped.sort((a: any, b: any) => {
+           const orderA = a.orderIndex !== undefined ? a.orderIndex : 9999;
+           const orderB = b.orderIndex !== undefined ? b.orderIndex : 9999;
+           return orderA - orderB;
+        });
+
         setMachines(mapped);
         setError('');
       } catch (err) {
@@ -1109,7 +1117,10 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                             options={clients}
                             value={plan.client || ''}
                             onChange={(val) => handlePlanChange(machine, index, 'client', val)}
-                            onCreateNew={() => handleCreateItem('client', plan.client || '')}
+                            onCreateNew={async (val) => {
+                                await handleCreateItem('client', val);
+                                handlePlanChange(machine, index, 'client', val);
+                            }}
                             placeholder="-"
                             className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent font-bold text-slate-700"
                           />}
@@ -1153,7 +1164,10 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                                 options={fabrics}
                                 value={plan.fabric || ''}
                                 onChange={(val) => handlePlanChange(machine, index, 'fabric', val)}
-                                onCreateNew={() => handleCreateItem('fabric', plan.fabric || '')}
+                                onCreateNew={async (val) => {
+                                    await handleCreateItem('fabric', val);
+                                    handlePlanChange(machine, index, 'fabric', val);
+                                }}
                                 placeholder="-"
                                 className="w-full text-right py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-sm text-slate-700 leading-tight"
                                 extraInfo={(opt) => {
