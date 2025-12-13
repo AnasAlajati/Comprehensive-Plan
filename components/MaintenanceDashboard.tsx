@@ -3,43 +3,12 @@ import React, { useState, useEffect } from 'react';
 import { MachineRow, MachineStatus } from '../types';
 import { DataService } from '../services/dataService';
 
-export const MaintenanceDashboard: React.FC = () => {
-  const [machines, setMachines] = useState<MachineRow[]>([]);
-  const [loading, setLoading] = useState(true);
+interface MaintenanceDashboardProps {
+  machines: MachineRow[];
+}
+
+export const MaintenanceDashboard: React.FC<MaintenanceDashboardProps> = ({ machines }) => {
   const today = new Date().toISOString().split('T')[0];
-
-  useEffect(() => {
-    const fetchMachines = async () => {
-      try {
-        setLoading(true);
-        const data = await DataService.getMachinesFromMachineSS();
-        const mappedMachines: MachineRow[] = data.map((m: any) => ({
-          id: m.id,
-          machineName: m.name,
-          brand: m.brand,
-          type: m.type,
-          status: m.status,
-          dayProduction: m.lastLogData?.dayProduction || 0,
-          remainingMfg: m.lastLogData?.remainingMfg || 0,
-          futurePlans: m.futurePlans,
-          material: m.lastLogData?.fabric || '',
-          client: m.lastLogData?.client || '',
-          avgProduction: m.avgProduction,
-          scrap: m.lastLogData?.scrap || 0,
-          reason: m.lastLogData?.reason || '',
-          customStatusNote: m.lastLogData?.status === 'Other' ? m.lastLogData?.customStatusNote : '',
-          orderIndex: m.orderIndex
-        }));
-        setMachines(mappedMachines);
-      } catch (error) {
-        console.error("Error fetching machines for maintenance dashboard:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchMachines();
-  }, []);
 
   // 1. Get Machines currently in "Qalb" (Changeover) or "Under Operation"
   const activeChangeovers = machines.filter(m => m.status === MachineStatus.QALB);

@@ -5,9 +5,9 @@ import { recalculateSchedule, addDays } from '../services/data';
 import { DataService } from '../services/dataService';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { Search, Play } from 'lucide-react';
+import { Search, Play, GripVertical } from 'lucide-react';
 
 // Global CSS to hide number input spinners
 const globalStyles = `
@@ -183,12 +183,13 @@ interface PlanningScheduleProps {
   machines?: MachineRow[];
   onUpdate?: (machine: MachineRow) => Promise<void>;
 }
-type PlanningMachine = MachineRow & { machineSSId: string };
+type PlanningMachine = MachineRow & { machineSSId: string; scheduleIndex?: number };
 
 export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) => {
   const [smartAddMachineId, setSmartAddMachineId] = useState<number | null>(null);
   const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean; machine: any; plan?: any; isCurrent?: boolean; } | null>(null);
   const [draggedPlan, setDraggedPlan] = useState<{machineId: number, index: number} | null>(null);
+  const [draggedMachineId, setDraggedMachineId] = useState<number | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [machines, setMachines] = useState<PlanningMachine[]>([]);
   const [loading, setLoading] = useState(true);
@@ -321,8 +322,8 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
 
     return {
       id: machineNumericId,
-      orderIndex: machine.orderIndex,
       machineSSId,
+      scheduleIndex: machine.scheduleIndex !== undefined ? machine.scheduleIndex : 9999,
       brand: machine.brand || '—',
       type: machine.type || '—',
       machineName: machine.name || machine.machineName || `Machine ${machineNumericId}`,
@@ -393,13 +394,6 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
         const machineDocs = await DataService.getMachinesFromMachineSS();
         if (!isMounted) return;
         const mapped = machineDocs.map((machine: any, idx: number) => mapMachineSSDocToMachineRow(machine, idx, activeDay));
-        
-        mapped.sort((a: any, b: any) => {
-           const orderA = a.orderIndex !== undefined ? a.orderIndex : 9999;
-           const orderB = b.orderIndex !== undefined ? b.orderIndex : 9999;
-           return orderA - orderB;
-        });
-
         setMachines(mapped);
         setError('');
       } catch (err) {
@@ -634,12 +628,9 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
   const filteredMachines = useMemo(() => {
     let result = [...machines];
 
-    if (filterType !== 'ALL') {
-      if (filterType === 'All (Excl. BOUS)') {
-        result = result.filter(m => m.type !== 'BOUS');
-      } else {
-        result = result.filter(m => m.type === filterType);
-      }
+    if (filterType !== 'ALL' && filterType.trim()) {
+      const lowerType = filterType.toLowerCase();
+      result = result.filter(m => m.type && m.type.toLowerCase().includes(lowerType));
     }
 
     if (filterClient.trim()) {
@@ -660,239 +651,421 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
       );
     }
     
-    result.sort((a, b) => (a.id || 0) - (b.id || 0));
+    result.sort((a, b) => {
+      // Priority 1: Custom Schedule Order
+      const indexA = a.scheduleIndex !== undefined ? a.scheduleIndex : 9999;
+      const indexB = b.scheduleIndex !== undefined ? b.scheduleIndex : 9999;
+      
+      if (indexA !== indexB) {
+          return indexA - indexB;
+      }
+
+      // Sort by Client (A-Z)
+      const clientA = (a.client || '').toLowerCase();
+      const clientB = (b.client || '').toLowerCase();
+      if (clientA < clientB) return -1;
+      if (clientA > clientB) return 1;
+
+      // Then by Fabric (A-Z)
+      const fabricA = (a.material || '').toLowerCase();
+      const fabricB = (b.material || '').toLowerCase();
+      if (fabricA < fabricB) return -1;
+      if (fabricA > fabricB) return 1;
+
+      // Finally by ID
+      return (a.id || 0) - (b.id || 0);
+    });
 
     return result;
   }, [machines, filterType, filterClient, filterFabric, searchTerm]);
 
+  const handleMachineDragStart = (e: React.DragEvent, machineId: number) => {
+    setDraggedMachineId(machineId);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleMachineDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleMachineDrop = async (e: React.DragEvent, targetMachineId: number) => {
+    e.preventDefault();
+    if (draggedMachineId === null || draggedMachineId === targetMachineId) return;
+
+    const currentIndex = filteredMachines.findIndex(m => m.id === draggedMachineId);
+    const targetIndex = filteredMachines.findIndex(m => m.id === targetMachineId);
+
+    if (currentIndex === -1 || targetIndex === -1) return;
+
+    const newMachines = [...filteredMachines];
+    const [movedMachine] = newMachines.splice(currentIndex, 1);
+    newMachines.splice(targetIndex, 0, movedMachine);
+
+    // Update scheduleIndex for all machines to persist the order
+    const updates = newMachines.map((machine, index) => ({
+        id: machine.machineSSId,
+        scheduleIndex: (index + 1) * 1000
+    }));
+
+    try {
+        // Optimistically update local state
+        setMachines(prev => {
+            const updateMap = new Map(updates.map(u => [u.id, u.scheduleIndex]));
+            return prev.map(m => {
+                if (updateMap.has(m.machineSSId)) {
+                    return { ...m, scheduleIndex: updateMap.get(m.machineSSId) };
+                }
+                return m;
+            });
+        });
+
+        // Persist to Firestore
+        await Promise.all(updates.map(u => 
+            DataService.updateMachineInMachineSS(u.id, { scheduleIndex: u.scheduleIndex })
+        ));
+    } catch (err) {
+        console.error("Failed to reorder machines", err);
+        setError("Failed to save new order");
+    }
+    
+    setDraggedMachineId(null);
+  };
+
   const handleDownloadPDF = async () => {
-    if (!scheduleRef.current) return;
     setIsDownloading(true);
 
     try {
-      const element = scheduleRef.current;
-      
-      // Define the types we want to group by
-      const machineTypes = ['SINGLE', 'DOUBLE', 'MELTON', 'INTERLOCK'];
-      
+      // 1. Setup PDF (A4 Landscape)
       const pdf = new jsPDF('l', 'mm', 'a4');
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const margin = 5;
-      const maxContentWidth = pageWidth - (margin * 2);
-      const maxContentHeight = pageHeight - (margin * 2);
+      const pageWidth = 297;
+      const pageHeight = 210;
+      const margin = 10; // mm
+      const contentWidth = pageWidth - (margin * 2);
+      const contentHeight = pageHeight - (margin * 2);
+      
+      // Pixel conversion (approx 3.78 px/mm at 96 DPI, but we scale up for quality)
+      const pxPerMm = 3.78; 
+      const containerWidth = Math.floor(contentWidth * pxPerMm);
+      const containerHeight = Math.floor(contentHeight * pxPerMm);
 
-      let isFirstPage = true;
+      // 2. Create Hidden Container
+      const container = document.createElement('div');
+      container.style.position = 'absolute';
+      container.style.top = '-9999px';
+      container.style.left = '0';
+      container.style.width = `${containerWidth}px`;
+      container.style.backgroundColor = '#ffffff';
+      document.body.appendChild(container);
 
-      // Process each machine type separately
-      for (const type of machineTypes) {
-        // Check if we have any machines of this type
-        const hasMachines = element.querySelector(`[data-machine-type="${type}"]`);
-        if (!hasMachines) continue;
+      // --- COLOR SANITIZATION HELPER (Same as FetchDataPage) ---
+      const ctx = document.createElement('canvas').getContext('2d');
+      const safeColor = (c: string) => {
+          if (!c || typeof c !== 'string') return c;
+          if (!c.includes('ok') && !c.includes('lab') && !c.includes('lch')) return c;
 
-        // Capture the specific type group
-        const canvas = await html2canvas(element, {
+          if (c.includes('oklch') || c.includes('oklab') || c.includes('lab(') || c.includes('lch(')) {
+              if (!ctx) return '#000000';
+              try {
+                  ctx.clearRect(0, 0, 1, 1);
+                  ctx.fillStyle = c;
+                  ctx.fillRect(0, 0, 1, 1);
+                  const data = ctx.getImageData(0, 0, 1, 1).data;
+                  return `rgba(${data[0]}, ${data[1]}, ${data[2]}, ${data[3] / 255})`;
+              } catch (e) {
+                  console.warn('Color conversion failed', e);
+                  return '#000000'; 
+              }
+          }
+          return c;
+      };
+
+      // 3. Group Machines
+      const groups: Record<string, PlanningMachine[]> = {};
+      const typeOrder = ['SINGLE', 'DOUBLE', 'MELTON', 'INTERLOCK', 'RIB', 'JACQUARD'];
+      
+      const normalizeType = (t: string) => {
+        const upper = (t || '').toUpperCase();
+        if (upper.includes('SINGLE')) return 'SINGLE';
+        if (upper.includes('DOUBLE')) return 'DOUBLE';
+        return upper || 'OTHER';
+      };
+
+      filteredMachines.forEach(m => {
+        const type = normalizeType(m.type);
+        if (!groups[type]) groups[type] = [];
+        groups[type].push(m);
+      });
+
+      const sortedTypes = Object.keys(groups).sort((a, b) => {
+         const idxA = typeOrder.indexOf(a);
+         const idxB = typeOrder.indexOf(b);
+         if (idxA === -1 && idxB === -1) return a.localeCompare(b);
+         if (idxA === -1) return 1;
+         if (idxB === -1) return -1;
+         return idxA - idxB;
+      });
+
+      // 4. Render Logic
+      const pages: HTMLElement[] = [];
+      let currentPage: HTMLElement | null = null;
+      let currentY = 0;
+
+      const createNewPage = () => {
+        const page = document.createElement('div');
+        page.style.width = `${containerWidth}px`;
+        page.style.height = `${containerHeight}px`; // Fixed height per page
+        page.style.padding = '20px';
+        page.style.backgroundColor = 'white';
+        page.style.boxSizing = 'border-box';
+        page.style.position = 'relative';
+        page.style.overflow = 'hidden';
+        
+        // Add Title/Date Header
+        const headerDiv = document.createElement('div');
+        headerDiv.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 2px solid #1e293b; padding-bottom: 5px;">
+            <h1 style="font-size: 18px; font-weight: bold; color: #1e293b; margin: 0;">Production Schedule</h1>
+            <span style="font-size: 12px; color: #64748b;">Generated: ${new Date().toLocaleDateString()}</span>
+          </div>
+        `;
+        page.appendChild(headerDiv);
+        
+        container.appendChild(page);
+        pages.push(page);
+        currentPage = page;
+        currentY = 60; // Initial offset after header
+        
+        return page;
+      };
+
+      // Initialize first page
+      createNewPage();
+
+      // Helper for Row Background (Subtle tint based on status to match UI vibe)
+      const getRowBg = (s: MachineStatus) => {
+          switch(s) {
+            case MachineStatus.WORKING: return '#ecfdf5'; // emerald-50
+            case MachineStatus.UNDER_OP: return '#fffbeb'; // amber-50
+            case MachineStatus.NO_ORDER: return '#f8fafc'; // slate-50
+            case MachineStatus.OUT_OF_SERVICE: return '#fef2f2'; // red-50
+            case MachineStatus.QALB: return '#faf5ff'; // purple-50
+            default: return '#ffffff';
+          }
+      };
+
+      // Helper to calculate end date
+      const calcEndDate = (start: string, rem: number, prod: number) => {
+         if (!start || !rem || !prod) return '-';
+         const days = Math.ceil(rem / prod);
+         const d = new Date(start);
+         d.setDate(d.getDate() + days);
+         return d.toISOString().split('T')[0];
+      };
+
+      let currentTbody: HTMLTableSectionElement | null = null;
+
+      const startNewTable = (page: HTMLElement) => {
+          const table = document.createElement('table');
+          table.style.width = '100%';
+          table.style.borderCollapse = 'collapse';
+          table.style.fontSize = '10px';
+          table.style.tableLayout = 'fixed';
+          table.style.marginBottom = '10px';
+
+          table.innerHTML = `
+             <thead>
+               <tr style="background-color: #f8fafc; color: #64748b; border-bottom: 2px solid #e2e8f0;">
+                 <th style="padding: 6px; text-align: center; width: 10%;">Start</th>
+                 <th style="padding: 6px; text-align: center; width: 10%;">End</th>
+                 <th style="padding: 6px; text-align: center; width: 8%;">Orig.</th>
+                 <th style="padding: 6px; text-align: center; width: 6%;">Days</th>
+                 <th style="padding: 6px; text-align: left; width: 12%;">Client</th>
+                 <th style="padding: 6px; text-align: left; width: 8%;">Ref</th>
+                 <th style="padding: 6px; text-align: right; width: 10%;">Rem.</th>
+                 <th style="padding: 6px; text-align: right; width: 10%;">Qty</th>
+                 <th style="padding: 6px; text-align: right; width: 8%;">Prod</th>
+                 <th style="padding: 6px; text-align: left; width: 18%;">Fabric/Notes</th>
+               </tr>
+             </thead>
+             <tbody></tbody>
+          `;
+          page.appendChild(table);
+          return table.querySelector('tbody')!;
+      };
+
+      for (const type of sortedTypes) {
+        const machines = groups[type];
+        if (machines.length === 0) continue;
+
+        // Type Header
+        const typeHeaderHeight = 30;
+        if (currentY + typeHeaderHeight > containerHeight - 20) {
+           createNewPage();
+           currentTbody = null;
+        }
+
+        if (currentPage) {
+            currentTbody = null; // Start fresh table for new type section
+            const typeDiv = document.createElement('div');
+            typeDiv.innerHTML = `
+              <div style="padding: 8px; background-color: #e2e8f0; font-weight: bold; color: #1e293b; border-bottom: 1px solid #cbd5e1; font-size: 12px; margin-bottom: 10px;">
+                ${type} MACHINES (${machines.length})
+              </div>
+            `;
+            currentPage.appendChild(typeDiv);
+            currentY += typeHeaderHeight + 10;
+        }
+
+        for (const machine of machines) {
+           const planRows = machine.futurePlans && machine.futurePlans.length > 0 ? machine.futurePlans : [];
+           const totalRows = 1 + planRows.length; // 1 for current status + plans
+           
+           // Calculate height needed for this machine block
+           const machineHeaderHeight = 25;
+           const dataRowsHeight = totalRows * 25;
+           const totalBlockHeight = machineHeaderHeight + dataRowsHeight;
+
+           // Check if machine fits on current page
+           if (currentY + totalBlockHeight > containerHeight - 20) {
+              createNewPage();
+              currentTbody = null;
+              
+              // Re-add type header for context on new page
+              const typeDiv = document.createElement('div');
+              typeDiv.innerHTML = `
+                <div style="padding: 8px; background-color: #e2e8f0; font-weight: bold; color: #1e293b; border-bottom: 1px solid #cbd5e1; font-size: 12px; margin-bottom: 10px;">
+                  ${type} MACHINES (Cont.)
+                </div>
+              `;
+              currentPage!.appendChild(typeDiv);
+              currentY += 40;
+           }
+
+           if (!currentPage) continue;
+
+           if (!currentTbody) {
+               currentTbody = startNewTable(currentPage);
+               currentY += 30; // Table header height
+           }
+
+           // --- Machine Header Row (Spans all columns) ---
+           const machineHeaderRow = document.createElement('tr');
+           machineHeaderRow.style.backgroundColor = '#1e293b';
+           machineHeaderRow.style.color = 'white';
+           
+           machineHeaderRow.innerHTML = `
+             <td colspan="10" style="padding: 6px 10px; border-bottom: 1px solid #334155;">
+               <div style="display: flex; justify-content: space-between; align-items: center;">
+                 <div style="display: flex; align-items: center; gap: 10px;">
+                   <span style="font-weight: bold; font-size: 11px;">${machine.machineName}</span>
+                   <span style="font-size: 9px; opacity: 0.8; text-transform: uppercase; background-color: rgba(255,255,255,0.1); padding: 1px 4px; border-radius: 2px;">${machine.brand || ''}</span>
+                 </div>
+                 <div style="font-size: 9px; font-weight: 500; opacity: 0.9;">${machine.status}</div>
+               </div>
+             </td>
+           `;
+           currentTbody.appendChild(machineHeaderRow);
+
+           // --- Row 1: Current Status ---
+           const endDate = calcEndDate(activeDay, machine.remainingMfg, machine.dayProduction);
+           const statusRow = document.createElement('tr');
+           statusRow.style.backgroundColor = getRowBg(machine.status);
+           statusRow.style.borderBottom = '1px solid #e2e8f0';
+           
+           statusRow.innerHTML = `
+             <td style="padding: 6px; text-align: center;">${activeDay}</td>
+             <td style="padding: 6px; text-align: center;">${endDate}</td>
+             <td style="padding: 6px; text-align: center;">-</td>
+             <td style="padding: 6px; text-align: center;">-</td>
+             <td style="padding: 6px;">${machine.client || '-'}</td>
+             <td style="padding: 6px;">${machine.orderReference || '-'}</td>
+             <td style="padding: 6px; text-align: right;">${machine.remainingMfg?.toLocaleString() || '-'}</td>
+             <td style="padding: 6px; text-align: right;">-</td>
+             <td style="padding: 6px; text-align: right;">${machine.avgProduction?.toLocaleString() || '-'}</td>
+             <td style="padding: 6px;">${machine.material || '-'}</td>
+           `;
+           currentTbody.appendChild(statusRow);
+
+           // --- Future Plans ---
+           planRows.forEach(plan => {
+              const planRow = document.createElement('tr');
+              planRow.style.borderBottom = '1px solid #f1f5f9';
+              planRow.style.backgroundColor = '#ffffff';
+              
+              planRow.innerHTML = `
+                <td style="padding: 6px; text-align: center;">${plan.startDate || '-'}</td>
+                <td style="padding: 6px; text-align: center;">${plan.endDate || '-'}</td>
+                <td style="padding: 6px; text-align: center;">${plan.originalSampleMachine || '-'}</td>
+                <td style="padding: 6px; text-align: center;">${plan.days || '-'}</td>
+                <td style="padding: 6px;">${plan.client || '-'}</td>
+                <td style="padding: 6px;">${plan.orderName || '-'}</td>
+                <td style="padding: 6px; text-align: right;">${plan.remaining?.toLocaleString() || '-'}</td>
+                <td style="padding: 6px; text-align: right;">${plan.quantity?.toLocaleString() || '-'}</td>
+                <td style="padding: 6px; text-align: right;">${plan.productionPerDay?.toLocaleString() || '-'}</td>
+                <td style="padding: 6px;">${plan.fabric || plan.notes || '-'}</td>
+              `;
+              currentTbody.appendChild(planRow);
+           });
+
+           currentY += totalBlockHeight;
+        }
+      }
+
+      // 5. Generate PDF
+      for (let i = 0; i < pages.length; i++) {
+        // --- PRE-SANITIZE DOM ELEMENTS ---
+        // This prevents html2canvas from crashing during initial parse if it encounters oklch
+        const domElements = pages[i].querySelectorAll('*');
+        domElements.forEach((el: any) => {
+            const style = el.style;
+            const computed = getComputedStyle(el);
+            // We only need to overwrite if it's an unsafe color
+            if (computed.backgroundColor && (computed.backgroundColor.includes('ok') || computed.backgroundColor.includes('lab'))) {
+                style.backgroundColor = safeColor(computed.backgroundColor);
+            }
+            if (computed.color && (computed.color.includes('ok') || computed.color.includes('lab'))) {
+                style.color = safeColor(computed.color);
+            }
+            if (computed.borderColor && (computed.borderColor.includes('ok') || computed.borderColor.includes('lab'))) {
+                style.borderColor = safeColor(computed.borderColor);
+            }
+        });
+        // ---------------------------------
+
+        if (i > 0) pdf.addPage();
+        const canvas = await html2canvas(pages[i], {
           scale: 2,
           useCORS: true,
           backgroundColor: '#ffffff',
-          windowWidth: element.scrollWidth + 100,
           onclone: (clonedDoc) => {
-            // --- FIX: Sanitize OKLCH colors for html2canvas ---
-            const ctx = document.createElement('canvas').getContext('2d');
-            
-            const safeColor = (c: string) => {
-               if (!c || typeof c !== 'string') return c;
-               // Fast check for modern color spaces
-               if (!c.includes('ok') && !c.includes('lab') && !c.includes('lch')) return c;
+             // Apply color sanitization if any dynamic styles slipped through
+             const allElements = clonedDoc.querySelectorAll('*');
+             allElements.forEach((el: any) => {
+                const style = el.style;
+                const computed = getComputedStyle(el);
 
-               if (c.includes('oklch') || c.includes('oklab') || c.includes('lab(') || c.includes('lch(')) {
-                    if (!ctx) return '#000000';
-                    try {
-                      ctx.clearRect(0, 0, 1, 1);
-                      ctx.fillStyle = c;
-                      ctx.fillRect(0, 0, 1, 1);
-                      const data = ctx.getImageData(0, 0, 1, 1).data;
-                      return `rgba(${data[0]}, ${data[1]}, ${data[2]}, ${data[3] / 255})`;
-                    } catch (e) {
-                      console.warn('Color conversion failed', e);
-                      return '#000000'; 
-                    }
-               }
-               return c;
-            };
+                if (computed.backgroundColor) style.backgroundColor = safeColor(computed.backgroundColor);
+                if (computed.color) style.color = safeColor(computed.color);
+                if (computed.borderColor) style.borderColor = safeColor(computed.borderColor);
+                if (computed.outlineColor) style.outlineColor = safeColor(computed.outlineColor);
 
-            try {
-              if (ctx) {
-                ctx.canvas.width = 1;
-                ctx.canvas.height = 1;
-                
-                const allElements = clonedDoc.querySelectorAll('*');
-                allElements.forEach((el) => {
-                  const htmlEl = el as HTMLElement;
-                  const style = htmlEl.style;
-                  const computed = getComputedStyle(el);
-                  
-                  // Handle basic colors
-                  if (computed.backgroundColor) style.backgroundColor = safeColor(computed.backgroundColor);
-                  if (computed.color) style.color = safeColor(computed.color);
-                  if (computed.borderColor) style.borderColor = safeColor(computed.borderColor);
-                  
-                  // Handle detailed borders if they differ
-                  if (computed.borderTopColor) style.borderTopColor = safeColor(computed.borderTopColor);
-                  if (computed.borderRightColor) style.borderRightColor = safeColor(computed.borderRightColor);
-                  if (computed.borderBottomColor) style.borderBottomColor = safeColor(computed.borderBottomColor);
-                  if (computed.borderLeftColor) style.borderLeftColor = safeColor(computed.borderLeftColor);
-
-                  if (computed.outlineColor) style.outlineColor = safeColor(computed.outlineColor);
-                  
-                  // Handle SVG colors
-                  if (computed.fill && computed.fill !== 'none') style.fill = safeColor(computed.fill);
-                  if (computed.stroke && computed.stroke !== 'none') style.stroke = safeColor(computed.stroke);
-
-                  // Handle shadows
-                  if (computed.boxShadow && (computed.boxShadow.includes('ok') || computed.boxShadow.includes('lab') || computed.boxShadow.includes('lch'))) {
-                     style.boxShadow = 'none'; 
-                  }
-                  
-                  // Handle gradients or images that might contain colors
-                  if (computed.backgroundImage && (computed.backgroundImage.includes('ok') || computed.backgroundImage.includes('lab') || computed.backgroundImage.includes('lch'))) {
-                     style.backgroundImage = 'none';
-                     style.backgroundColor = safeColor(computed.backgroundColor);
-                  }
-                });
-              }
-            } catch (e) {
-              console.error('Error in PDF color sanitization:', e);
-            }
-            // --------------------------------------------------
-
-            // --- HIDE OTHER TYPES ---
-            const allMachineCards = clonedDoc.querySelectorAll('[data-machine-type]');
-            allMachineCards.forEach((card) => {
-               if (card.getAttribute('data-machine-type') !== type) {
-                  (card as HTMLElement).style.display = 'none';
-               } else {
-                  // Ensure visible and add some spacing
-                  (card as HTMLElement).style.display = 'block';
-                  (card as HTMLElement).style.marginBottom = '10px';
-                  
-                  // Scale down content slightly for better fit
-                  const table = card.querySelector('table');
-                  if (table) {
-                     (table as HTMLElement).style.fontSize = '9px';
-                     const cells = table.querySelectorAll('th, td');
-                     cells.forEach(c => (c as HTMLElement).style.padding = '2px 4px');
-                  }
-               }
-            });
-            // ------------------------
-
-            // Remove Actions column (last th/td in each row)
-            const rows = clonedDoc.querySelectorAll('tr');
-            rows.forEach(row => {
-              if (row.lastElementChild) {
-                (row.lastElementChild as HTMLElement).style.display = 'none';
-              }
-            });
-
-            // Hide buttons and drag handles
-            const toHide = clonedDoc.querySelectorAll('button, .drag-handle, .no-print');
-            toHide.forEach(el => (el as HTMLElement).style.display = 'none');
-
-            // Replace inputs with text
-            const inputs = clonedDoc.querySelectorAll('input, textarea, select');
-            inputs.forEach((input: any) => {
-              const span = clonedDoc.createElement('span');
-              span.textContent = input.value;
-              span.className = input.className;
-              span.style.border = 'none';
-              span.style.background = 'transparent';
-              span.style.textAlign = 'center';
-              span.style.padding = '0';
-              span.style.margin = '0';
-              span.style.display = 'inline-block';
-              
-              // Preserve font styles
-              const computed = getComputedStyle(input);
-              span.style.fontSize = 'inherit'; 
-              span.style.fontWeight = computed.fontWeight;
-              span.style.color = safeColor(computed.color);
-
-              if (input.tagName === 'TEXTAREA') {
-                  span.style.whiteSpace = 'pre-wrap';
-              }
-              if(input.parentNode) input.parentNode.replaceChild(span, input);
-            });
-            
-            // Ensure full width
-            const scrollables = clonedDoc.querySelectorAll('.overflow-x-auto');
-            scrollables.forEach(el => {
-               (el as HTMLElement).style.overflow = 'visible';
-               (el as HTMLElement).style.display = 'block';
-               (el as HTMLElement).style.width = 'fit-content';
-            });
+                // Handle shadows that might contain oklch
+                if (computed.boxShadow && (computed.boxShadow.includes('ok') || computed.boxShadow.includes('lab') || computed.boxShadow.includes('lch'))) {
+                   style.boxShadow = 'none'; 
+                }
+             });
           }
         });
-
-        const imgWidth = canvas.width;
-        const imgHeight = canvas.height;
-        
-        // If the canvas is empty (height 0), skip
-        if (imgHeight === 0) continue;
-
-        // Calculate scale to fit width
-        let pdfContentWidth = maxContentWidth;
-        let pdfContentHeight = (imgHeight * maxContentWidth) / imgWidth;
-
-        // Multi-page logic for this type
-        let heightLeft = imgHeight;
-        let position = 0;
-        
-        const scaleRatio = imgHeight / pdfContentHeight;
-        const pageCanvasHeight = maxContentHeight * scaleRatio;
-
-        while (heightLeft > 0) {
-          // Add new page if not the very first page of the document
-          if (!isFirstPage) {
-             pdf.addPage();
-          }
-          isFirstPage = false;
-
-          const pageCanvas = document.createElement('canvas');
-          pageCanvas.width = imgWidth;
-          const sliceHeight = Math.min(heightLeft, pageCanvasHeight);
-          pageCanvas.height = sliceHeight;
-          
-          const pageCtx = pageCanvas.getContext('2d');
-          if (pageCtx) {
-            pageCtx.drawImage(
-              canvas, 
-              0, position, imgWidth, sliceHeight, 
-              0, 0, imgWidth, sliceHeight
-            );
-            
-            const sliceData = pageCanvas.toDataURL('image/png');
-            const pdfSliceHeight = sliceHeight / scaleRatio;
-            
-            // Add Type Header on the first page of the section
-            if (position === 0) {
-               pdf.setFontSize(14);
-               pdf.setTextColor(40, 40, 40);
-               pdf.text(`${type} MACHINES`, margin, margin - 2); // Just above content if possible, or rely on margin
-            }
-
-            const x = margin + (maxContentWidth - pdfContentWidth) / 2;
-            pdf.addImage(sliceData, 'PNG', x, margin, pdfContentWidth, pdfSliceHeight);
-          }
-          
-          heightLeft -= sliceHeight;
-          position += sliceHeight;
-        }
+        const imgData = canvas.toDataURL('image/jpeg', 0.95);
+        pdf.addImage(imgData, 'JPEG', 0, 0, pageWidth, pageHeight);
       }
-      
-      pdf.save('production-schedule.pdf');
-    } catch (err) {
-      console.error("PDF Error:", err);
+
+      pdf.save(`Production_Schedule_${new Date().toISOString().split('T')[0]}.pdf`);
+      document.body.removeChild(container);
+
+    } catch (error) {
+      console.error("PDF Generation Error:", error);
       alert("Failed to generate PDF");
     } finally {
       setIsDownloading(false);
@@ -934,42 +1107,28 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
               
               <div className="flex gap-2 overflow-x-auto pb-2 sm:pb-0">
                 <input 
-                  type="date"
-                  value={activeDay}
-                  onChange={handleDateChange}
-                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:ring-2 focus:ring-blue-500 outline-none"
-                />
-                <select 
-                  value={filterType}
+                  type="text"
+                  placeholder="Filter Type..."
+                  value={filterType === 'ALL' ? '' : filterType}
                   onChange={(e) => setFilterType(e.target.value)}
-                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:ring-2 focus:ring-blue-500 outline-none"
-                >
-                  {availableTypes.map(type => (
-                    <option key={type} value={type}>{type === 'ALL' ? 'Type: All' : type}</option>
-                  ))}
-                </select>
+                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:ring-2 focus:ring-blue-500 outline-none w-32"
+                />
 
-                <select 
+                <input 
+                  type="text"
+                  placeholder="Filter Client..."
                   value={filterClient}
                   onChange={(e) => setFilterClient(e.target.value)}
-                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:ring-2 focus:ring-blue-500 outline-none"
-                >
-                  <option value="">All Clients</option>
-                  {uniqueClients.map(c => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
+                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:ring-2 focus:ring-blue-500 outline-none w-32"
+                />
 
-                <select 
+                <input 
+                  type="text"
+                  placeholder="Filter Fabric..."
                   value={filterFabric}
                   onChange={(e) => setFilterFabric(e.target.value)}
-                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:ring-2 focus:ring-blue-500 outline-none"
-                >
-                  <option value="">All Fabrics</option>
-                  {uniqueFabrics.map(f => (
-                    <option key={f} value={f}>{f}</option>
-                  ))}
-                </select>
+                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:ring-2 focus:ring-blue-500 outline-none w-32"
+                />
               </div>
             </div>
             
@@ -1002,7 +1161,11 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
               key={machine.id} 
               id={`machine-schedule-card-${machine.id}`}
               data-machine-type={machine.type}
-              className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden ring-1 ring-black/5"
+              className={`bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden ring-1 ring-black/5 transition-opacity ${draggedMachineId === machine.id ? 'opacity-50' : ''}`}
+              draggable
+              onDragStart={(e) => handleMachineDragStart(e, machine.id)}
+              onDragOver={handleMachineDragOver}
+              onDrop={(e) => handleMachineDrop(e, machine.id)}
             >
             <div className="bg-slate-800 px-4 sm:px-6 py-3 flex flex-col sm:flex-row justify-between sm:items-center text-white gap-2 sm:gap-0">
               <div className="flex items-center gap-3">
@@ -1013,6 +1176,9 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                   <span className="uppercase tracking-wider text-xs">{machine.brand}</span>
                   <span className="w-1 h-1 bg-slate-500 rounded-full"></span>
                   <span className="uppercase tracking-wider text-xs">{machine.type}</span>
+                  <div className="cursor-move p-1 hover:bg-slate-700 rounded" title="Drag to reorder">
+                    <GripVertical size={20} className="text-slate-400" />
+                  </div>
               </div>
             </div>
 

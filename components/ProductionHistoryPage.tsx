@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Calendar, Filter, TrendingUp, Trash2, BarChart3, Download, PieChart, AlertCircle, Activity, ChevronDown, Layers } from 'lucide-react';
+import { Calendar, Filter, TrendingUp, Trash2, BarChart3, Download, PieChart, AlertCircle, Activity } from 'lucide-react';
 import { MachineRow } from '../types';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../services/firebase';
@@ -7,82 +7,6 @@ import { db } from '../services/firebase';
 interface ProductionHistoryPageProps {
   machines: MachineRow[];
 }
-
-const ExpandableStatCard = ({ 
-  title, 
-  total, 
-  color, 
-  icon: Icon, 
-  data, 
-  dataKey 
-}: { 
-  title: string, 
-  total: number, 
-  color: string, 
-  icon: any, 
-  data: any[], 
-  dataKey: 'wide' | 'bous' | 'external' 
-}) => {
-  const [isOpen, setIsOpen] = useState(false);
-  
-  // Map color names to specific tailwind classes
-  const colorClasses = {
-    emerald: { bg: 'bg-emerald-50', text: 'text-emerald-600', ring: 'ring-emerald-100' },
-    blue: { bg: 'bg-blue-50', text: 'text-blue-600', ring: 'ring-blue-100' },
-    purple: { bg: 'bg-purple-50', text: 'text-purple-600', ring: 'ring-purple-100' },
-  };
-  
-  const styles = colorClasses[color as keyof typeof colorClasses] || colorClasses.emerald;
-
-  return (
-    <div className={`bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden transition-all duration-200 ${isOpen ? `ring-2 ${styles.ring}` : ''}`}>
-      <button 
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-full p-5 flex items-center justify-between hover:bg-slate-50 transition-colors"
-      >
-        <div className="flex items-center gap-4">
-          <div className={`p-3 rounded-lg ${styles.bg} ${styles.text}`}>
-            <Icon size={24} />
-          </div>
-          <div className="text-left">
-            <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider">{title}</h3>
-            <div className="text-2xl font-bold text-slate-800">{total.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></div>
-          </div>
-        </div>
-        <div className={`transform transition-transform ${isOpen ? 'rotate-180' : ''} text-slate-400`}>
-          <ChevronDown size={20} />
-        </div>
-      </button>
-      
-      {isOpen && (
-        <div className="border-t border-slate-100 bg-slate-50/50 p-4">
-          <div className="max-h-60 overflow-y-auto">
-            <table className="w-full text-sm">
-              <thead className="text-xs text-slate-500 uppercase bg-slate-100/50 sticky top-0">
-                <tr>
-                  <th className="px-4 py-2 text-left">Date</th>
-                  <th className="px-4 py-2 text-right">Production</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {data.map((day) => (
-                  <tr key={day.date} className="hover:bg-slate-100/50">
-                    <td className="px-4 py-2 font-medium text-slate-600">
-                      {new Date(day.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}
-                    </td>
-                    <td className="px-4 py-2 text-right font-mono text-slate-700">
-                      {day[dataKey].toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
 
 export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ machines }) => {
   // Default to current month
@@ -176,21 +100,16 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
 
     const daysCount = dateArray.length || 1;
 
-    const fullTotal = totalWide + totalBous + totalExternal;
-    const scrapPercentage = fullTotal > 0 ? (totalScrap / fullTotal) * 100 : 0;
-
     return {
       totalWide,
       totalBous,
       totalExternal,
       totalScrap,
-      fullTotal,
-      scrapPercentage,
       avgWide: totalWide / daysCount,
       avgBous: totalBous / daysCount,
       avgExternal: totalExternal / daysCount,
       scrapReasons: Object.entries(scrapReasons).sort((a, b) => b[1] - a[1]),
-      dailyData: dateArray.map(date => ({ date, ...dailyStats[date] })).reverse()
+      dailyData: dateArray.map(date => ({ date, ...dailyStats[date] }))
     };
   }, [machines, startDate, endDate, externalData]);
 
@@ -206,7 +125,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 pb-20">
-      <div className="max-w-3xl mx-auto space-y-6">
+      <div className="max-w-7xl mx-auto space-y-6">
         
         {/* Header & Controls */}
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 space-y-6">
@@ -216,7 +135,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
                 <BarChart3 className="text-indigo-600" />
                 Production Report
               </h1>
-              <p className="text-slate-500 text-sm mt-1">Overview of production metrics and scrap analysis</p>
+              <p className="text-slate-500 text-sm mt-1">Exclusive report showing averages and scrap analysis</p>
             </div>
             
             <div className="flex gap-2">
@@ -225,85 +144,102 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
             </div>
           </div>
 
-          <div className="flex items-center gap-4 bg-slate-50 p-2 rounded-lg border border-slate-200">
-            <div className="relative group flex-1">
-              <label className="absolute -top-2 left-2 text-[10px] bg-slate-50 px-1 text-slate-500 font-bold">Start Date</label>
-              <input 
-                type="date" 
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="w-full bg-transparent border-none text-slate-700 text-sm font-medium rounded-lg px-3 py-2 focus:ring-0 outline-none"
-              />
+          <div className="flex flex-col md:flex-row gap-4 items-end">
+            <div className="flex items-center gap-4 bg-slate-50 p-2 rounded-lg border border-slate-200 w-full md:w-auto">
+              <div className="relative group flex-1">
+                <label className="absolute -top-2 left-2 text-[10px] bg-slate-50 px-1 text-slate-500 font-bold">Start Date</label>
+                <input 
+                  type="date" 
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="w-full bg-transparent border-none text-slate-700 text-sm font-medium rounded-lg px-3 py-2 focus:ring-0 outline-none"
+                />
+              </div>
+              <span className="text-slate-400">-</span>
+              <div className="relative group flex-1">
+                <label className="absolute -top-2 left-2 text-[10px] bg-slate-50 px-1 text-slate-500 font-bold">End Date</label>
+                <input 
+                  type="date" 
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="w-full bg-transparent border-none text-slate-700 text-sm font-medium rounded-lg px-3 py-2 focus:ring-0 outline-none"
+                />
+              </div>
             </div>
-            <span className="text-slate-400">-</span>
-            <div className="relative group flex-1">
-              <label className="absolute -top-2 left-2 text-[10px] bg-slate-50 px-1 text-slate-500 font-bold">End Date</label>
-              <input 
-                type="date" 
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="w-full bg-transparent border-none text-slate-700 text-sm font-medium rounded-lg px-3 py-2 focus:ring-0 outline-none"
-              />
+
+            <div className="flex items-center gap-2 ml-auto">
+              <button
+                onClick={() => setShowScrap(!showScrap)}
+                className={`px-4 py-2.5 rounded-lg text-sm font-medium border transition-colors flex items-center gap-2 ${
+                  showScrap 
+                    ? 'bg-red-50 border-red-200 text-red-700' 
+                    : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <Trash2 size={16} />
+                {showScrap ? 'Hide Scrap Analysis' : 'Show Scrap Analysis'}
+              </button>
             </div>
           </div>
         </div>
 
-        {/* Grand Total Card */}
-        <div className="bg-slate-900 text-white p-6 rounded-xl shadow-lg relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-6 opacity-10">
-            <Layers size={120} />
-          </div>
-          <div className="relative z-10 flex justify-between items-end">
-            <div>
-              <h2 className="text-slate-400 text-sm font-bold uppercase tracking-wider mb-1">Full Total Production</h2>
-              <div className="text-4xl font-bold">{formatNumber(stats.fullTotal)} <span className="text-lg font-normal text-slate-500">kg</span></div>
+        {/* Averages Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-4 opacity-10">
+              <TrendingUp size={48} />
             </div>
-            <div className="text-right">
-              <h3 className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Total Scrap</h3>
-              <div className="text-xl font-bold text-red-400">{formatNumber(stats.totalScrap)} <span className="text-sm font-normal text-slate-500">kg</span></div>
-              <div className="text-xs text-slate-500 mt-1">{stats.scrapPercentage.toFixed(2)}% of total</div>
+            <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Avg. Wide Production</h3>
+            <div className="text-2xl font-bold text-slate-800">{formatNumber(stats.avgWide)} <span className="text-sm font-normal text-slate-400">kg/day</span></div>
+            <div className="mt-2 text-xs text-emerald-600 font-medium bg-emerald-50 inline-block px-2 py-1 rounded">
+              Total: {formatNumber(stats.totalWide)} kg
             </div>
           </div>
-        </div>
 
-        {/* Expandable Detail Cards */}
-        <div className="space-y-4">
-          <ExpandableStatCard 
-            title="Total Wide Production" 
-            total={stats.totalWide} 
-            color="emerald" 
-            icon={TrendingUp} 
-            data={stats.dailyData}
-            dataKey="wide"
-          />
-          
-          <ExpandableStatCard 
-            title="Total External Production" 
-            total={stats.totalExternal} 
-            color="purple" 
-            icon={Download} 
-            data={stats.dailyData}
-            dataKey="external"
-          />
+          <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-4 opacity-10">
+              <Activity size={48} />
+            </div>
+            <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Avg. BOUS Production</h3>
+            <div className="text-2xl font-bold text-slate-800">{formatNumber(stats.avgBous)} <span className="text-sm font-normal text-slate-400">kg/day</span></div>
+            <div className="mt-2 text-xs text-blue-600 font-medium bg-blue-50 inline-block px-2 py-1 rounded">
+              Total: {formatNumber(stats.totalBous)} kg
+            </div>
+          </div>
 
-          <ExpandableStatCard 
-            title="Total BOUS Production" 
-            total={stats.totalBous} 
-            color="blue" 
-            icon={Activity} 
-            data={stats.dailyData}
-            dataKey="bous"
-          />
+          <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-4 opacity-10">
+              <Download size={48} />
+            </div>
+            <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Avg. External</h3>
+            <div className="text-2xl font-bold text-slate-800">{formatNumber(stats.avgExternal)} <span className="text-sm font-normal text-slate-400">kg/day</span></div>
+            <div className="mt-2 text-xs text-purple-600 font-medium bg-purple-50 inline-block px-2 py-1 rounded">
+              Total: {formatNumber(stats.totalExternal)} kg
+            </div>
+          </div>
+
+          <div className={`p-5 rounded-xl shadow-sm border relative overflow-hidden ${showScrap ? 'bg-red-50 border-red-200' : 'bg-white border-slate-200'}`}>
+            <div className="absolute top-0 right-0 p-4 opacity-10">
+              <Trash2 size={48} className={showScrap ? 'text-red-600' : 'text-slate-400'} />
+            </div>
+            <h3 className={`${showScrap ? 'text-red-800' : 'text-slate-500'} text-xs font-bold uppercase tracking-wider mb-1`}>Total Scrap</h3>
+            <div className={`text-2xl font-bold ${showScrap ? 'text-red-900' : 'text-slate-800'}`}>{formatNumber(stats.totalScrap)} <span className="text-sm font-normal opacity-60">kg</span></div>
+            <div className="mt-2 text-xs opacity-75">
+              {(stats.totalWide + stats.totalBous + stats.totalExternal) > 0 
+                ? ((stats.totalScrap / (stats.totalWide + stats.totalBous + stats.totalExternal)) * 100).toFixed(2) 
+                : 0}% of total output
+            </div>
+          </div>
         </div>
 
         {/* Scrap Analysis Section */}
-        {stats.scrapReasons.length > 0 && (
+        {showScrap && stats.scrapReasons.length > 0 && (
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
              <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
                <AlertCircle size={18} className="text-red-500" />
                Scrap Analysis by Reason
              </h3>
-             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                {stats.scrapReasons.map(([reason, amount], idx) => (
                  <div key={idx} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
                     <div className="flex items-center gap-3">
@@ -318,6 +254,71 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
              </div>
           </div>
         )}
+
+        {/* Detailed Report Table */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
+            <h3 className="font-bold text-slate-800">Daily Production Report</h3>
+            <span className="text-xs text-slate-500">{stats.dailyData.length} days</span>
+          </div>
+          
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+                <tr>
+                  <th className="px-4 py-3">Date</th>
+                  <th className="px-4 py-3 text-right">Wide (kg)</th>
+                  <th className="px-4 py-3 text-right">BOUS (kg)</th>
+                  <th className="px-4 py-3 text-right">External (kg)</th>
+                  <th className="px-4 py-3 text-right font-bold bg-slate-100/50">Total (kg)</th>
+                  {showScrap && <th className="px-4 py-3 text-right text-red-600">Scrap (kg)</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {stats.dailyData.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
+                      No data found for the selected range.
+                    </td>
+                  </tr>
+                ) : (
+                  stats.dailyData.map((day) => (
+                    <tr key={day.date} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-4 py-3 font-medium text-slate-700">
+                        {new Date(day.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-slate-600">{formatNumber(day.wide)}</td>
+                      <td className="px-4 py-3 text-right font-mono text-slate-600">{formatNumber(day.bous)}</td>
+                      <td className="px-4 py-3 text-right font-mono text-slate-600">{formatNumber(day.external)}</td>
+                      <td className="px-4 py-3 text-right font-mono font-bold text-slate-800 bg-slate-50/50">
+                        {formatNumber(day.wide + day.bous + day.external)}
+                      </td>
+                      {showScrap && (
+                        <td className="px-4 py-3 text-right font-mono text-red-600 bg-red-50/30">
+                          {formatNumber(day.scrap)}
+                        </td>
+                      )}
+                    </tr>
+                  ))
+                )}
+              </tbody>
+              {stats.dailyData.length > 0 && (
+                <tfoot className="bg-slate-50 font-bold text-slate-800 border-t border-slate-200">
+                  <tr>
+                    <td className="px-4 py-3">Grand Total</td>
+                    <td className="px-4 py-3 text-right">{formatNumber(stats.totalWide)}</td>
+                    <td className="px-4 py-3 text-right">{formatNumber(stats.totalBous)}</td>
+                    <td className="px-4 py-3 text-right">{formatNumber(stats.totalExternal)}</td>
+                    <td className="px-4 py-3 text-right bg-slate-100/50">
+                      {formatNumber(stats.totalWide + stats.totalBous + stats.totalExternal)}
+                    </td>
+                    {showScrap && <td className="px-4 py-3 text-right text-red-600">{formatNumber(stats.totalScrap)}</td>}
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        </div>
 
       </div>
     </div>

@@ -1,114 +1,146 @@
-
-
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { MachineRow, MachineStatus } from '../types';
-import html2canvas from 'html2canvas';
-import { jsPDF } from 'jspdf';
-import { DataService } from '../services/dataService';
+import { Activity, AlertCircle, CheckCircle2, Clock, Search, Filter, MoreHorizontal } from 'lucide-react';
 
 interface MachineListProps {
   machines: MachineRow[];
   loading: boolean;
-  onDelete?: (id: number) => void;
-  onUploadDefaults?: () => void;
   onUpdate?: (machine: MachineRow) => Promise<void>;
 }
 
-export const MachineList: React.FC<MachineListProps> = ({ machines, loading, onDelete, onUploadDefaults, onUpdate }) => {
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [isDownloading, setIsDownloading] = useState(false);
-  const printRef = useRef<HTMLDivElement>(null);
+export const MachineList: React.FC<MachineListProps> = ({ machines, loading, onUpdate }) => {
+  const [filter, setFilter] = useState<'ALL' | 'WORKING' | 'CHANGEOVER' | 'STOPPED'>('ALL');
+  const [search, setSearch] = useState('');
+  const [excludeBous, setExcludeBous] = useState(true);
 
-  const handleDownloadPDF = async () => {
-    if (!printRef.current) return;
-    setIsDownloading(true);
+  const stats = useMemo(() => {
+    const total = machines.length;
+    const working = machines.filter(m => m.status === MachineStatus.WORKING).length;
+    const changeover = machines.filter(m => m.status === MachineStatus.QALB).length;
+    const stopped = machines.filter(m => m.status === MachineStatus.OUT_OF_SERVICE || m.status === MachineStatus.NO_ORDER || m.status === MachineStatus.OTHER).length;
+    
+    // Wide Machines Stats
+    const wideMachines = machines.filter(m => m.type !== 'BOUS');
+    const wideTotal = wideMachines.length;
+    const wideWorking = wideMachines.filter(m => m.status === MachineStatus.WORKING).length;
+    const widePercentage = wideTotal > 0 ? Math.round((wideWorking / wideTotal) * 100) : 0;
 
-    try {
-      const element = printRef.current;
-      
-      const canvas = await html2canvas(element, {
-        scale: 1.5,
-        useCORS: true,
-        backgroundColor: '#f8fafc',
-        ignoreElements: (el) => el.classList.contains('no-print') || el.tagName === 'BUTTON',
-      });
+    return { total, working, changeover, stopped, wideTotal, wideWorking, widePercentage };
+  }, [machines]);
 
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('l', 'mm', 'a4');
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const margin = 10;
-      
-      const imgProps = pdf.getImageProperties(imgData);
-      
-      const contentWidth = pageWidth - (margin * 2);
-      const contentHeight = (imgProps.height * contentWidth) / imgProps.width;
+  const filteredMachines = useMemo(() => {
+    return machines.filter(m => {
+      if (excludeBous && m.type === 'BOUS') return false;
 
-      if (contentHeight <= pageHeight - (margin * 2)) {
-          pdf.addImage(imgData, 'PNG', margin, margin, contentWidth, contentHeight);
-      } else {
-          let y = margin;
-          // Split across pages logic if needed, currently scaling width
-          pdf.addImage(imgData, 'PNG', margin, margin, contentWidth, contentHeight);
-      }
+      let matchesFilter = true;
+      if (filter === 'WORKING') matchesFilter = m.status === MachineStatus.WORKING;
+      else if (filter === 'CHANGEOVER') matchesFilter = m.status === MachineStatus.QALB;
+      else if (filter === 'STOPPED') matchesFilter = m.status === MachineStatus.OUT_OF_SERVICE || m.status === MachineStatus.NO_ORDER || m.status === MachineStatus.OTHER;
 
-      pdf.save('machine-cards-view.pdf');
-
-    } catch (err) {
-      console.error("PDF Error:", err);
-      alert("Failed to generate PDF");
-    } finally {
-      setIsDownloading(false);
-    }
-  };
+      const matchesSearch = m.machineName.toLowerCase().includes(search.toLowerCase()) ||
+                          m.material?.toLowerCase().includes(search.toLowerCase()) ||
+                          m.client?.toLowerCase().includes(search.toLowerCase());
+      return matchesFilter && matchesSearch;
+    });
+  }, [machines, filter, search, excludeBous]);
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center h-48 space-y-3">
-        <svg className="animate-spin h-8 w-8 text-slate-800" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-        </svg>
-        <p className="text-slate-500 text-sm">Loading machines...</p>
-      </div>
-    );
-  }
-
-  if (machines.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64 text-center px-4 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
-        <p className="text-slate-500 font-medium mb-1">No machines found</p>
-        {onUploadDefaults && (
-          <button onClick={onUploadDefaults} className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm mt-4">
-             Initialize Database
-          </button>
-        )}
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
-        <button 
-          onClick={handleDownloadPDF} 
-          disabled={isDownloading}
-          className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm disabled:opacity-50 flex items-center gap-2"
-        >
-          {isDownloading ? 'Capturing...' : 'Download Cards PDF'}
-        </button>
+    <div className="space-y-4 h-full flex flex-col">
+      {/* Dashboard Header */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <StatCard 
+          label="Total Machines" 
+          value={stats.total} 
+          icon={Activity} 
+          color="bg-slate-100 text-slate-700" 
+          onClick={() => setFilter('ALL')}
+          active={filter === 'ALL'}
+        />
+        <StatCard 
+          label="Working" 
+          value={stats.working} 
+          icon={CheckCircle2} 
+          color="bg-emerald-100 text-emerald-700" 
+          onClick={() => setFilter('WORKING')}
+          active={filter === 'WORKING'}
+        />
+        <StatCard 
+          label="Changeover" 
+          value={stats.changeover} 
+          icon={Clock} 
+          color="bg-amber-100 text-amber-700" 
+          onClick={() => setFilter('CHANGEOVER')}
+          active={filter === 'CHANGEOVER'}
+        />
+        <StatCard 
+          label="Stopped" 
+          value={stats.stopped} 
+          icon={AlertCircle} 
+          color="bg-rose-100 text-rose-700" 
+          onClick={() => setFilter('STOPPED')}
+          active={filter === 'STOPPED'}
+        />
+        
+        {/* Wide Efficiency Card */}
+        <div className="p-3 rounded-xl border border-indigo-100 bg-indigo-50/50 flex flex-col justify-center">
+          <p className="text-xs font-medium text-indigo-600 uppercase tracking-wider mb-1">Wide Efficiency</p>
+          <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-bold text-indigo-900">{stats.widePercentage}%</span>
+            <span className="text-xs text-indigo-700 font-medium">({stats.wideWorking}/{stats.wideTotal})</span>
+          </div>
+          <div className="w-full bg-indigo-200 rounded-full h-1.5 mt-2">
+            <div className="bg-indigo-600 h-1.5 rounded-full transition-all duration-500" style={{ width: `${stats.widePercentage}%` }}></div>
+          </div>
+        </div>
       </div>
-      
-      <div ref={printRef} className="p-4 bg-slate-50 rounded-xl">
-         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {machines.map((machine) => (
-            <MachineCard 
-              key={machine.id} 
-              machine={machine} 
-              onUpdate={onUpdate} 
-              isEditing={editingId === machine.id}
-              onEditToggle={() => setEditingId(editingId === machine.id ? null : machine.id)}
+
+      {/* Toolbar */}
+      <div className="flex gap-2 items-center bg-white p-2 rounded-lg border border-slate-200 shadow-sm">
+        <div className="relative flex-1 max-w-xs">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <input 
+            type="text" 
+            placeholder="Search machines..." 
+            className="w-full pl-8 pr-3 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        
+        <div className="flex items-center gap-2 px-3 border-l border-slate-200">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${excludeBous ? 'bg-indigo-600 border-indigo-600' : 'bg-white border-slate-300'}`}>
+              {excludeBous && <CheckCircle2 className="w-3 h-3 text-white" />}
+            </div>
+            <input 
+              type="checkbox" 
+              className="hidden" 
+              checked={excludeBous} 
+              onChange={(e) => setExcludeBous(e.target.checked)} 
             />
+            <span className="text-sm text-slate-600 font-medium">Exclude BOUS</span>
+          </label>
+        </div>
+
+        <div className="flex-1"></div>
+        <div className="text-xs text-slate-500 font-medium">
+          Showing {filteredMachines.length} machines
+        </div>
+      </div>
+
+      {/* Grid */}
+      <div className="flex-1 overflow-y-auto min-h-0">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 pb-4">
+          {filteredMachines.map(machine => (
+            <CompactMachineCard key={machine.id} machine={machine} />
           ))}
         </div>
       </div>
@@ -116,214 +148,74 @@ export const MachineList: React.FC<MachineListProps> = ({ machines, loading, onD
   );
 };
 
-interface MachineCardProps {
-  machine: MachineRow;
-  onUpdate?: (machine: MachineRow) => Promise<void>;
-  isEditing: boolean;
-  onEditToggle: () => void;
-}
+const StatCard = ({ label, value, icon: Icon, color, onClick, active }: any) => (
+  <button 
+    onClick={onClick}
+    className={`p-3 rounded-xl border transition-all text-left flex items-center justify-between group ${
+      active ? 'ring-2 ring-indigo-500 border-transparent shadow-md' : 'border-slate-200 hover:border-indigo-300 hover:shadow-sm bg-white'
+    }`}
+  >
+    <div>
+      <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">{label}</p>
+      <p className="text-2xl font-bold text-slate-800 mt-0.5">{value}</p>
+    </div>
+    <div className={`p-2 rounded-lg ${color} group-hover:scale-110 transition-transform`}>
+      <Icon className="w-5 h-5" />
+    </div>
+  </button>
+);
 
-const MachineCard: React.FC<MachineCardProps> = ({ machine, onUpdate, isEditing, onEditToggle }) => {
+const CompactMachineCard = ({ machine }: { machine: MachineRow }) => {
   const isWorking = machine.status === MachineStatus.WORKING;
-  const [localMachine, setLocalMachine] = useState(machine);
-  const [pendingRef, setPendingRef] = useState<string | null>(null);
-  const [showRefConfirm, setShowRefConfirm] = useState(false);
+  const isChangeover = machine.status === MachineStatus.QALB;
+  const isStopped = machine.status === MachineStatus.OUT_OF_SERVICE || machine.status === MachineStatus.NO_ORDER || machine.status === MachineStatus.OTHER;
 
-  useEffect(() => {
-    if (!isEditing) {
-      setLocalMachine(machine);
-      setShowRefConfirm(false);
-      setPendingRef(null);
-    }
-  }, [machine, isEditing]);
-
-  const handleLocalUpdate = (field: keyof MachineRow, value: any) => {
-    setLocalMachine(prev => ({ ...prev, [field]: value }));
-  };
-
-  const handleSave = async () => {
-    if (!onUpdate) return;
-
-    // Check for OrderSS match if Working
-    if (localMachine.status === MachineStatus.WORKING && localMachine.client && localMachine.material) {
-      // Only check if we haven't already confirmed or if values changed significantly
-      const ref = await DataService.findOrderReference(localMachine.client, localMachine.material);
-      
-      if (ref && ref !== localMachine.orderReference) {
-        setPendingRef(ref);
-        setShowRefConfirm(true);
-        return; // Stop save to show confirmation
-      }
-    }
-
-    // Proceed with save
-    await onUpdate(localMachine);
-    onEditToggle();
-  };
-
-  const confirmReference = async (useReference: boolean) => {
-    const updatedMachine = { 
-      ...localMachine, 
-      orderReference: useReference && pendingRef ? pendingRef : localMachine.orderReference 
-    };
-    
-    if (onUpdate) await onUpdate(updatedMachine);
-    setShowRefConfirm(false);
-    onEditToggle();
-  };
-
-  if (isEditing) {
-    if (showRefConfirm) {
-      return (
-        <div className="bg-white border border-indigo-200 rounded-xl shadow-md p-4 flex flex-col gap-3 relative h-auto z-10 ring-2 ring-indigo-50 animate-in fade-in zoom-in duration-200">
-          <h3 className="font-bold text-indigo-800 border-b border-indigo-100 pb-2">Order Found!</h3>
-          <p className="text-sm text-slate-600">
-            Found existing order reference <span className="font-mono font-bold text-indigo-600 bg-indigo-50 px-1 rounded">{pendingRef}</span> for this client/fabric.
-          </p>
-          <p className="text-xs text-slate-500">Do you want to link this machine to that order?</p>
-          
-          <div className="flex gap-2 mt-2">
-            <button 
-              onClick={() => confirmReference(true)}
-              className="flex-1 bg-indigo-600 text-white text-xs font-bold py-2 rounded hover:bg-indigo-700 transition-colors"
-            >
-              Yes, Link Order
-            </button>
-            <button 
-              onClick={() => confirmReference(false)}
-              className="flex-1 bg-slate-100 text-slate-600 text-xs font-bold py-2 rounded hover:bg-slate-200 transition-colors"
-            >
-              No, Keep Separate
-            </button>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="bg-white border border-slate-200 rounded-xl shadow-md p-4 flex flex-col gap-3 relative h-auto z-10 ring-2 ring-blue-50">
-        <button onClick={handleSave} className="absolute top-2 right-2 text-xs bg-blue-600 text-white px-3 py-1 font-semibold rounded-md hover:bg-blue-700 shadow-sm transition-colors">Save</button>
-        <h3 className="font-semibold text-slate-800 border-b pb-2">Edit {machine.machineName}</h3>
-        
-        <div className="grid grid-cols-2 gap-2">
-            <div>
-            <label className="text-[10px] text-slate-500 font-bold block mb-1">Status</label>
-            <select 
-                className="w-full border border-slate-300 rounded p-1.5 text-sm bg-white text-slate-900 outline-none focus:ring-2 focus:ring-blue-500"
-                value={localMachine.status}
-                onChange={(e) => handleLocalUpdate('status', e.target.value)}
-            >
-                {Object.values(MachineStatus).map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-            </div>
-            <div>
-            <label className="text-[10px] text-slate-500 font-bold block mb-1">Remaining</label>
-            <input 
-                type="number"
-                className="w-full border border-slate-300 rounded p-1.5 text-sm bg-white text-slate-900 outline-none focus:ring-2 focus:ring-blue-500"
-                value={localMachine.remainingMfg}
-                onChange={(e) => handleLocalUpdate('remainingMfg', Number(e.target.value))}
-            />
-            </div>
-        </div>
-
-        <div>
-           <label className="text-[10px] text-slate-500 font-bold block mb-1">Material</label>
-           <input 
-             className="w-full border border-slate-300 rounded p-1.5 text-sm bg-white text-slate-900 outline-none focus:ring-2 focus:ring-blue-500"
-             value={localMachine.material}
-             onChange={(e) => handleLocalUpdate('material', e.target.value)}
-           />
-        </div>
-
-        <div>
-           <label className="text-[10px] text-slate-500 font-bold block mb-1">Client</label>
-           <input 
-             className="w-full border border-slate-300 rounded p-1.5 text-sm bg-white text-slate-900 outline-none focus:ring-2 focus:ring-blue-500"
-             value={localMachine.client}
-             onChange={(e) => handleLocalUpdate('client', e.target.value)}
-           />
-        </div>
-      </div>
-    );
+  let statusColor = "bg-slate-50 border-slate-200";
+  let statusIndicator = "bg-slate-400";
+  
+  if (isWorking) {
+    statusColor = "bg-white border-emerald-200 shadow-sm";
+    statusIndicator = "bg-emerald-500";
+  } else if (isChangeover) {
+    statusColor = "bg-amber-50/50 border-amber-200";
+    statusIndicator = "bg-amber-500";
+  } else if (isStopped) {
+    statusColor = "bg-rose-50/50 border-rose-200";
+    statusIndicator = "bg-rose-500";
   }
 
-  // --- READ ONLY VIEW ---
-  
-  const cardStyles = isWorking
-    ? "bg-white border border-emerald-100 shadow-sm ring-0"
-    : "bg-white border border-slate-100 shadow-sm";
-
-  const headerStyles = isWorking
-    ? "bg-transparent text-emerald-800 border-b border-emerald-50"
-    : "bg-transparent text-slate-700 border-b border-slate-100";
-
   return (
-  <div className={`overflow-hidden flex flex-col h-auto min-h-[8rem] transition-all hover:shadow-md ${cardStyles} relative group page-break-inside-avoid rounded-lg`}>
-      
-      {/* Edit Trigger */}
-      <button 
-        onClick={onEditToggle}
-        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-white p-1 rounded-md border border-slate-100 text-slate-500 hover:text-blue-600 z-10 no-print"
-      >
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-      </button>
-
-      {/* Header */}
-    <div className={`px-3 py-1.5 flex justify-between items-start gap-2 ${headerStyles}`}>
-      <div className="flex-1 min-w-0">
-        <h3 className="font-semibold text-base leading-tight truncate">{machine.machineName}</h3>
-        <span className="text-xs opacity-70 font-mono tracking-wider block truncate">{machine.brand} • {machine.type}</span>
-      </div>
-    {!isWorking && (
-      <span className="px-2 py-0.5 bg-slate-700 text-white text-xs font-semibold rounded uppercase tracking-wide whitespace-nowrap">
-        Stopped
-      </span>
-    )}
+    <div className={`border rounded-lg p-2.5 flex flex-col gap-2 transition-all hover:shadow-md ${statusColor}`}>
+      <div className="flex justify-between items-start">
+        <div className="flex items-center gap-2">
+          <div className={`w-2 h-2 rounded-full ${statusIndicator} animate-pulse`} />
+          <span className="font-bold text-slate-700 text-sm">{machine.machineName}</span>
+        </div>
+        <span className="text-[10px] font-mono text-slate-400">{machine.brand}</span>
       </div>
 
-      {/* Content */}
-  <div className="flex-1 p-2 flex flex-col justify-center gap-2">
+      <div className="space-y-1">
         {isWorking ? (
-            <>
-                {/* Fabric Info */}
-                <div>
-                   <span className="text-[11px] uppercase text-emerald-600/70 font-medium tracking-wider block mb-0.5">Fabric</span>
-                   <p className="text-slate-800 font-medium text-sm leading-tight line-clamp-2" title={machine.material}>
-                      {machine.material || "-"}
-                   </p>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                    {/* Customer Info */}
-          <div className="bg-white rounded p-1 border border-emerald-50">
-            <span className="text-xs uppercase text-emerald-600/70 font-medium tracking-wider block">Client</span>
-            <p className="text-slate-900 font-medium text-sm truncate" title={machine.client}>
-              {machine.client || "-"}
-            </p>
-          </div>
-
-                    {/* Remaining Info */}
-          <div className="bg-emerald-50/40 rounded p-1 border border-emerald-50 text-center">
-            <span className="text-xs uppercase text-emerald-600/70 font-medium tracking-wider block">Remaining</span>
-            <p className="text-emerald-800 font-semibold text-sm leading-none">
-              {machine.remainingMfg} <span className="text-xs font-normal">kg</span>
-            </p>
-          </div>
-                </div>
-            </>
-        ) : (
-            <div className="flex flex-col items-center justify-center py-2 text-slate-400 space-y-1">
-                <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center">
-                    <svg className="w-4 h-4 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                    </svg>
-                </div>
-                <div className="text-center">
-                    <p className="font-bold text-sm text-slate-500">{machine.status === 'OTHER' ? 'Maintenance / Other' : machine.status}</p>
-                    {machine.customStatusNote && <p className="text-xs italic text-slate-400 mt-1 line-clamp-2">"{machine.customStatusNote}"</p>}
-                </div>
+          <>
+            <div className="bg-slate-50 rounded px-1.5 py-1 border border-slate-100">
+              <p className="text-[10px] text-slate-400 uppercase font-bold">Client</p>
+              <p className="text-xs font-medium text-slate-700 truncate" title={machine.client}>{machine.client || '-'}</p>
             </div>
+            <div className="bg-slate-50 rounded px-1.5 py-1 border border-slate-100">
+              <p className="text-[10px] text-slate-400 uppercase font-bold">Fabric</p>
+              <p className="text-xs font-medium text-slate-700 truncate" title={machine.material}>{machine.material || '-'}</p>
+            </div>
+            <div className="flex justify-between items-end mt-1">
+              <span className="text-[10px] text-slate-400">Rem:</span>
+              <span className="text-xs font-bold text-emerald-700">{machine.remainingMfg} kg</span>
+            </div>
+          </>
+        ) : (
+          <div className="h-[4.5rem] flex items-center justify-center text-center p-1">
+            <p className="text-xs font-medium text-slate-500">
+              {isChangeover ? 'Changeover' : machine.status}
+            </p>
+          </div>
         )}
       </div>
     </div>

@@ -265,6 +265,18 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
   const handleSendReport = async () => {
     if (isReportSent) return; // Prevent double send if already sent
+
+    if (!activeDay) {
+      alert("⚠️ Please mark an Active Day first before sending the report.");
+      return;
+    }
+
+    if (selectedDate !== activeDay) {
+      if (!window.confirm(`⚠️ You are viewing ${selectedDate}, but the Active Day is ${activeDay}.\n\nDo you want to send the report for ${selectedDate}?`)) {
+        return;
+      }
+    }
+
     setIsSendingReport(true);
     try {
       const lowStockMachines = machines.filter(m => 
@@ -279,22 +291,22 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       );
 
       const date = new Date().toLocaleDateString('en-GB');
-      let message = `📅 <b>Daily Report Submitted: ${date}</b>\n\n`;
+      let message = `📅 <b>تقرير الإنتاج اليومي: ${date}</b>\n\n`;
 
       // Section 1: Finished Machines
       if (finishedMachines.length > 0) {
-        message += `🏁 <b>Finished Today:</b>\n`;
+        message += `🏁 <b>ماكينات انتهت اليوم:</b>\n`;
         finishedMachines.forEach((m, idx) => {
            // Use m.material (mapped from App.tsx) or fallback to m.fabric if available
-           const fabricName = m.material || m.fabric || 'Unknown';
+           const fabricName = m.material || m.fabric || 'غير معروف';
            message += `${idx + 1}. <b>${m.machineName}</b> (${fabricName})\n`;
            
            const hasPlans = m.futurePlans && m.futurePlans.length > 0;
            if (hasPlans) {
              const nextPlan = m.futurePlans[0];
-             message += `   ↳ 📅 Next: ${nextPlan.fabric} (${nextPlan.client})\n`;
+             message += `   ↳ 📅 التالي: ${nextPlan.fabric} (${nextPlan.client})\n`;
            } else {
-             message += `   ↳ 🛑 No future plans.\n`;
+             message += `   ↳ 🛑 لا توجد خطط مستقبلية.\n`;
            }
         });
         message += `\n`;
@@ -302,24 +314,24 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
       // Section 2: Low Stock
       if (lowStockMachines.length > 0) {
-        message += `⚠️ <b>Low Stock Alerts (&lt;100kg):</b>\n`;
+        message += `⚠️ <b>تنبيهات انخفاض المخزون (<100kg):</b>\n`;
         
         lowStockMachines.forEach((m, idx) => {
-          message += `${idx + 1}. <b>${m.machineName}</b> (Rem: ${m.remainingMfg}kg)\n`;
+          message += `${idx + 1}. <b>${m.machineName}</b> (متبقي: ${m.remainingMfg} كجم)\n`;
           
           const hasPlans = m.futurePlans && m.futurePlans.length > 0;
           if (hasPlans) {
             const nextPlan = m.futurePlans[0];
-            message += `   ↳ 📅 Next: ${nextPlan.fabric} (${nextPlan.client})\n`;
+            message += `   ↳ 📅 التالي: ${nextPlan.fabric} (${nextPlan.client})\n`;
           } else {
-            message += `   ↳ 🛑 No future plans scheduled.\n`;
+            message += `   ↳ 🛑 لا توجد خطط مستقبلية.\n`;
           }
           message += `\n`;
         });
       }
 
       if (lowStockMachines.length === 0 && finishedMachines.length === 0) {
-        message += `✅ <b>All Systems Go!</b>\nNo low stock alerts or finished machines reported.`;
+        message += `✅ <b>الوضع تمام!</b>\nلا توجد تنبيهات مخزون منخفض أو ماكينات انتهت.`;
       }
 
       await TelegramService.send(message);
@@ -343,11 +355,10 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [filteredLogs, setFilteredLogs] = useState<any[]>([]);
   const [fabrics, setFabrics] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
-  const [scrapReasons, setScrapReasons] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [fetchTime, setFetchTime] = useState<number>(0);
-  const [inlineCreateModal, setInlineCreateModal] = useState<{ type: 'fabric' | 'client' | 'reason' | null; isOpen: boolean; machineId: string; logId: string; newName?: string }>({ type: null, isOpen: false, machineId: '', logId: '' });
+  const [inlineCreateModal, setInlineCreateModal] = useState<{ type: 'fabric' | 'client' | null; isOpen: boolean; machineId: string; logId: string; newName?: string }>({ type: null, isOpen: false, machineId: '', logId: '' });
   const [inlineCreateForm, setInlineCreateForm] = useState({ name: '' });
   const [linkModalOpen, setLinkModalOpen] = useState<{ isOpen: boolean; machine: MachineRow | null }>({ isOpen: false, machine: null });
   const [plansModalOpen, setPlansModalOpen] = useState<{ isOpen: boolean; machineId: string; machineName: string; plans: PlanItem[] }>({ isOpen: false, machineId: '', machineName: '', plans: [] });
@@ -511,6 +522,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
            updatePromises.push(DataService.updateMachineInMachineSS(String(machine.id), {
              dailyLogs: updatedLogs,
              lastLogDate: selectedDate,
+             avgProduction: newLogEntry.avgProduction,
              lastLogData: {
                 date: selectedDate,
                 dayProduction: newLogEntry.dayProduction,
@@ -587,16 +599,14 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
   const loadFabricsAndClients = async () => {
     try {
-      const [fabricsData, clientsData, ordersData, reasonsData] = await Promise.all([
+      const [fabricsData, clientsData, ordersData] = await Promise.all([
         DataService.getFabrics(),
         DataService.getClients(),
-        DataService.getCustomerOrders(),
-        DataService.getScrapReasons()
+        DataService.getCustomerOrders()
       ]);
       setFabrics(fabricsData);
       setClients(clientsData);
       setCustomerOrders(ordersData);
-      setScrapReasons(reasonsData);
     } catch (error) {
       console.error('Error loading fabrics and clients:', error);
     }
@@ -946,7 +956,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     }
   };
 
-  const handleInlineCreateItem = async (machineId: string, logId: string, field: 'fabric' | 'client' | 'reason', newName: string) => {
+  const handleInlineCreateItem = async (machineId: string, logId: string, field: 'fabric' | 'client', newName: string) => {
     if (!newName.trim()) {
       showMessage('❌ Please enter a name', true);
       return;
@@ -1007,10 +1017,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         if (currentFabric) {
             checkSmartLink(machineId, logId, newName, currentFabric);
         }
-      } else if (field === 'reason') {
-        await DataService.addScrapReason(newName);
-        const updatedReasons = await DataService.getScrapReasons();
-        setScrapReasons(updatedReasons);
       }
 
       const updatePayload: any = {
@@ -1034,7 +1040,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       setInlineCreateModal({ type: null, isOpen: false, machineId: '', logId: '' });
       setInlineCreateForm({ name: '' });
       await handleFetchLogs(selectedDate);
-      showMessage(`✅ ${field.charAt(0).toUpperCase() + field.slice(1)} created and selected`);
+      showMessage(`✅ ${field === 'fabric' ? 'Fabric' : 'Client'} created and selected`);
     } catch (error: any) {
       showMessage('❌ Error: ' + error.message, true);
     }
@@ -1745,12 +1751,12 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                   <th className="p-2 border border-slate-200 w-10 hidden md:table-cell">ر</th>
                   <th className="p-2 border border-slate-200 w-20 hidden md:table-cell">الماركة</th>
                   <th className="p-2 border border-slate-200 w-20 hidden md:table-cell">النوع</th>
-                  <th className="p-2 border border-slate-200 w-32">اسم الماكينة</th>
-                  <th className="p-2 border border-slate-200 w-32">الحالة</th>
+                  <th className="p-2 border border-slate-200 w-20">اسم الماكينة</th>
+                  <th className="p-2 border border-slate-200 w-20">الحالة</th>
                   <th className="p-2 border border-slate-200 w-20 hidden md:table-cell">متوسط الانتاج</th>
                   <th className="p-2 border border-slate-200 w-20">انتاج اليوم</th>
                   <th className="p-2 border border-slate-200 w-16 text-red-600 hidden md:table-cell">الفرق</th>
-                  <th className="p-2 border border-slate-200 min-w-[100px]">الخامة</th>
+                  <th className="p-2 border border-slate-200 min-w-[250px]">الخامة</th>
                   <th className="p-2 border border-slate-200 w-28">العميل</th>
                   <th className="p-2 border border-slate-200 w-20">المتبقي</th>
                   <th className="p-2 border border-slate-200 w-16 hidden md:table-cell">السقط</th>
@@ -2031,20 +2037,20 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         </td>
 
                         {/* Reason */}
-                        <td className="border border-slate-200 p-0 hidden md:table-cell relative">
-                          <SearchDropdown
+                        <td className="border border-slate-200 p-0 hidden md:table-cell">
+                          <input
                             id={getCellId(log.machineId, 'reason')}
-                            options={scrapReasons}
-                            value={log.reason || ''}
-                            onChange={(val) => handleBlur({ target: { value: val, type: 'text' } } as any, log.machineId, log.id, 'reason')}
-                            onCreateNew={() => {
-                              const inputEl = document.getElementById(getCellId(log.machineId, 'reason')) as HTMLInputElement;
-                              const newName = inputEl?.value || '';
-                              handleInlineCreateItem(log.machineId, log.id, 'reason', newName);
+                            type="text"
+                            defaultValue={log.reason || ''}
+                            data-force-nav="true"
+                            onFocus={() => {
+                              handleCellFocus(idx, 'reason');
+                              window.dispatchEvent(new Event('searchdropdown:forceclose'));
                             }}
-                            onFocus={() => handleCellFocus(idx, 'reason')}
+                            onBlur={(e) => handleBlur(e, log.machineId, log.id, 'reason')}
                             onKeyDown={(e) => handleKeyDown(e, idx, 'reason')}
                             placeholder="السبب..."
+                            className="w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none"
                           />
                         </td>
 

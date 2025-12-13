@@ -27,6 +27,8 @@ import FetchDataPage from './components/FetchDataPage';
 import { OrderSSPage } from './components/OrderSSPage';
 import { CompareDaysPage } from './components/CompareDaysPage';
 import { ProductionHistoryPage } from './components/ProductionHistoryPage';
+import { OrderFulfillmentPage } from './components/OrderFulfillmentPage';
+import { AnalyticsPage } from './components/AnalyticsPage';
 import { 
   Send, 
   CheckCircle, 
@@ -40,7 +42,9 @@ import {
   GitCompare, 
   History, 
   BarChart3,
-  Sparkles
+  Sparkles,
+  PieChart,
+  Truck
 } from 'lucide-react';
 import { MachineStatus } from './types';
 
@@ -60,7 +64,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'orders' | 'compare' | 'history'>('planning'); 
+  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'orders' | 'compare' | 'history' | 'fulfillment' | 'analytics'>('planning'); 
   
   // External Production State
   const [externalProduction, setExternalProduction] = useState<number>(0);
@@ -173,7 +177,7 @@ const App: React.FC = () => {
         // Use log data if exists, otherwise default to 'No Order' or empty
         status: dailyLog?.status || 'No Order',
         customStatusNote: dailyLog?.status === 'Other' ? dailyLog?.customStatusNote : '',
-        avgProduction: data.avgProduction || 0,
+        avgProduction: dailyLog?.avgProduction ?? data.avgProduction ?? 0,
         dayProduction: dailyLog?.dayProduction || 0,
         remainingMfg: dailyLog?.remainingMfg || 0,
         scrap: dailyLog?.scrap || 0,
@@ -457,10 +461,24 @@ const App: React.FC = () => {
                   >
                     <History size={20} />
                   </button>
+                  <button 
+                    onClick={() => setViewMode('analytics')}
+                    title="Performance Analytics"
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'analytics' ? 'bg-pink-50 text-pink-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    <PieChart size={20} />
+                  </button>
                 </div>
 
                 {/* Monitoring Group */}
                 <div className="flex items-center gap-1 px-2">
+                  <button 
+                    onClick={() => setViewMode('fulfillment')}
+                    title="Order Fulfillment"
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'fulfillment' ? 'bg-cyan-50 text-cyan-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    <Truck size={20} />
+                  </button>
                   <button 
                     onClick={() => setViewMode('maintenance')}
                     title="Maintenance & Changeovers"
@@ -506,7 +524,9 @@ const App: React.FC = () => {
             )}
 
             {viewMode === 'maintenance' && (
-              <MaintenanceDashboard />
+              <MaintenanceDashboard 
+                machines={machines}
+              />
             )}
 
             {viewMode === 'idle' && (
@@ -530,6 +550,18 @@ const App: React.FC = () => {
 
             {viewMode === 'history' && (
               <ProductionHistoryPage 
+                machines={machines}
+              />
+            )}
+
+            {viewMode === 'fulfillment' && (
+              <OrderFulfillmentPage 
+                machines={machines}
+              />
+            )}
+
+            {viewMode === 'analytics' && (
+              <AnalyticsPage 
                 machines={machines}
               />
             )}
