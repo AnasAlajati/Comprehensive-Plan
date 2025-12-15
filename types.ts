@@ -96,6 +96,30 @@ export interface MachineRow {
   };
 }
 
+export interface OrderRow {
+  id: string;
+  material: string;        // الخامة
+  machine: string;         // الماكينة
+  requiredQty: number;     // الكمية المطلوبة
+  accessory: string;       // الاكسسوار
+  manufacturedQty: number; // ما تم تصنيعه
+  remainingQty: number;    // المتبقى
+  orderReceiptDate: string;// تاريخ استلام الاوردر
+  startDate: string;       // بداية
+  endDate: string;         // نهاية
+  scrapQty: number;        // كمية السقط
+  others: string;          // Others
+  notes: string;           // ملاحظات
+  batchDeliveries: string; // تسليمات الاحواض
+  accessoryDeliveries: string; // تسليمات الاكسسوار
+}
+
+export interface CustomerSheet {
+  id: string;
+  name: string;
+  orders: OrderRow[];
+}
+
 // --- NEW ADVANCED STRUCTURE TYPES ---
 
 export interface DailyLog {

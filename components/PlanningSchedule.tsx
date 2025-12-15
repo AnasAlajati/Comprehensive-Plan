@@ -1106,13 +1106,15 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
               </div>
               
               <div className="flex gap-2 overflow-x-auto pb-2 sm:pb-0">
-                <input 
-                  type="text"
-                  placeholder="Filter Type..."
-                  value={filterType === 'ALL' ? '' : filterType}
+                <select
+                  value={filterType}
                   onChange={(e) => setFilterType(e.target.value)}
-                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:ring-2 focus:ring-blue-500 outline-none w-32"
-                />
+                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:ring-2 focus:ring-blue-500 outline-none w-32 appearance-none"
+                >
+                  {availableTypes.map(type => (
+                    <option key={type} value={type}>{type}</option>
+                  ))}
+                </select>
 
                 <input 
                   type="text"

@@ -314,7 +314,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
       // Section 2: Low Stock
       if (lowStockMachines.length > 0) {
-        message += `⚠️ <b>تنبيهات انخفاض المخزون (<100kg):</b>\n`;
+        message += `⚠️ <b>تنبيهات انخفاض المخزون (&lt;100kg):</b>\n`;
         
         lowStockMachines.forEach((m, idx) => {
           message += `${idx + 1}. <b>${m.machineName}</b> (متبقي: ${m.remainingMfg} كجم)\n`;
@@ -350,9 +350,15 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [filterClient, setFilterClient] = useState('');
   const [filterFabric, setFilterFabric] = useState('');
+  const [filterType, setFilterType] = useState('ALL');
 
   const [allLogs, setAllLogs] = useState<any[]>([]);
   const [filteredLogs, setFilteredLogs] = useState<any[]>([]);
+
+  const availableTypes = React.useMemo(() => {
+    const types = new Set(allLogs.map(m => m.machineType));
+    return ['ALL', ...Array.from(types).filter(Boolean).sort()];
+  }, [allLogs]);
   const [fabrics, setFabrics] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -430,6 +436,11 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   // Filter logs when searchTerm or allLogs changes
   useEffect(() => {
     let filtered = [...allLogs];
+
+    if (filterType !== 'ALL' && filterType.trim()) {
+      const lowerType = filterType.toLowerCase();
+      filtered = filtered.filter(log => log.machineType && log.machineType.toLowerCase().includes(lowerType));
+    }
 
     if (filterClient.trim()) {
       const lowerClient = filterClient.toLowerCase();
@@ -1657,6 +1668,15 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                  onChange={(e) => setSearchTerm(e.target.value)}
                  className="w-28 sm:w-32 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none"
                />
+               <select
+                 value={filterType}
+                 onChange={(e) => setFilterType(e.target.value)}
+                 className="w-24 sm:w-28 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none appearance-none"
+               >
+                 {availableTypes.map(type => (
+                   <option key={type} value={type}>{type}</option>
+                 ))}
+               </select>
                <input 
                  type="text" 
                  placeholder="Client..." 

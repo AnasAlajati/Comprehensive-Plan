@@ -12,6 +12,7 @@ const BOT_TOKEN = '8527491181:AAEpbfxewnQjTzxp5U5IHazie5Qw7TRaKhg';
 const CHAT_IDS = [
   '8403312728', // Main Admin
   '7053968926', // Hadi
+  '8278128907', // Yahia
 ];
 
 export const TelegramService = {
