@@ -24,7 +24,7 @@ import { AIInsightsModal } from './components/AIInsightsModal';
 import { getScheduleRecommendations } from './services/ai';
 import AddDataPage from './components/AddDataPage';
 import FetchDataPage from './components/FetchDataPage';
-import { OrderSSPage } from './components/OrderSSPage';
+import { ClientOrdersPage } from './components/ClientOrdersPage';
 import { CompareDaysPage } from './components/CompareDaysPage';
 import { ProductionHistoryPage } from './components/ProductionHistoryPage';
 import { OrderFulfillmentPage } from './components/OrderFulfillmentPage';
@@ -403,6 +403,17 @@ const App: React.FC = () => {
                   Schedule
                 </button>
                 <button 
+                  onClick={() => setViewMode('orders')}
+                  className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-md text-sm font-semibold transition-all ${
+                    viewMode === 'orders' 
+                      ? 'bg-white text-orange-600 shadow-sm ring-1 ring-black/5' 
+                      : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
+                  }`}
+                >
+                  <Package size={18} />
+                  Orders
+                </button>
+                <button 
                   onClick={() => setViewMode('excel')}
                   className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-md text-sm font-semibold transition-all ${
                     viewMode === 'excel' 
@@ -435,13 +446,6 @@ const App: React.FC = () => {
                     className={`p-2.5 rounded-lg transition-all ${viewMode === 'add' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
                   >
                     <PlusCircle size={20} />
-                  </button>
-                  <button 
-                    onClick={() => setViewMode('orders')}
-                    title="Orders"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'orders' ? 'bg-orange-50 text-orange-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <Package size={20} />
                   </button>
                 </div>
 
@@ -538,7 +542,7 @@ const App: React.FC = () => {
             )}
 
             {viewMode === 'orders' && (
-              <OrderSSPage />
+              <ClientOrdersPage />
             )}
 
             {viewMode === 'compare' && (

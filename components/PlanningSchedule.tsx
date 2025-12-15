@@ -1279,7 +1279,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                              <div className="text-slate-400 text-xs bg-slate-50 py-1 rounded border border-slate-100 mx-auto w-12">{plan.days}</div>
                           )}
                         </td>
-                        <td className="p-1 align-middle">
+                        <td className="p-1 align-middle relative group">
                           {!isSettings && <SearchDropdown
                             id={`client-${machine.id}-${index}`}
                             options={clients}
@@ -1292,6 +1292,14 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                             placeholder="-"
                             className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent font-bold text-slate-700"
                           />}
+                          
+                          {/* Reference Code Tooltip */}
+                          {!isSettings && plan.client && plan.fabric && (
+                            <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 bg-slate-800 text-white text-xs rounded shadow-lg z-20 whitespace-nowrap pointer-events-none">
+                              {plan.client}-{plan.fabric}
+                              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+                            </div>
+                          )}
                         </td>
                         <td className="p-1 align-middle hidden md:table-cell">
                           {!isSettings && (

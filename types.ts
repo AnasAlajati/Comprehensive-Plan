@@ -112,6 +112,10 @@ export interface OrderRow {
   notes: string;           // ملاحظات
   batchDeliveries: string; // تسليمات الاحواض
   accessoryDeliveries: string; // تسليمات الاكسسوار
+  // New fields for enhanced accessory logic
+  accessoryType?: string; // 'Rib', 'Derby', etc.
+  accessoryPercentage?: number; // 3, 5, etc.
+  accessoryQty?: number; // Calculated or manual quantity
 }
 
 export interface CustomerSheet {

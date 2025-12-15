@@ -782,7 +782,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
             status: machine.status || '',
             fabric: '',
             client: '',
-            avgProduction: 0,
+            avgProduction: machine.avgProduction || 0,
             remainingMfg: 0,
             reason: '',
             timestamp: new Date().toISOString()
@@ -901,7 +901,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           status: machine.status || '',
           fabric: '',
           client: '',
-          avgProduction: 0,
+          avgProduction: machine.avgProduction || 0,
           remainingMfg: 0,
           reason: '',
           timestamp: new Date().toISOString()
@@ -994,7 +994,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           status: machine.status || '',
           fabric: '',
           client: '',
-          avgProduction: 0,
+          avgProduction: machine.avgProduction || 0,
           remainingMfg: 0,
           reason: '',
           timestamp: new Date().toISOString()
@@ -1957,6 +1957,14 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             onFocus={() => handleCellFocus(idx, 'client')}
                             placeholder="---"
                           />
+                          
+                          {/* Reference Code Tooltip */}
+                          {log.client && log.fabric && (
+                            <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 bg-slate-800 text-white text-xs rounded shadow-lg z-20 whitespace-nowrap pointer-events-none">
+                              {log.client}-{log.fabric}
+                              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+                            </div>
+                          )}
                           
                           {/* Link Button / Indicator */}
                           <div className="absolute top-0 right-0 h-full flex items-center pr-1 pointer-events-auto z-10">
