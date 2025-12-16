@@ -182,6 +182,228 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
   );
 };
 
+// --- Optimized Row Component ---
+const MemoizedOrderRow = React.memo(({
+  row,
+  statusInfo,
+  fabrics,
+  isSelected,
+  toggleSelectRow,
+  handleUpdateOrder,
+  handleCreateFabric,
+  handlePlanSearch,
+  handleDeleteRow,
+  selectedCustomerName
+}: {
+  row: OrderRow;
+  statusInfo: any;
+  fabrics: any[];
+  isSelected: boolean;
+  toggleSelectRow: (id: string) => void;
+  handleUpdateOrder: (id: string, updates: Partial<OrderRow>) => void;
+  handleCreateFabric: (name: string) => void;
+  handlePlanSearch: (client: string, material: string) => void;
+  handleDeleteRow: (id: string) => void;
+  selectedCustomerName: string;
+}) => {
+  const refCode = row.material ? `${selectedCustomerName}-${row.material}` : '-';
+  const displayRemaining = statusInfo ? statusInfo.remaining : row.remainingQty;
+
+  return (
+    <tr className={`transition-colors group text-sm ${isSelected ? 'bg-blue-50' : 'hover:bg-blue-50/30'}`}>
+      {/* Checkbox */}
+      <td className="p-0 border-r border-slate-200 text-center align-middle">
+        <button onClick={() => toggleSelectRow(row.id)} className="p-2 w-full h-full flex items-center justify-center text-slate-400 hover:text-blue-600">
+          {isSelected ? <CheckSquare className="w-4 h-4 text-blue-600" /> : <Square className="w-4 h-4" />}
+        </button>
+      </td>
+
+      {/* Fabric */}
+      <td className="p-0 border-r border-slate-200" title={refCode}>
+        <SearchDropdown
+          id={`fabric-${row.id}`}
+          options={fabrics}
+          value={row.material}
+          onChange={(val) => handleUpdateOrder(row.id, { material: val })}
+          onCreateNew={handleCreateFabric}
+          placeholder="Select Fabric..."
+        />
+      </td>
+
+      {/* Accessories */}
+      <td className="p-0 border-r border-slate-200 relative">
+        <input 
+          type="text"
+          className="w-full h-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50"
+          value={row.accessory}
+          onChange={(e) => handleUpdateOrder(row.id, { accessory: e.target.value })}
+          placeholder=""
+        />
+        {row.accessoryPercentage && (
+          <div className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded pointer-events-none">
+            {row.accessoryPercentage}%
+          </div>
+        )}
+      </td>
+
+      {/* Acc. Qty */}
+      <td className="p-0 border-r border-slate-200">
+          <input 
+          type="number"
+          className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs"
+          value={row.accessoryQty ?? ''}
+          onChange={(e) => handleUpdateOrder(row.id, { accessoryQty: Number(e.target.value) })}
+          placeholder="-"
+        />
+      </td>
+
+      {/* Status / Plan (Combined) */}
+      <td className="p-2 border-r border-slate-200 align-middle">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-1 flex-1 min-w-0">
+            {statusInfo ? (
+              <>
+                {statusInfo.active.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {statusInfo.active.map((m: string, i: number) => (
+                      <span key={`a-${i}`} className="text-[10px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded-full font-medium whitespace-nowrap border border-emerald-200">
+                        {m}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {statusInfo.planned.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {statusInfo.planned.map((m: string, i: number) => (
+                      <span key={`p-${i}`} className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium whitespace-nowrap border border-blue-200">
+                        {m}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              (displayRemaining || 0) > 0 ? (
+                <span className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit">
+                  Not Planned
+                </span>
+              ) : (
+                <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit">
+                  Finished
+                </span>
+              )
+            )}
+          </div>
+          
+          <button
+            onClick={() => handlePlanSearch(selectedCustomerName, row.material)}
+            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-all flex-shrink-0"
+            title="Search Plan"
+          >
+            <Search className="w-4 h-4" />
+          </button>
+        </div>
+      </td>
+
+      {/* Ordered Qty */}
+      <td className="p-0 border-r border-slate-200">
+        <input 
+          type="number"
+          className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-700"
+          value={row.requiredQty ?? ''}
+          onChange={(e) => {
+            const val = e.target.value === '' ? 0 : Number(e.target.value);
+            const updates: Partial<OrderRow> = { requiredQty: val };
+            // If not active, update remaining too
+            if (!statusInfo || (statusInfo.active.length === 0)) {
+                updates.remainingQty = val;
+            }
+            handleUpdateOrder(row.id, updates);
+          }}
+        />
+      </td>
+
+      {/* Remaining Qty */}
+      <td className={`p-2 text-right border-r border-slate-200 font-mono font-bold ${statusInfo && statusInfo.active.length > 0 ? 'text-emerald-600 bg-emerald-50/30' : 'text-slate-600'}`}>
+        {displayRemaining?.toLocaleString()}
+      </td>
+
+      {/* Order Receive Date */}
+      <td className="p-0 border-r border-slate-200">
+        <input 
+          type="date"
+          className="w-full h-full px-2 py-2 text-center bg-transparent outline-none focus:bg-blue-50 text-xs text-slate-600"
+          value={row.orderReceiptDate || ''}
+          onChange={(e) => handleUpdateOrder(row.id, { orderReceiptDate: e.target.value })}
+        />
+      </td>
+
+      {/* Start Date (Auto) */}
+      <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500">
+        {statusInfo?.startDate || '-'}
+      </td>
+
+      {/* End Date (Auto) */}
+      <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500">
+        {statusInfo?.endDate || '-'}
+      </td>
+
+      {/* Scrap (Auto) */}
+      <td className="p-2 text-right border-r border-slate-200 text-xs text-red-500 font-mono">
+        {statusInfo?.scrap ? statusInfo.scrap.toFixed(1) : '-'}
+      </td>
+
+      {/* Others (Auto) */}
+      <td className="p-2 text-left border-r border-slate-200 text-xs text-slate-500 truncate max-w-[100px]" title={statusInfo?.others}>
+        {statusInfo?.others || '-'}
+      </td>
+
+      {/* Notes */}
+      <td className="p-0 border-r border-slate-200">
+        <textarea
+          className="w-full h-full px-2 py-1 bg-transparent outline-none focus:bg-blue-50 text-xs resize-none overflow-hidden"
+          value={row.notes || ''}
+          onChange={(e) => handleUpdateOrder(row.id, { notes: e.target.value })}
+          placeholder="Notes..."
+          rows={1}
+        />
+      </td>
+
+      {/* Fabric Delivery */}
+      <td className="p-0 border-r border-slate-200 bg-orange-50/50">
+        <input 
+          type="number"
+          className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-orange-100 font-mono text-slate-700 text-xs"
+          value={row.batchDeliveries ?? ''}
+          onChange={(e) => handleUpdateOrder(row.id, { batchDeliveries: Number(e.target.value) })}
+          placeholder="-"
+        />
+      </td>
+
+      {/* Accessory Delivery */}
+      <td className="p-0 border-r border-slate-200 bg-purple-50/50">
+        <input 
+          type="number"
+          className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-purple-100 font-mono text-slate-700 text-xs"
+          value={row.accessoryDeliveries ?? ''}
+          onChange={(e) => handleUpdateOrder(row.id, { accessoryDeliveries: Number(e.target.value) })}
+          placeholder="-"
+        />
+      </td>
+
+      {/* Actions */}
+      <td className="p-0 text-center">
+        <button 
+          onClick={() => handleDeleteRow(row.id)}
+          className="p-2 text-slate-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </td>
+    </tr>
+  );
+});
+
 export const ClientOrdersPage: React.FC = () => {
   const [customers, setCustomers] = useState<CustomerSheet[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
@@ -246,6 +468,97 @@ export const ClientOrdersPage: React.FC = () => {
   }, []);
 
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
+
+  // --- Optimization: Pre-calculate Stats Map ---
+  const statsMap = useMemo(() => {
+    if (!selectedCustomer) return new Map();
+    
+    const map = new Map<string, any>();
+    const clientName = selectedCustomer.name;
+
+    // We only care about fabrics in the current order list to save time
+    const relevantFabrics = new Set(selectedCustomer.orders.map(o => o.material).filter(Boolean));
+
+    relevantFabrics.forEach(fabric => {
+        const refCode = `${clientName}-${fabric}`;
+        const activeMachines: string[] = [];
+        const plannedMachines: string[] = [];
+        let remaining = 0;
+        let scrap = 0;
+        let minDate: string | null = null;
+        let maxDate: string | null = null;
+
+        // 1. Scan Machines
+        machines.forEach(m => {
+            // Check Active Logs
+            const activeLog = m.dailyLogs?.find(l => l.date === activeDay);
+            if (activeLog && (activeLog.status === 'Working' || activeLog.status === 'تعمل')) {
+                const isMatch = (activeLog.orderReference === refCode) || 
+                                (activeLog.client === clientName && activeLog.fabric === fabric);
+                if (isMatch) {
+                    activeMachines.push(m.name);
+                    remaining += (Number(activeLog.remainingMfg) || 0);
+
+                    // Calculate End Date for Active Machine
+                    const prod = Number(activeLog.dayProduction) || 0;
+                    const rem = Number(activeLog.remainingMfg) || 0;
+                    if (prod > 0 && rem > 0) {
+                        const daysNeeded = Math.ceil(rem / prod);
+                        const d = new Date(activeDay);
+                        d.setDate(d.getDate() + daysNeeded);
+                        const dateStr = d.toISOString().split('T')[0];
+                        if (!maxDate || dateStr > maxDate) {
+                            maxDate = dateStr;
+                        }
+                        // Also update minDate if it's the first date we see (start date is today/activeDay)
+                        if (!minDate || activeDay < minDate) {
+                            minDate = activeDay;
+                        }
+                    }
+                }
+            }
+
+            // Check All Logs (Scrap)
+            m.dailyLogs?.forEach(log => {
+                const isMatch = (log.orderReference === refCode) || 
+                                (log.client === clientName && log.fabric === fabric);
+                if (isMatch) {
+                    scrap += (Number(log.scrap) || 0);
+                }
+            });
+
+            // Check Future Plans
+            m.futurePlans?.forEach(plan => {
+                if (plan.client === clientName && plan.fabric === fabric) {
+                    if (!plannedMachines.includes(m.name)) plannedMachines.push(m.name);
+                    
+                    if (plan.startDate && (!minDate || plan.startDate < minDate)) minDate = plan.startDate;
+                    if (plan.endDate && (!maxDate || plan.endDate > maxDate)) maxDate = plan.endDate;
+                }
+            });
+        });
+
+        // 2. Scan Other Customers
+        const otherClients = new Set<string>();
+        customers.forEach(c => {
+            if (c.id === selectedCustomer.id) return;
+            const hasFabric = c.orders.some(o => o.material === fabric);
+            if (hasFabric) otherClients.add(c.name);
+        });
+
+        map.set(fabric, {
+            active: activeMachines,
+            planned: plannedMachines,
+            remaining,
+            startDate: minDate || '-',
+            endDate: maxDate || '-',
+            scrap,
+            others: Array.from(otherClients).join(', ')
+        });
+    });
+
+    return map;
+  }, [selectedCustomer, machines, customers, activeDay]);
 
   const handleAddCustomer = async () => {
     if (!newCustomerName.trim()) return;
@@ -382,42 +695,7 @@ export const ClientOrdersPage: React.FC = () => {
     setSelectedRows(new Set());
   };
 
-  const getDetailedStatus = (order: OrderRow) => {
-    if (!selectedCustomer || !order.material) return null;
-    
-    const refCode = `${selectedCustomer.name}-${order.material}`;
-    const activeMachines: string[] = [];
-    const plannedMachines: string[] = [];
-    let remaining = 0;
-
-    machines.forEach(m => {
-      // Check Active
-      const log = m.dailyLogs?.find(l => l.date === activeDay);
-      if (log && (log.status === 'Working' || log.status === 'تعمل')) {
-        if (log.orderReference === refCode || (log.client === selectedCustomer.name && log.fabric === order.material)) {
-          activeMachines.push(m.name);
-          remaining += (Number(log.remainingMfg) || 0);
-        }
-      }
-
-      // Check Planned
-      if (m.futurePlans) {
-        m.futurePlans.forEach(plan => {
-          if (plan.client === selectedCustomer.name && plan.fabric === order.material) {
-            plannedMachines.push(m.name);
-          }
-        });
-      }
-    });
-
-    if (activeMachines.length === 0 && plannedMachines.length === 0) return null;
-
-    return {
-      active: activeMachines,
-      planned: plannedMachines,
-      remaining: activeMachines.length > 0 ? remaining : order.remainingQty
-    };
-  };
+  // Removed getOrderStats in favor of statsMap
 
   const handleDeleteRow = async (rowId: string) => {
     if (!selectedCustomerId || !selectedCustomer) return;
@@ -485,100 +763,91 @@ export const ClientOrdersPage: React.FC = () => {
   );
 
   return (
-    <div className="flex h-[calc(100vh-100px)] bg-slate-50 rounded-xl overflow-hidden border border-slate-200 shadow-sm">
+    <div className="flex flex-col h-[calc(100vh-100px)] bg-slate-50 rounded-xl overflow-hidden border border-slate-200 shadow-sm">
       <style>{globalStyles}</style>
       
-      {/* Sidebar */}
-      <div className="w-64 bg-white border-r border-slate-200 flex flex-col">
-        <div className="p-4 border-b border-slate-100">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-bold text-slate-700 flex items-center gap-2">
-              <UserPlus className="w-5 h-5 text-blue-600" />
-              Clients
-            </h2>
-            <button onClick={() => setIsAddingCustomer(true)} className="p-1 hover:bg-blue-50 text-blue-600 rounded">
-              <Plus className="w-5 h-5" />
-            </button>
+      {/* Top Bar: Client Selection */}
+      <div className="bg-white border-b border-slate-200 p-4 flex items-center justify-between gap-4 shadow-sm z-20">
+        <div className="flex items-center gap-4 flex-1">
+          <div className="flex items-center gap-2 text-slate-700 font-bold">
+            <UserPlus className="w-5 h-5 text-blue-600" />
+            <span className="hidden sm:inline">Client:</span>
           </div>
           
+          <div className="relative max-w-xs w-full">
+             <select 
+               value={selectedCustomerId || ''} 
+               onChange={(e) => setSelectedCustomerId(e.target.value)}
+               className="w-full pl-3 pr-10 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none cursor-pointer font-medium text-slate-700"
+             >
+               <option value="" disabled>Select a client...</option>
+               {customers.map(c => (
+                 <option key={c.id} value={c.id}>{c.name}</option>
+               ))}
+             </select>
+             <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
+               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+             </div>
+          </div>
+
+          <button 
+            onClick={() => setIsAddingCustomer(true)} 
+            className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors" 
+            title="Add New Client"
+          >
+            <Plus className="w-5 h-5" />
+          </button>
+          
           {isAddingCustomer && (
-            <div className="mb-3 flex gap-2">
-              <input
-                autoFocus
-                type="text"
-                placeholder="Name..."
-                className="w-full px-2 py-1 text-sm border rounded"
-                value={newCustomerName}
-                onChange={e => setNewCustomerName(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleAddCustomer()}
-              />
-              <button onClick={handleAddCustomer} className="text-green-600 hover:bg-green-50 p-1 rounded">
-                <Plus className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          <div className="relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input 
-              type="text" 
-              placeholder="Search..." 
-              className="w-full pl-8 pr-2 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto">
-          <div className="divide-y divide-slate-50">
-            {filteredCustomers.map(customer => (
-              <div 
-                key={customer.id}
-                onClick={() => setSelectedCustomerId(customer.id)}
-                className={`
-                  group flex items-center justify-between p-3 cursor-pointer transition-all
-                  ${selectedCustomerId === customer.id ? 'bg-blue-50 border-l-4 border-blue-500' : 'hover:bg-slate-50 border-l-4 border-transparent'}
-                `}
-              >
-                <span className={`text-sm font-medium ${selectedCustomerId === customer.id ? 'text-blue-700' : 'text-slate-600'}`}>
-                  {customer.name}
-                </span>
-                <button 
-                  onClick={(e) => { e.stopPropagation(); handleDeleteCustomer(customer.id); }}
-                  className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-red-500 transition-opacity"
-                >
-                  <Trash2 className="w-4 h-4" />
+             <div className="flex items-center gap-2 animate-in fade-in slide-in-from-left-2 bg-white p-1 rounded-lg border border-slate-200 shadow-sm absolute top-16 left-4 z-30 sm:static sm:top-auto sm:left-auto sm:border-0 sm:shadow-none sm:p-0">
+                <input
+                  autoFocus
+                  type="text"
+                  placeholder="New Client Name..."
+                  className="px-3 py-1.5 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  value={newCustomerName}
+                  onChange={e => setNewCustomerName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAddCustomer()}
+                />
+                <button onClick={handleAddCustomer} className="px-3 py-1.5 bg-green-600 text-white rounded-md text-sm hover:bg-green-700">
+                  Save
                 </button>
-              </div>
-            ))}
-          </div>
+                <button onClick={() => setIsAddingCustomer(false)} className="p-1.5 text-slate-400 hover:text-slate-600">
+                  <X className="w-4 h-4" />
+                </button>
+             </div>
+          )}
         </div>
+
+        {/* Right Actions */}
+        {selectedCustomer && (
+          <div className="flex items-center gap-3">
+             <button 
+                onClick={() => handleDeleteCustomer(selectedCustomer.id)}
+                className="flex items-center gap-2 px-3 py-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors text-sm font-medium"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span className="hidden sm:inline">Delete Client</span>
+              </button>
+             <div className="h-6 w-px bg-slate-200 hidden sm:block"></div>
+             <button 
+                onClick={handleAddRow}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm font-medium"
+              >
+                <Plus className="w-4 h-4" />
+                <span className="hidden sm:inline">Add Order</span>
+              </button>
+          </div>
+        )}
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden bg-white">
+      <div className="flex-1 flex flex-col overflow-hidden bg-white relative">
         {selectedCustomer ? (
           <>
-            <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-white">
-              <div>
-                <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                  <FileSpreadsheet className="w-6 h-6 text-emerald-600" />
-                  {selectedCustomer.name} Order Sheet
-                </h1>
-              </div>
-              <button 
-                onClick={handleAddRow}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
-              >
-                <Plus className="w-4 h-4" />
-                Add Order
-              </button>
-            </div>
-
             {/* Bulk Actions */}
             {selectedRows.size > 0 && (
-              <div className="px-4 py-2 bg-blue-50 border-b border-blue-100 flex items-center gap-4 animate-in slide-in-from-top-2">
+              <div className="absolute top-0 left-0 right-0 z-20 px-4 py-2 bg-blue-50 border-b border-blue-100 flex items-center gap-4 animate-in slide-in-from-top-2 shadow-sm">
                 <span className="text-sm font-medium text-blue-700">{selectedRows.size} rows selected</span>
                 <div className="h-4 w-px bg-blue-200"></div>
                 
@@ -617,7 +886,7 @@ export const ClientOrdersPage: React.FC = () => {
             )}
 
             <div className="flex-1 overflow-auto p-4 bg-slate-50">
-              <div className="bg-white rounded-lg shadow border border-slate-200 overflow-visible">
+              <div className="bg-white rounded-lg shadow border border-slate-200 overflow-visible min-w-max">
                 <table className="w-full text-sm border-collapse">
                   <thead className="bg-slate-100 text-slate-600 font-semibold sticky top-0 z-10 shadow-sm text-xs uppercase tracking-wider">
                     <tr>
@@ -633,151 +902,44 @@ export const ClientOrdersPage: React.FC = () => {
                       <th className="p-3 text-left border-b border-r border-slate-200 min-w-[120px]">Fabric</th>
                       <th className="p-3 text-left border-b border-r border-slate-200 min-w-[140px]">Accessories</th>
                       <th className="p-3 text-right border-b border-r border-slate-200 w-20">Acc. Qty</th>
+                      <th className="p-3 text-center border-b border-r border-slate-200 min-w-[140px]">Status</th>
                       <th className="p-3 text-right border-b border-r border-slate-200 w-24">Ordered</th>
                       <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-slate-50">Remaining</th>
-                      <th className="p-3 text-center border-b border-r border-slate-200 w-32">Receive Date</th>
-                      <th className="p-3 text-center border-b border-r border-slate-200 w-16">Plan</th>
-                      <th className="p-3 text-center border-b border-slate-200 w-24">Status</th>
+                      <th className="p-3 text-center border-b border-r border-slate-200 w-24">Receive Date</th>
+                      <th className="p-3 text-center border-b border-r border-slate-200 w-24">Start Date</th>
+                      <th className="p-3 text-center border-b border-r border-slate-200 w-24">End Date</th>
+                      <th className="p-3 text-right border-b border-r border-slate-200 w-20">Scrap</th>
+                      <th className="p-3 text-left border-b border-r border-slate-200 min-w-[100px]">Others</th>
+                      <th className="p-3 text-left border-b border-r border-slate-200 min-w-[150px]">Notes</th>
+                      <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-orange-50">Fab. Deliv</th>
+                      <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-purple-50">Acc. Deliv</th>
                       <th className="p-3 w-10 border-b border-slate-200"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {selectedCustomer.orders.map((row) => {
-                      const statusInfo = getDetailedStatus(row);
-                      const refCode = row.material ? `${selectedCustomer.name}-${row.material}` : '-';
-                      const displayRemaining = statusInfo ? statusInfo.remaining : row.remainingQty;
+                      const statusInfo = row.material ? statsMap.get(row.material) : null;
+                      // If we have active machines, override the remaining qty
+                      if (statusInfo && statusInfo.active.length > 0) {
+                          // statusInfo.remaining is already calculated in the map
+                      }
+                      
                       const isSelected = selectedRows.has(row.id);
 
                       return (
-                        <tr key={row.id} className={`transition-colors group text-sm ${isSelected ? 'bg-blue-50' : 'hover:bg-blue-50/30'}`}>
-                          {/* Checkbox */}
-                          <td className="p-0 border-r border-slate-200 text-center align-middle">
-                            <button onClick={() => toggleSelectRow(row.id)} className="p-2 w-full h-full flex items-center justify-center text-slate-400 hover:text-blue-600">
-                              {isSelected ? <CheckSquare className="w-4 h-4 text-blue-600" /> : <Square className="w-4 h-4" />}
-                            </button>
-                          </td>
-
-                          {/* Fabric */}
-                          <td className="p-0 border-r border-slate-200" title={refCode}>
-                            <SearchDropdown
-                              id={`fabric-${row.id}`}
-                              options={fabrics}
-                              value={row.material}
-                              onChange={(val) => handleUpdateOrder(row.id, { material: val })}
-                              onCreateNew={handleCreateFabric}
-                              placeholder="Select Fabric..."
-                            />
-                          </td>
-
-                          {/* Accessories */}
-                          <td className="p-0 border-r border-slate-200 relative">
-                            <input 
-                              type="text"
-                              className="w-full h-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50"
-                              value={row.accessory}
-                              onChange={(e) => handleUpdateOrder(row.id, { accessory: e.target.value })}
-                              placeholder=""
-                            />
-                            {row.accessoryPercentage && (
-                              <div className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded pointer-events-none">
-                                {row.accessoryPercentage}%
-                              </div>
-                            )}
-                          </td>
-
-                          {/* Acc. Qty */}
-                          <td className="p-0 border-r border-slate-200">
-                             <input 
-                              type="number"
-                              className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs"
-                              value={row.accessoryQty ?? ''}
-                              onChange={(e) => handleUpdateOrder(row.id, { accessoryQty: Number(e.target.value) })}
-                              placeholder="-"
-                            />
-                          </td>
-
-                          {/* Ordered Qty */}
-                          <td className="p-0 border-r border-slate-200">
-                            <input 
-                              type="number"
-                              className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-700"
-                              value={row.requiredQty ?? ''}
-                              onChange={(e) => {
-                                const val = e.target.value === '' ? 0 : Number(e.target.value);
-                                const updates: Partial<OrderRow> = { requiredQty: val };
-                                // If not active, update remaining too
-                                if (!statusInfo || (statusInfo.active.length === 0)) {
-                                   updates.remainingQty = val;
-                                }
-                                handleUpdateOrder(row.id, updates);
-                              }}
-                            />
-                          </td>
-
-                          {/* Remaining Qty */}
-                          <td className={`p-2 text-right border-r border-slate-200 font-mono font-bold ${statusInfo && statusInfo.active.length > 0 ? 'text-emerald-600 bg-emerald-50/30' : 'text-slate-600'}`}>
-                            {displayRemaining?.toLocaleString()}
-                          </td>
-
-                          {/* Receive Date */}
-                          <td className="p-0 border-r border-slate-200">
-                            <input 
-                              type="date"
-                              className="w-full h-full px-2 py-2 bg-transparent outline-none focus:bg-blue-50 text-center text-slate-600 text-xs"
-                              value={row.orderReceiptDate}
-                              onChange={(e) => handleUpdateOrder(row.id, { orderReceiptDate: e.target.value })}
-                            />
-                          </td>
-
-                          {/* Plan Button */}
-                          <td className="p-0 border-r border-slate-200 text-center align-middle">
-                             <button
-                              onClick={() => handlePlanSearch(selectedCustomer.name, row.material)}
-                              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                              title="Search Plan"
-                            >
-                              <Search className="w-4 h-4" />
-                            </button>
-                          </td>
-
-                          {/* Status / Location */}
-                          <td className="p-0 border-r border-slate-200 text-center align-middle">
-                            {statusInfo ? (
-                              <div className="flex flex-col gap-1 items-center justify-center p-1">
-                                {statusInfo.active.map((m, i) => (
-                                  <span key={`a-${i}`} className="text-[10px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded-full font-medium whitespace-nowrap" title="Active">
-                                    {m}
-                                  </span>
-                                ))}
-                                {statusInfo.planned.map((m, i) => (
-                                  <span key={`p-${i}`} className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium whitespace-nowrap" title="Planned">
-                                    {m}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : (
-                              (displayRemaining || 0) > 0 ? (
-                                <span className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap">
-                                  Not Planned
-                                </span>
-                              ) : (
-                                <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap">
-                                  Finished
-                                </span>
-                              )
-                            )}
-                          </td>
-
-                          {/* Actions */}
-                          <td className="p-0 text-center">
-                            <button 
-                              onClick={() => handleDeleteRow(row.id)}
-                              className="p-2 text-slate-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </td>
-                        </tr>
+                        <MemoizedOrderRow
+                          key={row.id}
+                          row={row}
+                          statusInfo={statusInfo}
+                          fabrics={fabrics}
+                          isSelected={isSelected}
+                          toggleSelectRow={toggleSelectRow}
+                          handleUpdateOrder={handleUpdateOrder}
+                          handleCreateFabric={handleCreateFabric}
+                          handlePlanSearch={handlePlanSearch}
+                          handleDeleteRow={handleDeleteRow}
+                          selectedCustomerName={selectedCustomer.name}
+                        />
                       );
                     })}
                   </tbody>
@@ -786,8 +948,10 @@ export const ClientOrdersPage: React.FC = () => {
             </div>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-slate-400">
-            Select a client to view orders
+          <div className="flex-1 flex flex-col items-center justify-center text-slate-400 bg-slate-50/50">
+            <FileSpreadsheet className="w-16 h-16 mb-4 text-slate-300" />
+            <p className="text-lg font-medium text-slate-500">Select a client from the top bar to view orders</p>
+            <p className="text-sm text-slate-400 mt-2">Or create a new client to get started</p>
           </div>
         )}
 

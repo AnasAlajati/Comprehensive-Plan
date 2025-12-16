@@ -43,7 +43,7 @@ export const DataService = {
   },
 
   async getClients(): Promise<Client[]> {
-    const snapshot = await getDocs(collection(db, 'clients'));
+    const snapshot = await getDocs(collection(db, 'CustomerSheets'));
     return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Client));
   },
 

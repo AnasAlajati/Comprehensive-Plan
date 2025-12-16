@@ -110,8 +110,8 @@ export interface OrderRow {
   scrapQty: number;        // كمية السقط
   others: string;          // Others
   notes: string;           // ملاحظات
-  batchDeliveries: string; // تسليمات الاحواض
-  accessoryDeliveries: string; // تسليمات الاكسسوار
+  batchDeliveries: number; // تسليمات الاحواض
+  accessoryDeliveries: number; // تسليمات الاكسسوار
   // New fields for enhanced accessory logic
   accessoryType?: string; // 'Rib', 'Derby', etc.
   accessoryPercentage?: number; // 3, 5, etc.

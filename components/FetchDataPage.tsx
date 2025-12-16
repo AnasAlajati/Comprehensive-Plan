@@ -774,16 +774,24 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         
         if (logsForDate.length === 0) {
           // Machine doesn't have a log for this date, create a virtual one
+          // Try to find the most recent log to carry over client/fabric
+          const sortedLogs = (machine.dailyLogs || []).sort((a: any, b: any) => b.date.localeCompare(a.date));
+          const lastLog = sortedLogs.find((l: any) => l.date < date);
+          
+          const defaultClient = lastLog ? lastLog.client : (machine.client || '');
+          const defaultFabric = lastLog ? lastLog.fabric : (machine.material || machine.fabric || '');
+          const defaultStatus = lastLog ? lastLog.status : (machine.status || '');
+
           const newLog = {
             id: date,
             date: date,
             dayProduction: 0,
             scrap: 0,
-            status: machine.status || '',
-            fabric: '',
-            client: '',
+            status: defaultStatus,
+            fabric: defaultFabric,
+            client: defaultClient,
             avgProduction: machine.avgProduction || 0,
-            remainingMfg: 0,
+            remainingMfg: lastLog ? (Number(lastLog.remainingMfg) || 0) : 0,
             reason: '',
             timestamp: new Date().toISOString()
           };
@@ -1439,7 +1447,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       }
       
       const canvas = await html2canvas(element, {
-        scale: 2, 
+        scale: 1.5, // Reduced scale for smaller file size
         useCORS: true,
         backgroundColor: '#ffffff',
         windowWidth: element.scrollWidth + 100, // Ensure full width is captured
@@ -1626,7 +1634,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       const x = margin + (maxContentWidth - pdfContentWidth) / 2;
       const y = margin + (maxContentHeight - pdfContentHeight) / 2;
       
-      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', x, y, pdfContentWidth, pdfContentHeight);
+      // Use JPEG with 0.7 quality for massive size reduction (28MB -> ~500KB)
+      pdf.addImage(canvas.toDataURL('image/jpeg', 0.7), 'JPEG', x, y, pdfContentWidth, pdfContentHeight);
       
       pdf.save(`Daily-Machine-Plan-${selectedDate}.pdf`);
 
@@ -2242,25 +2251,24 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
               {/* Table */}
               <div className="flex-1 overflow-auto p-0">
                 <table className="w-full text-sm text-left">
-                  <thead className="bg-slate-50 text-xs uppercase font-semibold text-slate-500 sticky top-0 z-10 shadow-sm">
+                  <thead className="bg-slate-100 text-slate-600 font-semibold text-xs uppercase tracking-wider sticky top-0 z-10 shadow-sm">
                     <tr>
-                      <th className="px-4 py-3 text-center w-10">#</th>
-                      <th className="px-4 py-3">Start Date <span className="block text-[10px] font-normal text-slate-400">تاريخ البدء</span></th>
-                      <th className="px-4 py-3">End Date <span className="block text-[10px] font-normal text-slate-400">تاريخ الانتهاء</span></th>
-                      <th className="px-4 py-3">Orig. Machine <span className="block text-[10px] font-normal text-slate-400">الأصل</span></th>
-                      <th className="px-4 py-3 text-center">Days <span className="block text-[10px] font-normal text-slate-400">المدة</span></th>
-                      <th className="px-4 py-3">Order <span className="block text-[10px] font-normal text-slate-400">التشغيلة</span></th>
-                      <th className="px-4 py-3 text-center">Remaining <span className="block text-[10px] font-normal text-slate-400">متبقي</span></th>
-                      <th className="px-4 py-3 text-center">Qty <span className="block text-[10px] font-normal text-slate-400">الكمية</span></th>
-                      <th className="px-4 py-3 text-center">Prod/Day <span className="block text-[10px] font-normal text-slate-400">انتاج/يوم</span></th>
-                      <th className="px-4 py-3">Fabric / Notes <span className="block text-[10px] font-normal text-slate-400">الخامة / ملاحظات</span></th>
-                      <th className="px-4 py-3 text-center">Actions</th>
+                      <th className="p-2 border-b border-r border-slate-200 w-28 text-center">Start</th>
+                      <th className="p-2 border-b border-r border-slate-200 w-28 text-center">End</th>
+                      <th className="p-2 border-b border-r border-slate-200 w-24 text-left">Machine</th>
+                      <th className="p-2 border-b border-r border-slate-200 w-16 text-center">Days</th>
+                      <th className="p-2 border-b border-r border-slate-200 min-w-[120px] text-left">Client / Ref</th>
+                      <th className="p-2 border-b border-r border-slate-200 w-20 text-right">Rem.</th>
+                      <th className="p-2 border-b border-r border-slate-200 w-20 text-right">Qty</th>
+                      <th className="p-2 border-b border-r border-slate-200 w-20 text-right">Prod/Day</th>
+                      <th className="p-2 border-b border-r border-slate-200 min-w-[120px] text-left">Fabric / Notes</th>
+                      <th className="p-2 border-b border-slate-200 w-20 text-center">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {plansModalOpen.plans.length === 0 ? (
                       <tr>
-                        <td colSpan={11} className="p-8 text-center text-slate-400">
+                        <td colSpan={10} className="p-8 text-center text-slate-400">
                           No plans found
                         </td>
                       </tr>
@@ -2279,72 +2287,80 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                           : plan.days || 0;
                         
                         return (
-                          <tr key={idx} className={`${isActive ? 'bg-emerald-50/50' : isSettings ? 'bg-amber-50/50' : 'bg-white'} hover:bg-slate-50 transition-colors`}>
-                            <td className="p-2 text-center text-slate-400 text-xs">{idx + 1}</td>
-                            <td className="p-0">
+                          <tr key={idx} className={`${isActive ? 'bg-emerald-50/50' : isSettings ? 'bg-amber-50/50' : 'bg-white'} hover:bg-slate-50 transition-colors border-b border-slate-100`}>
+                            {/* Start Date */}
+                            <td className="p-0 border-r border-slate-100">
                               <input
                                 type="date"
                                 value={plan.startDate || ''}
                                 onChange={(e) => handleUpdatePlan(idx, 'startDate', e.target.value)}
-                                className="w-full p-3 bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-blue-500 transition-all"
+                                className="w-full p-2 bg-transparent outline-none focus:bg-blue-50 text-center text-xs font-medium"
                               />
                             </td>
-                            <td className="p-3 font-medium text-blue-700">
+                            {/* End Date */}
+                            <td className="p-2 border-r border-slate-100 text-center text-xs font-medium text-slate-600 bg-slate-50/30">
                               {displayEndDate}
                             </td>
-                            <td className="p-0">
+                            {/* Machine */}
+                            <td className="p-0 border-r border-slate-100">
                               <input
                                 type="text"
                                 value={plan.originalSampleMachine || ''}
                                 onChange={(e) => handleUpdatePlan(idx, 'originalSampleMachine', e.target.value)}
-                                className="w-full p-3 bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-blue-500 transition-all"
+                                className="w-full p-2 bg-transparent outline-none focus:bg-blue-50 text-xs"
                                 placeholder="-"
                               />
                             </td>
-                            <td className="p-3 text-center font-bold text-orange-600">
+                            {/* Days */}
+                            <td className="p-2 border-r border-slate-100 text-center text-xs font-bold text-orange-600">
                               {calculatedDays}
                             </td>
-                            <td className="p-0">
+                            {/* Client / Ref */}
+                            <td className="p-0 border-r border-slate-100">
                               <input
                                 type="text"
                                 value={plan.orderName || ''}
                                 onChange={(e) => handleUpdatePlan(idx, 'orderName', e.target.value)}
-                                className="w-full p-3 bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-blue-500 transition-all text-blue-600 font-medium"
+                                className="w-full p-2 bg-transparent outline-none focus:bg-blue-50 text-xs text-blue-600 font-medium"
                                 placeholder="-"
                               />
                             </td>
-                            <td className="p-0">
+                            {/* Remaining */}
+                            <td className="p-0 border-r border-slate-100">
                               <input
                                 type="number"
                                 value={plan.remaining || 0}
                                 onChange={(e) => handleUpdatePlan(idx, 'remaining', Number(e.target.value))}
-                                className="w-full p-3 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-blue-500 transition-all font-bold"
+                                className="w-full p-2 text-right bg-transparent outline-none focus:bg-blue-50 text-xs font-bold"
                               />
                             </td>
-                            <td className="p-0">
+                            {/* Quantity */}
+                            <td className="p-0 border-r border-slate-100">
                               <input
                                 type="number"
                                 value={isSettings ? 0 : plan.quantity}
                                 onChange={(e) => handleUpdatePlan(idx, 'quantity', Number(e.target.value))}
                                 disabled={isSettings}
-                                className="w-full p-3 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-blue-500 transition-all disabled:opacity-50"
+                                className="w-full p-2 text-right bg-transparent outline-none focus:bg-blue-50 text-xs disabled:opacity-50"
                               />
                             </td>
-                            <td className="p-0">
+                            {/* Prod/Day */}
+                            <td className="p-0 border-r border-slate-100">
                               <input
                                 type="number"
                                 value={plan.productionPerDay || 0}
                                 onChange={(e) => handleUpdatePlan(idx, 'productionPerDay', Number(e.target.value))}
-                                className="w-full p-3 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-blue-500 transition-all font-bold"
+                                className="w-full p-2 text-right bg-transparent outline-none focus:bg-blue-50 text-xs font-bold"
                               />
                             </td>
-                            <td className="p-0">
+                            {/* Fabric / Notes */}
+                            <td className="p-0 border-r border-slate-100">
                               {isSettings ? (
                                 <input
                                   type="text"
                                   value={plan.notes || ''}
                                   onChange={(e) => handleUpdatePlan(idx, 'notes', e.target.value)}
-                                  className="w-full p-3 bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-blue-500 transition-all text-slate-500 italic"
+                                  className="w-full p-2 bg-transparent outline-none focus:bg-blue-50 text-xs text-slate-500 italic"
                                   placeholder="Notes..."
                                 />
                               ) : (
@@ -2352,28 +2368,29 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                                   type="text"
                                   value={plan.fabric || ''}
                                   onChange={(e) => handleUpdatePlan(idx, 'fabric', e.target.value)}
-                                  className="w-full p-3 bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-blue-500 transition-all font-medium"
+                                  className="w-full p-2 bg-transparent outline-none focus:bg-blue-50 text-xs font-medium"
                                   placeholder="-"
                                 />
                               )}
                             </td>
-                            <td className="p-2 text-center flex gap-2 justify-center items-center">
+                            {/* Actions */}
+                            <td className="p-1 text-center flex gap-1 justify-center items-center">
                               <button
                                 onClick={() => handleMakeActive(idx)}
-                                className="p-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-700 rounded-md transition-colors"
+                                className="p-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-700 rounded transition-colors"
                                 title="Make Active"
                               >
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                                 </svg>
                               </button>
                               <button
                                 onClick={() => handleDeletePlan(idx)}
-                                className="p-1.5 bg-red-100 hover:bg-red-200 text-red-700 rounded-md transition-colors"
+                                className="p-1 bg-red-100 hover:bg-red-200 text-red-700 rounded transition-colors"
                                 title="Delete"
                               >
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                                 </svg>
                               </button>
@@ -2386,8 +2403,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                     {/* Excel-like Add Row */}
                     {showInlineAddRow && (
                     <tr className={`border-t-2 ${inlineNewPlan.type === 'SETTINGS' ? 'bg-amber-50 border-amber-400' : 'bg-yellow-50 border-yellow-400'}`}>
-                      <td className="p-2 text-center text-green-600 font-bold">+</td>
-                      <td className="p-0">
+                      {/* Start Date */}
+                      <td className="p-0 border-r border-slate-200">
                         <input
                           type="date"
                           value={inlineNewPlan.startDate || ''}
@@ -2397,10 +2414,11 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             setInlineNewPlan({ ...inlineNewPlan, startDate });
                           }}
                           placeholder="Start Date"
-                          className="w-full p-3 bg-transparent outline-none font-medium placeholder-slate-400"
+                          className="w-full p-2 bg-transparent outline-none font-medium placeholder-slate-400 text-center text-xs"
                         />
                       </td>
-                      <td className="p-3 font-medium text-blue-700">
+                      {/* End Date */}
+                      <td className="p-2 border-r border-slate-200 font-medium text-blue-700 text-center text-xs">
                         {inlineNewPlan.type === 'SETTINGS' 
                           ? (inlineNewPlan.startDate && inlineNewPlan.days 
                               ? (() => {
@@ -2413,71 +2431,78 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                               ? calculatePlanEndDate(inlineNewPlan.startDate, inlineNewPlan.remaining, inlineNewPlan.productionPerDay)
                               : '-')}
                       </td>
-                      <td className="p-0">
+                      {/* Machine */}
+                      <td className="p-0 border-r border-slate-200">
                         <input
                           type="text"
                           value={inlineNewPlan.originalSampleMachine || ''}
                           onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, originalSampleMachine: e.target.value })}
                           placeholder="Original"
-                          className="w-full p-3 bg-transparent outline-none placeholder-slate-400"
+                          className="w-full p-2 bg-transparent outline-none placeholder-slate-400 text-xs"
                         />
                       </td>
-                      <td className="p-0">
+                      {/* Days */}
+                      <td className="p-0 border-r border-slate-200">
                         <input
                           type="number"
                           value={inlineNewPlan.days || ''}
                           onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, days: Number(e.target.value) })}
                           placeholder="0"
-                          className="w-full p-3 text-center bg-transparent outline-none font-bold text-orange-600 placeholder-slate-400"
+                          className="w-full p-2 text-center bg-transparent outline-none font-bold text-orange-600 placeholder-slate-400 text-xs"
                         />
                       </td>
-                      <td className="p-0">
+                      {/* Client */}
+                      <td className="p-0 border-r border-slate-200">
                         <input
                           type="text"
                           value={inlineNewPlan.orderName || ''}
                           onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, orderName: e.target.value })}
                           placeholder="Order"
-                          className="w-full p-3 bg-transparent outline-none text-blue-600 placeholder-slate-400"
+                          className="w-full p-2 bg-transparent outline-none text-blue-600 placeholder-slate-400 text-xs"
                         />
                       </td>
-                      <td className="p-0">
+                      {/* Remaining */}
+                      <td className="p-0 border-r border-slate-200">
                         <input
                           type="number"
                           value={inlineNewPlan.remaining || ''}
                           onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, remaining: Number(e.target.value) })}
                           placeholder="0"
                           disabled={inlineNewPlan.type === 'SETTINGS'}
-                          className="w-full p-3 text-center bg-transparent outline-none font-bold disabled:opacity-50 placeholder-slate-400"
+                          className="w-full p-2 text-right bg-transparent outline-none font-bold disabled:opacity-50 placeholder-slate-400 text-xs"
                         />
                       </td>
-                      <td className="p-0">
+                      {/* Quantity */}
+                      <td className="p-0 border-r border-slate-200">
                         <input
                           type="number"
                           value={inlineNewPlan.quantity || ''}
                           onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, quantity: Number(e.target.value) })}
                           placeholder="0"
                           disabled={inlineNewPlan.type === 'SETTINGS'}
-                          className="w-full p-3 text-center bg-transparent outline-none disabled:opacity-50 placeholder-slate-400"
+                          className="w-full p-2 text-right bg-transparent outline-none disabled:opacity-50 placeholder-slate-400 text-xs"
                         />
                       </td>
-                      <td className="p-0">
+                      {/* Prod/Day */}
+                      <td className="p-0 border-r border-slate-200">
                         <input
                           type="number"
                           value={inlineNewPlan.productionPerDay || ''}
                           onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, productionPerDay: Number(e.target.value) })}
                           placeholder="0"
                           disabled={inlineNewPlan.type === 'SETTINGS'}
-                          className="w-full p-3 text-center bg-transparent outline-none font-bold disabled:opacity-50 placeholder-slate-400"
+                          className="w-full p-2 text-right bg-transparent outline-none font-bold disabled:opacity-50 placeholder-slate-400 text-xs"
                         />
                       </td>
-                      <td className="p-0">
+                      {/* Fabric/Notes */}
+                      <td className="p-0 border-r border-slate-200">
                         {inlineNewPlan.type === 'SETTINGS' ? (
                           <input
                             type="text"
                             value={inlineNewPlan.notes || ''}
                             onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, notes: e.target.value })}
                             placeholder="Notes..."
-                            className="w-full p-3 bg-transparent outline-none text-slate-500 italic placeholder-slate-400"
+                            className="w-full p-2 bg-transparent outline-none text-slate-500 italic placeholder-slate-400 text-xs"
                           />
                         ) : (
                           <input
@@ -2485,18 +2510,18 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             value={inlineNewPlan.fabric || ''}
                             onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, fabric: e.target.value })}
                             placeholder="Fabric"
-                            className="w-full p-3 bg-transparent outline-none placeholder-slate-400"
+                            className="w-full p-2 bg-transparent outline-none placeholder-slate-400 text-xs"
                           />
                         )}
                       </td>
-                      <td className="p-2 text-center text-slate-400 text-xs">NEW</td>
+                      {/* Actions */}
                       <td className="p-2 text-center">
                         <button
                           onClick={handleInlineAddPlan}
                           disabled={loading || !inlineNewPlan.startDate || (inlineNewPlan.type === 'SETTINGS' ? !inlineNewPlan.days : (!inlineNewPlan.remaining || !inlineNewPlan.productionPerDay))}
-                          className="px-2 py-1 bg-green-500 hover:bg-green-600 text-white rounded text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="px-2 py-1 bg-green-500 hover:bg-green-600 text-white rounded text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed w-full"
                         >
-                          ✓ Add
+                          Add
                         </button>
                       </td>
                     </tr>
