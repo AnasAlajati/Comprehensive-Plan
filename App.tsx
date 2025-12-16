@@ -29,6 +29,7 @@ import { CompareDaysPage } from './components/CompareDaysPage';
 import { ProductionHistoryPage } from './components/ProductionHistoryPage';
 import { OrderFulfillmentPage } from './components/OrderFulfillmentPage';
 import { AnalyticsPage } from './components/AnalyticsPage';
+import { YarnInventoryPage } from './components/YarnInventoryPage';
 import { 
   Send, 
   CheckCircle, 
@@ -64,7 +65,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'orders' | 'compare' | 'history' | 'fulfillment' | 'analytics'>('planning'); 
+  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'orders' | 'compare' | 'history' | 'fulfillment' | 'analytics' | 'yarn-inventory'>('planning'); 
   
   // External Production State
   const [externalProduction, setExternalProduction] = useState<number>(0);
@@ -414,6 +415,17 @@ const App: React.FC = () => {
                   Orders
                 </button>
                 <button 
+                  onClick={() => setViewMode('yarn-inventory')}
+                  className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-md text-sm font-semibold transition-all ${
+                    viewMode === 'yarn-inventory' 
+                      ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-black/5' 
+                      : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
+                  }`}
+                >
+                  <LayoutGrid size={18} />
+                  Yarn Inv.
+                </button>
+                <button 
                   onClick={() => setViewMode('excel')}
                   className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-md text-sm font-semibold transition-all ${
                     viewMode === 'excel' 
@@ -543,6 +555,10 @@ const App: React.FC = () => {
 
             {viewMode === 'orders' && (
               <ClientOrdersPage />
+            )}
+
+            {viewMode === 'yarn-inventory' && (
+              <YarnInventoryPage />
             )}
 
             {viewMode === 'compare' && (

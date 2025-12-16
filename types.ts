@@ -116,6 +116,7 @@ export interface OrderRow {
   accessoryType?: string; // 'Rib', 'Derby', etc.
   accessoryPercentage?: number; // 3, 5, etc.
   accessoryQty?: number; // Calculated or manual quantity
+  yarnAllocations?: Record<string, string>; // yarnId -> lotNumber
 }
 
 export interface CustomerSheet {
@@ -169,6 +170,7 @@ export interface Fabric {
 export interface YarnComponent {
   yarnId: string;
   percentage: number;
+  scrapPercentage?: number;
 }
 
 export interface Yarn {
@@ -253,4 +255,19 @@ export interface MachineSS {
   machineid: number; // Machine ID (static, doesn't change)
   dailyLogs: DailyLogEntry[]; // Array of daily logs
   futurePlans: FuturePlanEntry[]; // Array of future plans
+}
+
+export interface YarnInventoryItem {
+  id: string;
+  yarnName: string;
+  lotNumber: string;
+  quantity: number;
+  lastUpdated: string;
+  allocations?: {
+    orderId: string;
+    customerId: string;
+    fabricName: string;
+    quantity: number; // Amount allocated
+    timestamp: string;
+  }[];
 }

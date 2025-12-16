@@ -5,11 +5,15 @@ import {
   doc, 
   addDoc, 
   updateDoc,
-  deleteDoc
+  deleteDoc,
+  query,
+  where,
+  getDocs
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
-import { CustomerSheet, OrderRow, MachineSS, MachineStatus } from '../types';
+import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem } from '../types';
+import { FabricDetailsModal } from './FabricDetailsModal';
 import { 
   Plus, 
   Trash2, 
@@ -23,8 +27,14 @@ import {
   Calendar,
   Calculator,
   CheckSquare,
-  Square
+  Square,
+  Package,
+  Users,
+  ArrowRight
 } from 'lucide-react';
+
+const ALL_CLIENTS_ID = 'ALL_CLIENTS';
+const ALL_YARNS_ID = 'ALL_YARNS';
 
 // Global CSS to hide number input spinners
 const globalStyles = `
@@ -193,7 +203,8 @@ const MemoizedOrderRow = React.memo(({
   handleCreateFabric,
   handlePlanSearch,
   handleDeleteRow,
-  selectedCustomerName
+  selectedCustomerName,
+  onOpenFabricDetails
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -205,9 +216,24 @@ const MemoizedOrderRow = React.memo(({
   handlePlanSearch: (client: string, material: string) => void;
   handleDeleteRow: (id: string) => void;
   selectedCustomerName: string;
+  onOpenFabricDetails: (fabricName: string, qty: number, orderId: string) => void;
 }) => {
   const refCode = row.material ? `${selectedCustomerName}-${row.material}` : '-';
-  const displayRemaining = statusInfo ? statusInfo.remaining : row.remainingQty;
+  const hasActive = statusInfo && statusInfo.active.length > 0;
+  const displayRemaining = hasActive ? statusInfo.remaining : row.remainingQty;
+
+  // Calculate Total Yarn for this order if fabric has composition
+  const fabricDetails = fabrics.find(f => f.name === row.material);
+  const hasComposition = fabricDetails?.yarnComposition && fabricDetails.yarnComposition.length > 0;
+  
+  let totalYarnForOrder = 0;
+  if (hasComposition && row.requiredQty > 0) {
+    totalYarnForOrder = fabricDetails.yarnComposition.reduce((sum: number, comp: any) => {
+      const base = (row.requiredQty * (comp.percentage || 0)) / 100;
+      const scrap = 1 + ((comp.scrapPercentage || 0) / 100);
+      return sum + (base * scrap);
+    }, 0);
+  }
 
   return (
     <tr className={`transition-colors group text-sm ${isSelected ? 'bg-blue-50' : 'hover:bg-blue-50/30'}`}>
@@ -219,15 +245,34 @@ const MemoizedOrderRow = React.memo(({
       </td>
 
       {/* Fabric */}
-      <td className="p-0 border-r border-slate-200" title={refCode}>
-        <SearchDropdown
-          id={`fabric-${row.id}`}
-          options={fabrics}
-          value={row.material}
-          onChange={(val) => handleUpdateOrder(row.id, { material: val })}
-          onCreateNew={handleCreateFabric}
-          placeholder="Select Fabric..."
-        />
+      <td className="p-0 border-r border-slate-200 relative group/fabric" title={refCode}>
+        <div className="flex items-center h-full w-full">
+          <div className="flex-1 h-full flex flex-col justify-center">
+            <SearchDropdown
+              id={`fabric-${row.id}`}
+              options={fabrics}
+              value={row.material}
+              onChange={(val) => handleUpdateOrder(row.id, { material: val })}
+              onCreateNew={handleCreateFabric}
+              placeholder="Select Fabric..."
+            />
+            {hasComposition && (
+               <div className="px-2 pb-1 text-[10px] text-slate-500 font-mono flex items-center gap-1 opacity-0 group-hover/fabric:opacity-100 transition-opacity">
+                 <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                 <span>Verified</span>
+               </div>
+            )}
+          </div>
+          {row.material && (
+            <button
+              onClick={() => onOpenFabricDetails(row.material, row.requiredQty, row.id)}
+              className={`absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded transition-all z-10 ${hasComposition ? 'text-emerald-600 bg-emerald-50 opacity-100' : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50 opacity-0 group-hover/fabric:opacity-100'}`}
+              title="Yarn Composition"
+            >
+              <Calculator className="w-3 h-3" />
+            </button>
+          )}
+        </div>
       </td>
 
       {/* Accessories */}
@@ -239,7 +284,7 @@ const MemoizedOrderRow = React.memo(({
           onChange={(e) => handleUpdateOrder(row.id, { accessory: e.target.value })}
           placeholder=""
         />
-        {row.accessoryPercentage && (
+        {row.accessoryPercentage != null && row.accessoryPercentage > 0 && (
           <div className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded pointer-events-none">
             {row.accessoryPercentage}%
           </div>
@@ -280,6 +325,18 @@ const MemoizedOrderRow = React.memo(({
                       </span>
                     ))}
                   </div>
+                )}
+                {/* Fallback if no active/planned but statusInfo exists */}
+                {statusInfo.active.length === 0 && statusInfo.planned.length === 0 && (
+                   (displayRemaining || 0) > 0 ? (
+                    <span className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit">
+                      Not Planned
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit">
+                      Finished
+                    </span>
+                  )
                 )}
               </>
             ) : (
@@ -324,8 +381,13 @@ const MemoizedOrderRow = React.memo(({
       </td>
 
       {/* Remaining Qty */}
-      <td className={`p-2 text-right border-r border-slate-200 font-mono font-bold ${statusInfo && statusInfo.active.length > 0 ? 'text-emerald-600 bg-emerald-50/30' : 'text-slate-600'}`}>
-        {displayRemaining?.toLocaleString()}
+      <td className={`p-0 border-r border-slate-200 font-mono font-bold ${hasActive ? 'bg-emerald-50/30' : ''}`}>
+        <input 
+          type="number"
+          className={`w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 ${hasActive ? 'text-emerald-600' : 'text-slate-600'}`}
+          value={displayRemaining ?? ''}
+          onChange={(e) => handleUpdateOrder(row.id, { remainingQty: Number(e.target.value) })}
+        />
       </td>
 
       {/* Order Receive Date */}
@@ -410,10 +472,24 @@ export const ClientOrdersPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [newCustomerName, setNewCustomerName] = useState('');
   const [isAddingCustomer, setIsAddingCustomer] = useState(false);
-  const [fabrics, setFabrics] = useState<any[]>([]);
+  const [fabrics, setFabrics] = useState<Fabric[]>([]);
+  const [yarns, setYarns] = useState<Yarn[]>([]);
+  const [inventory, setInventory] = useState<YarnInventoryItem[]>([]);
   const [machines, setMachines] = useState<MachineSS[]>([]);
   const [activeDay, setActiveDay] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [showYarnRequirements, setShowYarnRequirements] = useState(false);
+  const [selectedYarnDetails, setSelectedYarnDetails] = useState<any>(null);
   
+  // Fabric Details Modal State
+  const [fabricDetailsModal, setFabricDetailsModal] = useState<{
+    isOpen: boolean;
+    fabric: Fabric | null;
+    orderQuantity: number;
+    orderId?: string;
+    customerId?: string;
+    allocations?: Record<string, string>;
+  }>({ isOpen: false, fabric: null, orderQuantity: 0 });
+
   // Fix for state reset issue
   const initialSelectionMade = useRef(false);
 
@@ -428,6 +504,12 @@ export const ClientOrdersPage: React.FC = () => {
     reference: string;
     results: { machineName: string; type: 'ACTIVE' | 'PLANNED'; details: string; date?: string }[];
   }>({ isOpen: false, reference: '', results: [] });
+
+  // Inventory View Modal State
+  const [inventoryViewModal, setInventoryViewModal] = useState<{
+    isOpen: boolean;
+    yarnName: string;
+  }>({ isOpen: false, yarnName: '' });
 
   // Fetch Data
   useEffect(() => {
@@ -453,6 +535,15 @@ export const ClientOrdersPage: React.FC = () => {
     // Fabrics
     DataService.getFabrics().then(setFabrics);
 
+    // Yarns
+    DataService.getYarns().then(setYarns);
+
+    // Inventory
+    const unsubInventory = onSnapshot(collection(db, 'yarn_inventory'), (snapshot) => {
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as YarnInventoryItem));
+      setInventory(data);
+    });
+
     // Active Day
     const unsubSettings = onSnapshot(doc(db, 'settings', 'global'), (doc) => {
       if (doc.exists() && doc.data().activeDay) {
@@ -463,6 +554,7 @@ export const ClientOrdersPage: React.FC = () => {
     return () => {
       unsubCustomers();
       unsubMachines();
+      unsubInventory();
       unsubSettings();
     };
   }, []);
@@ -490,11 +582,22 @@ export const ClientOrdersPage: React.FC = () => {
 
         // 1. Scan Machines
         machines.forEach(m => {
+            // Helper for robust comparison
+            const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+            const normClient = normalize(clientName);
+            const normFabric = normalize(fabric);
+
             // Check Active Logs
             const activeLog = m.dailyLogs?.find(l => l.date === activeDay);
             if (activeLog && (activeLog.status === 'Working' || activeLog.status === 'تعمل')) {
+                // Robust Match: Check Reference OR (Client AND Fabric)
+                // We normalize client/fabric to handle case/whitespace differences
+                const logClient = normalize(activeLog.client);
+                const logFabric = normalize(activeLog.fabric);
+                
                 const isMatch = (activeLog.orderReference === refCode) || 
-                                (activeLog.client === clientName && activeLog.fabric === fabric);
+                                (logClient === normClient && logFabric === normFabric);
+                                
                 if (isMatch) {
                     activeMachines.push(m.name);
                     remaining += (Number(activeLog.remainingMfg) || 0);
@@ -520,8 +623,10 @@ export const ClientOrdersPage: React.FC = () => {
 
             // Check All Logs (Scrap)
             m.dailyLogs?.forEach(log => {
+                const logClient = normalize(log.client);
+                const logFabric = normalize(log.fabric);
                 const isMatch = (log.orderReference === refCode) || 
-                                (log.client === clientName && log.fabric === fabric);
+                                (logClient === normClient && logFabric === normFabric);
                 if (isMatch) {
                     scrap += (Number(log.scrap) || 0);
                 }
@@ -529,7 +634,10 @@ export const ClientOrdersPage: React.FC = () => {
 
             // Check Future Plans
             m.futurePlans?.forEach(plan => {
-                if (plan.client === clientName && plan.fabric === fabric) {
+                const planClient = normalize(plan.client);
+                const planFabric = normalize(plan.fabric);
+                
+                if (planClient === normClient && planFabric === normFabric) {
                     if (!plannedMachines.includes(m.name)) plannedMachines.push(m.name);
                     
                     if (plan.startDate && (!minDate || plan.startDate < minDate)) minDate = plan.startDate;
@@ -559,6 +667,144 @@ export const ClientOrdersPage: React.FC = () => {
 
     return map;
   }, [selectedCustomer, machines, customers, activeDay]);
+
+  const allClientsStats = useMemo(() => {
+    if (selectedCustomerId !== ALL_CLIENTS_ID) return [];
+
+    return customers.map(client => {
+      const ordered = client.orders.reduce((sum, o) => sum + (o.requiredQty || 0), 0);
+      const remaining = client.orders.reduce((sum, o) => sum + (o.remainingQty || 0), 0);
+      const delivery = client.orders.reduce((sum, o) => sum + (o.batchDeliveries || 0), 0);
+      
+      const manufactured = Math.max(0, ordered - remaining);
+      const remainingDelivery = Math.max(0, ordered - delivery);
+      
+      const dates = Array.from(new Set(client.orders.map(o => o.orderReceiptDate).filter(Boolean))).sort();
+
+      return {
+        ...client,
+        stats: { ordered, manufactured, remaining, delivery, remainingDelivery, dates }
+      };
+    }).sort((a, b) => b.stats.ordered - a.stats.ordered);
+  }, [customers, selectedCustomerId]);
+
+  const allYarnStats = useMemo(() => {
+    if (selectedCustomerId !== ALL_YARNS_ID) return [];
+
+    const requirements = new Map<string, { 
+      total: number, 
+      allocations: { 
+        clientName: string, 
+        orderId: string, 
+        fabricName: string, 
+        requiredQty: number,
+        percentage: number
+      }[] 
+    }>();
+
+    // Calculate Requirements across ALL customers
+    customers.forEach(client => {
+      client.orders?.forEach(order => {
+        if (!order.material || !order.requiredQty) return;
+        
+        const fabric = fabrics.find(f => f.name === order.material);
+        if (!fabric?.yarnComposition) return;
+
+        fabric.yarnComposition.forEach(comp => {
+          // Use yarnId if available, otherwise fallback to name
+          const key = comp.yarnId || comp.yarnName;
+          if (!key) return;
+          
+          const baseQty = (order.requiredQty * (comp.percentage || 0)) / 100;
+          const scrapMultiplier = 1 + ((comp.scrapPercentage || 0) / 100);
+          const totalNeeded = baseQty * scrapMultiplier;
+
+          const current = requirements.get(key) || { total: 0, allocations: [] };
+          
+          current.total += totalNeeded;
+          current.allocations.push({
+            clientName: client.name,
+            orderId: order.id,
+            fabricName: order.material,
+            requiredQty: totalNeeded,
+            percentage: comp.percentage || 0
+          });
+          
+          requirements.set(key, current);
+        });
+      });
+    });
+
+    // Aggregate Inventory
+    const stock = new Map<string, number>();
+    inventory.forEach(item => {
+      // Inventory items usually have yarnName. If we have yarnId in inventory, use it.
+      // Assuming inventory is linked by name for now if ID is missing, but ideally ID.
+      // Let's try to match by ID first, then name.
+      // The inventory structure has `yarnName`. Let's see if we can map it.
+      // The `yarns` array has `id` and `name`.
+      
+      // Strategy: Map inventory yarnName to yarnId if possible
+      const yarnDef = yarns.find(y => y.name === item.yarnName);
+      const key = yarnDef ? yarnDef.id : item.yarnName; // Fallback to name if no ID found
+      
+      const current = stock.get(key) || 0;
+      stock.set(key, current + item.quantity);
+    });
+
+    // Combine
+    const allKeys = new Set([...requirements.keys()]); // Only care about what we NEED
+    const result = Array.from(allKeys).map(key => {
+      // Resolve Name
+      const yarnDef = yarns.find(y => y.id === key) || yarns.find(y => y.name === key);
+      const name = yarnDef ? yarnDef.name : key;
+
+      const reqData = requirements.get(key) || { total: 0, allocations: [] };
+      const required = reqData.total;
+      const inStock = stock.get(key) || 0;
+      const balance = inStock - required;
+      const toBuy = Math.max(0, required - inStock);
+
+      return {
+        id: key,
+        name,
+        required,
+        inStock,
+        balance,
+        toBuy,
+        allocations: reqData.allocations
+      };
+    });
+
+    return result.sort((a, b) => b.toBuy - a.toBuy); // Show biggest "To Buy" first
+  }, [customers, fabrics, inventory, yarns, selectedCustomerId]);
+
+  const orderTotals = useMemo(() => {
+    if (!selectedCustomer || !selectedCustomer.orders) {
+      return { ordered: 0, manufactured: 0, remaining: 0, progress: 0 };
+    }
+
+    let totalOrdered = 0;
+    let totalRemaining = 0;
+
+    selectedCustomer.orders.forEach(order => {
+        const required = order.requiredQty || 0;
+        totalOrdered += required;
+
+        const statusInfo = order.material ? statsMap.get(order.material) : null;
+        const hasActive = statusInfo && statusInfo.active.length > 0;
+        
+        // Use the same logic as the row display
+        const displayRemaining = hasActive ? statusInfo.remaining : (order.remainingQty ?? (required - (order.producedQty || 0)));
+        totalRemaining += displayRemaining;
+    });
+
+    // Manufactured = Ordered - Remaining (as requested)
+    const totalManufactured = Math.max(0, totalOrdered - totalRemaining);
+    const progress = totalOrdered > 0 ? (totalManufactured / totalOrdered) * 100 : 0;
+
+    return { ordered: totalOrdered, manufactured: totalManufactured, remaining: totalRemaining, progress };
+  }, [selectedCustomer, statsMap]);
 
   const handleAddCustomer = async () => {
     if (!newCustomerName.trim()) return;
@@ -758,9 +1004,101 @@ export const ClientOrdersPage: React.FC = () => {
     setFabrics(await DataService.getFabrics());
   };
 
+  const handleOpenFabricDetails = (fabricName: string, qty: number, orderId?: string) => {
+    const fabric = fabrics.find(f => f.name === fabricName);
+    let allocations: Record<string, string> | undefined;
+
+    if (orderId && selectedCustomer) {
+        const order = selectedCustomer.orders.find(o => o.id === orderId);
+        if (order) {
+            allocations = order.yarnAllocations;
+        }
+    }
+
+    if (fabric) {
+      setFabricDetailsModal({
+        isOpen: true,
+        fabric,
+        orderQuantity: qty,
+        orderId,
+        customerId: selectedCustomerId || undefined,
+        allocations
+      });
+    }
+  };
+
+  const handleUpdateOrderAllocations = async (orderId: string, allocations: Record<string, string>) => {
+    if (!selectedCustomerId || !selectedCustomer) return;
+    
+    const updatedOrders = selectedCustomer.orders.map(order => {
+      if (order.id === orderId) {
+        // We need to add yarnAllocations to OrderRow type first, but for now we can cast or just add it if Firestore accepts it.
+        // Ideally we update OrderRow interface.
+        return { ...order, yarnAllocations: allocations };
+      }
+      return order;
+    });
+
+    // Optimistic Update
+    setCustomers(prev => prev.map(c => {
+      if (c.id === selectedCustomerId) {
+        return { ...c, orders: updatedOrders };
+      }
+      return c;
+    }));
+
+    await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+  };
+
+  const handleUpdateFabric = async (fabricId: string, updates: Partial<Fabric>) => {
+    await DataService.updateFabric(fabricId, updates);
+    // Refresh fabrics
+    setFabrics(await DataService.getFabrics());
+  };
+
+  const handleAddYarn = async (name: string): Promise<string> => {
+    const newId = await DataService.addYarn({
+      name,
+      yarnId: crypto.randomUUID()
+    });
+    setYarns(await DataService.getYarns());
+    return newId;
+  };
+
   const filteredCustomers = customers.filter(c => 
     c.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  // Calculate Total Yarn Requirements for the selected customer
+  const totalYarnRequirements = useMemo(() => {
+    if (!selectedCustomer) return [];
+    
+    const totals = new Map<string, number>();
+    
+    selectedCustomer.orders.forEach(order => {
+      if (!order.material || !order.requiredQty) return;
+      
+      const fabric = fabrics.find(f => f.name === order.material);
+      if (fabric && fabric.yarnComposition) {
+        fabric.yarnComposition.forEach(comp => {
+          const baseWeight = (order.requiredQty * (comp.percentage || 0)) / 100;
+          const scrapFactor = 1 + ((comp.scrapPercentage || 0) / 100);
+          const totalWeight = baseWeight * scrapFactor;
+          
+          const current = totals.get(comp.yarnId) || 0;
+          totals.set(comp.yarnId, current + totalWeight);
+        });
+      }
+    });
+
+    return Array.from(totals.entries()).map(([yarnId, weight]) => {
+      const yarn = yarns.find(y => y.id === yarnId);
+      return {
+        name: yarn ? yarn.name : 'Unknown Yarn',
+        weight
+      };
+    }).sort((a, b) => b.weight - a.weight);
+  }, [selectedCustomer, fabrics, yarns]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-100px)] bg-slate-50 rounded-xl overflow-hidden border border-slate-200 shadow-sm">
@@ -780,6 +1118,8 @@ export const ClientOrdersPage: React.FC = () => {
                onChange={(e) => setSelectedCustomerId(e.target.value)}
                className="w-full pl-3 pr-10 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none cursor-pointer font-medium text-slate-700"
              >
+               <option value={ALL_CLIENTS_ID} className="font-bold text-blue-600">All Clients Overview</option>
+               <option value={ALL_YARNS_ID} className="font-bold text-purple-600">All Yarn Requirements</option>
                <option value="" disabled>Select a client...</option>
                {customers.map(c => (
                  <option key={c.id} value={c.id}>{c.name}</option>
@@ -843,7 +1183,97 @@ export const ClientOrdersPage: React.FC = () => {
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden bg-white relative">
-        {selectedCustomer ? (
+        {selectedCustomerId === ALL_CLIENTS_ID ? (
+          <div className="flex-1 overflow-auto p-6 bg-slate-50">
+             <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
+                   <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                      <Users className="w-5 h-5 text-blue-600" />
+                      All Clients Overview
+                   </h2>
+                   <div className="text-sm text-slate-500">
+                      {allClientsStats.length} Active Clients
+                   </div>
+                </div>
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
+                    <tr>
+                      <th className="px-4 py-3">Client Name</th>
+                      <th className="px-4 py-3">Order Receive Date</th>
+                      <th className="px-4 py-3 text-right">Ordered</th>
+                      <th className="px-4 py-3 text-right">Manufactured</th>
+                      <th className="px-4 py-3 text-right">Remaining</th>
+                      <th className="px-4 py-3 text-right bg-orange-50">Delivery</th>
+                      <th className="px-4 py-3 text-right bg-red-50">Rem. Delivery</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {allClientsStats.map((client) => (
+                      <tr key={client.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-4 py-3 font-medium text-slate-800">{client.name}</td>
+                        <td className="px-4 py-3 text-slate-600">
+                          <div className="flex flex-wrap gap-1">
+                            {client.stats.dates.length > 0 ? client.stats.dates.map((d, i) => (
+                              <span key={i} className="px-1.5 py-0.5 bg-slate-100 rounded text-xs border border-slate-200">{d}</span>
+                            )) : '-'}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono text-slate-700">{client.stats.ordered.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-right font-mono text-emerald-600">{client.stats.manufactured.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-right font-mono text-amber-600 font-bold">{client.stats.remaining.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-right font-mono text-orange-600 bg-orange-50/30">{client.stats.delivery.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-right font-mono text-red-600 bg-red-50/30 font-bold">{client.stats.remainingDelivery.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+             </div>
+          </div>
+        ) : selectedCustomerId === ALL_YARNS_ID ? (
+          <div className="flex-1 overflow-auto p-6 bg-slate-50">
+             <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
+                   <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                      <Package className="w-5 h-5 text-purple-600" />
+                      All Yarn Requirements
+                   </h2>
+                   <div className="text-sm text-slate-500">
+                      Based on all active orders
+                   </div>
+                </div>
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
+                    <tr>
+                      <th className="px-4 py-3">Yarn Name</th>
+                      <th className="px-4 py-3 text-right">Total Required</th>
+                      <th className="px-4 py-3 text-right">In Stock</th>
+                      <th className="px-4 py-3 text-right">Balance</th>
+                      <th className="px-4 py-3 text-right bg-red-50">To Buy</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {allYarnStats.map((yarn) => (
+                      <tr 
+                        key={yarn.id} 
+                        className="hover:bg-slate-50 transition-colors cursor-pointer group"
+                        onClick={() => setSelectedYarnDetails(yarn)}
+                      >
+                        <td className="px-4 py-3 font-medium text-slate-800 group-hover:text-blue-600 transition-colors">{yarn.name}</td>
+                        <td className="px-4 py-3 text-right font-mono text-slate-700">{yarn.required.toLocaleString(undefined, { maximumFractionDigits: 1 })}</td>
+                        <td className="px-4 py-3 text-right font-mono text-blue-600">{yarn.inStock.toLocaleString(undefined, { maximumFractionDigits: 1 })}</td>
+                        <td className={`px-4 py-3 text-right font-mono font-bold ${yarn.balance >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          {yarn.balance > 0 ? '+' : ''}{yarn.balance.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono text-red-600 bg-red-50/30 font-bold">
+                          {yarn.toBuy > 0 ? yarn.toBuy.toLocaleString(undefined, { maximumFractionDigits: 1 }) : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+             </div>
+          </div>
+        ) : selectedCustomer ? (
           <>
             {/* Bulk Actions */}
             {selectedRows.size > 0 && (
@@ -886,7 +1316,7 @@ export const ClientOrdersPage: React.FC = () => {
             )}
 
             <div className="flex-1 overflow-auto p-4 bg-slate-50">
-              <div className="bg-white rounded-lg shadow border border-slate-200 overflow-visible min-w-max">
+              <div className="bg-white rounded-lg shadow border border-slate-200 overflow-visible min-w-max mb-4">
                 <table className="w-full text-sm border-collapse">
                   <thead className="bg-slate-100 text-slate-600 font-semibold sticky top-0 z-10 shadow-sm text-xs uppercase tracking-wider">
                     <tr>
@@ -939,11 +1369,98 @@ export const ClientOrdersPage: React.FC = () => {
                           handlePlanSearch={handlePlanSearch}
                           handleDeleteRow={handleDeleteRow}
                           selectedCustomerName={selectedCustomer.name}
+                          onOpenFabricDetails={handleOpenFabricDetails}
                         />
                       );
                     })}
                   </tbody>
                 </table>
+              </div>
+
+              {/* Order Summary & Yarn Requirements */}
+              <div className="mt-4 space-y-4">
+                {/* Order Summary Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                    <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Ordered</p>
+                            <p className="text-2xl font-bold text-slate-800 mt-1">{orderTotals.ordered.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
+                        </div>
+                        <div className="p-3 bg-blue-50 rounded-full">
+                            <Package className="w-6 h-6 text-blue-600" />
+                        </div>
+                    </div>
+                    
+                    <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Manufactured</p>
+                            <p className="text-2xl font-bold text-emerald-600 mt-1">{orderTotals.manufactured.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
+                        </div>
+                        <div className="p-3 bg-emerald-50 rounded-full">
+                            <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Remaining</p>
+                            <p className="text-2xl font-bold text-amber-600 mt-1">{orderTotals.remaining.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
+                        </div>
+                        <div className="p-3 bg-amber-50 rounded-full">
+                            <AlertCircle className="w-6 h-6 text-amber-600" />
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex flex-col justify-center">
+                        <div className="flex justify-between items-end mb-2">
+                            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Progress</p>
+                            <p className="text-lg font-bold text-blue-600">{orderTotals.progress.toFixed(1)}%</p>
+                        </div>
+                        <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                            <div 
+                                className="bg-blue-600 h-2.5 rounded-full transition-all duration-500" 
+                                style={{ width: `${Math.min(100, Math.max(0, orderTotals.progress))}%` }}
+                            ></div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Yarn Requirements Toggle */}
+                <div className="flex justify-end">
+                    <button 
+                        onClick={() => setShowYarnRequirements(!showYarnRequirements)}
+                        className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-colors shadow-sm"
+                    >
+                        <Calculator className="w-4 h-4 text-blue-600" />
+                        {showYarnRequirements ? 'Hide Yarn Requirements' : 'View Yarn Requirements'}
+                    </button>
+                </div>
+
+                {/* Total Yarn Requirements Footer */}
+                {showYarnRequirements && totalYarnRequirements.length > 0 && (
+                    <div className="bg-white rounded-lg shadow border border-slate-200 p-4 animate-in slide-in-from-bottom-4">
+                    <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                        <Calculator className="w-4 h-4 text-blue-600" />
+                        Total Yarn Requirements for {selectedCustomer.name}
+                    </h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                        {totalYarnRequirements.map((yarn, idx) => (
+                        <div 
+                            key={idx} 
+                            onClick={() => setInventoryViewModal({ isOpen: true, yarnName: yarn.name })}
+                            className="bg-slate-50 p-3 rounded-lg border border-slate-100 cursor-pointer hover:bg-blue-50 hover:border-blue-200 transition-all group"
+                        >
+                            <div className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-1 truncate group-hover:text-blue-600" title={yarn.name}>
+                            {yarn.name}
+                            </div>
+                            <div className="text-lg font-bold text-slate-800 font-mono group-hover:text-blue-700">
+                            {yarn.weight.toLocaleString(undefined, { maximumFractionDigits: 1 })} <span className="text-xs font-normal text-slate-500 group-hover:text-blue-400">kg</span>
+                            </div>
+                        </div>
+                        ))}
+                    </div>
+                    </div>
+                )}
               </div>
             </div>
           </>
@@ -1003,7 +1520,300 @@ export const ClientOrdersPage: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* Fabric Details Modal */}
+        {fabricDetailsModal.isOpen && fabricDetailsModal.fabric && (
+          <FabricDetailsModal
+            isOpen={fabricDetailsModal.isOpen}
+            onClose={() => setFabricDetailsModal(prev => ({ ...prev, isOpen: false }))}
+            fabric={fabricDetailsModal.fabric}
+            orderQuantity={fabricDetailsModal.orderQuantity}
+            allYarns={yarns}
+            onUpdateFabric={handleUpdateFabric}
+            onAddYarn={handleAddYarn}
+            orderId={fabricDetailsModal.orderId}
+            customerId={fabricDetailsModal.customerId}
+            customerName={selectedCustomer?.name}
+            existingAllocations={fabricDetailsModal.allocations}
+            onUpdateOrderAllocations={handleUpdateOrderAllocations}
+          />
+        )}
+
+        {/* Inventory View Modal */}
+        {inventoryViewModal.isOpen && (
+          <InventoryViewModal 
+            isOpen={inventoryViewModal.isOpen}
+            onClose={() => setInventoryViewModal({ isOpen: false, yarnName: '' })}
+            yarnName={inventoryViewModal.yarnName}
+          />
+        )}
+
+        {/* Yarn Details Modal */}
+        {selectedYarnDetails && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+              <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    <Package className="w-6 h-6 text-purple-600" />
+                    {selectedYarnDetails.name}
+                  </h2>
+                  <div className="text-sm text-slate-500 mt-1">
+                    Detailed allocation and inventory breakdown
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setSelectedYarnDetails(null)}
+                  className="p-2 hover:bg-slate-200 rounded-full transition-colors"
+                >
+                  <X className="w-5 h-5 text-slate-500" />
+                </button>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                {/* Summary Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                  <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
+                    <div className="text-sm text-blue-600 font-medium mb-1">Total Required</div>
+                    <div className="text-2xl font-bold text-blue-800">
+                      {selectedYarnDetails.required.toLocaleString(undefined, { maximumFractionDigits: 1 })} <span className="text-sm font-normal text-blue-600">kg</span>
+                    </div>
+                  </div>
+                  <div className="bg-emerald-50 p-4 rounded-lg border border-emerald-100">
+                    <div className="text-sm text-emerald-600 font-medium mb-1">In Stock</div>
+                    <div className="text-2xl font-bold text-emerald-800">
+                      {selectedYarnDetails.inStock.toLocaleString(undefined, { maximumFractionDigits: 1 })} <span className="text-sm font-normal text-emerald-600">kg</span>
+                    </div>
+                  </div>
+                  <div className={`p-4 rounded-lg border ${selectedYarnDetails.balance >= 0 ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100'}`}>
+                    <div className={`text-sm font-medium mb-1 ${selectedYarnDetails.balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>Balance</div>
+                    <div className={`text-2xl font-bold ${selectedYarnDetails.balance >= 0 ? 'text-green-800' : 'text-red-800'}`}>
+                      {selectedYarnDetails.balance > 0 ? '+' : ''}{selectedYarnDetails.balance.toLocaleString(undefined, { maximumFractionDigits: 1 })} <span className="text-sm font-normal">kg</span>
+                    </div>
+                  </div>
+                  <div className="bg-orange-50 p-4 rounded-lg border border-orange-100">
+                    <div className="text-sm text-orange-600 font-medium mb-1">To Buy</div>
+                    <div className="text-2xl font-bold text-orange-800">
+                      {selectedYarnDetails.toBuy.toLocaleString(undefined, { maximumFractionDigits: 1 })} <span className="text-sm font-normal text-orange-600">kg</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  {/* Allocations Table */}
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                      <Users className="w-5 h-5 text-blue-600" />
+                      Allocations (Required by Orders)
+                    </h3>
+                    <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
+                      <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
+                          <tr>
+                            <th className="px-4 py-2">Client</th>
+                            <th className="px-4 py-2">Fabric</th>
+                            <th className="px-4 py-2 text-right">Comp %</th>
+                            <th className="px-4 py-2 text-right">Required</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {selectedYarnDetails.allocations && selectedYarnDetails.allocations.length > 0 ? (
+                            selectedYarnDetails.allocations.map((alloc: any, idx: number) => (
+                              <tr key={idx} className="hover:bg-slate-50">
+                                <td className="px-4 py-2 font-medium text-slate-800">{alloc.clientName}</td>
+                                <td className="px-4 py-2 text-slate-600">{alloc.fabricName}</td>
+                                <td className="px-4 py-2 text-right text-slate-500">{alloc.percentage}%</td>
+                                <td className="px-4 py-2 text-right font-mono font-medium text-slate-700">
+                                  {alloc.requiredQty.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                                </td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td colSpan={4} className="px-4 py-8 text-center text-slate-400 italic">
+                                No active allocations found.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                        <tfoot className="bg-slate-50 border-t border-slate-200 font-semibold text-slate-700">
+                          <tr>
+                            <td colSpan={3} className="px-4 py-2 text-right">Total Allocated:</td>
+                            <td className="px-4 py-2 text-right font-mono">
+                              {selectedYarnDetails.required.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Inventory Lots Table */}
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                      <Package className="w-5 h-5 text-emerald-600" />
+                      Available Inventory Lots
+                    </h3>
+                    <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
+                      <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
+                          <tr>
+                            <th className="px-4 py-2">Lot Number</th>
+                            <th className="px-4 py-2 text-right">Quantity</th>
+                            <th className="px-4 py-2 text-right">Last Updated</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {inventory
+                            .filter(item => item.yarnName === selectedYarnDetails.name || (selectedYarnDetails.id && item.yarnName === yarns.find(y => y.id === selectedYarnDetails.id)?.name))
+                            .length > 0 ? (
+                              inventory
+                                .filter(item => item.yarnName === selectedYarnDetails.name || (selectedYarnDetails.id && item.yarnName === yarns.find(y => y.id === selectedYarnDetails.id)?.name))
+                                .map((item) => (
+                                  <tr key={item.id} className="hover:bg-slate-50">
+                                    <td className="px-4 py-2 font-medium text-slate-800">{item.lotNumber || 'N/A'}</td>
+                                    <td className="px-4 py-2 text-right font-mono font-medium text-emerald-600">
+                                      {item.quantity.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                                    </td>
+                                    <td className="px-4 py-2 text-right text-slate-500 text-xs">
+                                      {item.lastUpdated ? new Date(item.lastUpdated).toLocaleDateString() : '-'}
+                                    </td>
+                                  </tr>
+                                ))
+                            ) : (
+                              <tr>
+                                <td colSpan={3} className="px-4 py-8 text-center text-slate-400 italic">
+                                  No inventory lots found for this yarn.
+                                </td>
+                              </tr>
+                            )}
+                        </tbody>
+                        <tfoot className="bg-slate-50 border-t border-slate-200 font-semibold text-slate-700">
+                          <tr>
+                            <td className="px-4 py-2 text-right">Total In Stock:</td>
+                            <td className="px-4 py-2 text-right font-mono text-emerald-600">
+                              {selectedYarnDetails.inStock.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                            </td>
+                            <td></td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="p-4 border-t border-slate-200 bg-slate-50 flex justify-end">
+                <button 
+                  onClick={() => setSelectedYarnDetails(null)}
+                  className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium shadow-sm"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 };
+
+const InventoryViewModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  yarnName: string;
+}> = ({ isOpen, onClose, yarnName }) => {
+  const [items, setItems] = useState<YarnInventoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (isOpen && yarnName) {
+      const fetchInventory = async () => {
+        setLoading(true);
+        try {
+          const q = query(collection(db, 'yarn_inventory'), where('yarnName', '==', yarnName));
+          const snapshot = await getDocs(q);
+          const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as YarnInventoryItem));
+          setItems(data);
+        } catch (err) {
+          console.error("Error fetching inventory:", err);
+        } finally {
+          setLoading(false);
+        }
+      };
+      fetchInventory();
+    }
+  }, [isOpen, yarnName]);
+
+  if (!isOpen) return null;
+
+  const totalQty = items.reduce((sum, item) => sum + item.quantity, 0);
+
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[80vh]">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+          <div>
+            <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <Package className="w-5 h-5 text-blue-600" />
+              Inventory: {yarnName}
+            </h2>
+            <p className="text-sm text-slate-500">
+              Total Available: <span className="font-bold text-slate-700">{totalQty.toLocaleString()} kg</span>
+            </p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+            <X className="w-5 h-5 text-slate-400" />
+          </button>
+        </div>
+
+        <div className="p-0 overflow-y-auto flex-1">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            </div>
+          ) : items.length > 0 ? (
+            <table className="w-full text-sm text-left">
+              <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+                <tr>
+                  <th className="px-6 py-3">Lot Number</th>
+                  <th className="px-6 py-3 text-right">Quantity (kg)</th>
+                  <th className="px-6 py-3 text-right">Last Updated</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {items.map((item) => (
+                  <tr key={item.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-3 font-medium text-slate-700">{item.lotNumber}</td>
+                    <td className="px-6 py-3 text-right font-mono text-slate-600">
+                      {item.quantity.toLocaleString()}
+                    </td>
+                    <td className="px-6 py-3 text-right text-slate-400 text-xs">
+                      {new Date(item.lastUpdated).toLocaleDateString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="text-center py-12 text-slate-400">
+              <AlertCircle className="w-12 h-12 mx-auto mb-2 text-slate-200" />
+              <p>No inventory records found for this yarn.</p>
+            </div>
+          )}
+        </div>
+        
+        <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+          <button 
+            onClick={onClose}
+            className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+

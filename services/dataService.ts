@@ -75,6 +75,8 @@ export const DataService = {
     return docRef.id;
   },
 
+
+
   async addClient(client: Omit<Client, 'id'>): Promise<string> {
     const docRef = await addDoc(collection(db, 'clients'), {
       ...client,
