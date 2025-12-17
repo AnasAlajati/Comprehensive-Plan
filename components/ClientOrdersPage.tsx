@@ -8,11 +8,12 @@ import {
   deleteDoc,
   query,
   where,
+  or,
   getDocs
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
-import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem } from '../types';
+import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem } from '../types';
 import { FabricDetailsModal } from './FabricDetailsModal';
 import { 
   Plus, 
@@ -28,6 +29,9 @@ import {
   Calculator,
   CheckSquare,
   Square,
+  Droplets,
+  ChevronDown,
+  ChevronRight,
   Package,
   Users,
   ArrowRight
@@ -204,7 +208,8 @@ const MemoizedOrderRow = React.memo(({
   handlePlanSearch,
   handleDeleteRow,
   selectedCustomerName,
-  onOpenFabricDetails
+  onOpenFabricDetails,
+  showDyehouse
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -217,7 +222,9 @@ const MemoizedOrderRow = React.memo(({
   handleDeleteRow: (id: string) => void;
   selectedCustomerName: string;
   onOpenFabricDetails: (fabricName: string, qty: number, orderId: string) => void;
+  showDyehouse: boolean;
 }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
   const refCode = row.material ? `${selectedCustomerName}-${row.material}` : '-';
   const hasActive = statusInfo && statusInfo.active.length > 0;
   const displayRemaining = hasActive ? statusInfo.remaining : row.remainingQty;
@@ -235,7 +242,27 @@ const MemoizedOrderRow = React.memo(({
     }, 0);
   }
 
+  // Calculate Assigned Machines Summary
+  const assignedMachinesSummary = useMemo(() => {
+    if (!row.dyeingPlan || row.dyeingPlan.length === 0) return '-';
+    
+    const machineCounts = new Map<string, number>();
+    row.dyeingPlan.forEach(batch => {
+      if (batch.machine) {
+        const current = machineCounts.get(batch.machine) || 0;
+        machineCounts.set(batch.machine, current + 1);
+      }
+    });
+
+    if (machineCounts.size === 0) return '-';
+
+    return Array.from(machineCounts.entries())
+      .map(([machine, count]) => `${machine}*${count}`)
+      .join(' + ');
+  }, [row.dyeingPlan]);
+
   return (
+    <>
     <tr className={`transition-colors group text-sm ${isSelected ? 'bg-blue-50' : 'hover:bg-blue-50/30'}`}>
       {/* Checkbox */}
       <td className="p-0 border-r border-slate-200 text-center align-middle">
@@ -244,91 +271,144 @@ const MemoizedOrderRow = React.memo(({
         </button>
       </td>
 
-      {/* Fabric */}
-      <td className="p-0 border-r border-slate-200 relative group/fabric" title={refCode}>
-        <div className="flex items-center h-full w-full">
-          <div className="flex-1 h-full flex flex-col justify-center">
-            <SearchDropdown
-              id={`fabric-${row.id}`}
-              options={fabrics}
-              value={row.material}
-              onChange={(val) => handleUpdateOrder(row.id, { material: val })}
-              onCreateNew={handleCreateFabric}
-              placeholder="Select Fabric..."
+      {showDyehouse ? (
+        <>
+          {/* Fabric (Read-only in Dyehouse View) */}
+          <td className="p-0 border-r border-slate-200 relative group/fabric" title={refCode}>
+             <div className="flex items-center h-full w-full px-3 py-2 text-slate-700 font-medium">
+                {row.material || '-'}
+             </div>
+          </td>
+          {/* Dyehouse */}
+          <td className="p-0 border-r border-slate-200">
+            <input 
+              type="text"
+              className="w-full h-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50"
+              value={row.dyehouse || ''}
+              onChange={(e) => handleUpdateOrder(row.id, { dyehouse: e.target.value })}
+              placeholder="Dyehouse..."
             />
-            {hasComposition && (
-               <div className="px-2 pb-1 text-[10px] text-slate-500 font-mono flex items-center gap-1 opacity-0 group-hover/fabric:opacity-100 transition-opacity">
-                 <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-                 <span>Verified</span>
-               </div>
-            )}
-          </div>
-          {row.material && (
-            <button
-              onClick={() => onOpenFabricDetails(row.material, row.requiredQty, row.id)}
-              className={`absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded transition-all z-10 ${hasComposition ? 'text-emerald-600 bg-emerald-50 opacity-100' : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50 opacity-0 group-hover/fabric:opacity-100'}`}
-              title="Yarn Composition"
+          </td>
+          {/* Assigned Machines (Calculated) */}
+          <td className="p-0 border-r border-slate-200">
+             <div className="flex items-center h-full w-full px-3 py-2 text-slate-700 font-mono text-xs">
+                {assignedMachinesSummary}
+             </div>
+          </td>
+          {/* Expand Button */}
+          <td className="p-0 text-center border-r border-slate-200">
+            <button 
+              onClick={() => setIsExpanded(!isExpanded)}
+              className={`p-2 rounded-full transition-colors ${isExpanded ? 'bg-blue-100 text-blue-600' : 'text-slate-400 hover:bg-slate-100'}`}
+              title="Manage Colors"
             >
-              <Calculator className="w-3 h-3" />
+              {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             </button>
-          )}
-        </div>
-      </td>
-
-      {/* Accessories */}
-      <td className="p-0 border-r border-slate-200 relative">
-        <input 
-          type="text"
-          className="w-full h-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50"
-          value={row.accessory}
-          onChange={(e) => handleUpdateOrder(row.id, { accessory: e.target.value })}
-          placeholder=""
-        />
-        {row.accessoryPercentage != null && row.accessoryPercentage > 0 && (
-          <div className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded pointer-events-none">
-            {row.accessoryPercentage}%
-          </div>
-        )}
-      </td>
-
-      {/* Acc. Qty */}
-      <td className="p-0 border-r border-slate-200">
-          <input 
-          type="number"
-          className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs"
-          value={row.accessoryQty ?? ''}
-          onChange={(e) => handleUpdateOrder(row.id, { accessoryQty: Number(e.target.value) })}
-          placeholder="-"
-        />
-      </td>
-
-      {/* Status / Plan (Combined) */}
-      <td className="p-2 border-r border-slate-200 align-middle">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex flex-col gap-1 flex-1 min-w-0">
-            {statusInfo ? (
-              <>
-                {statusInfo.active.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {statusInfo.active.map((m: string, i: number) => (
-                      <span key={`a-${i}`} className="text-[10px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded-full font-medium whitespace-nowrap border border-emerald-200">
-                        {m}
-                      </span>
-                    ))}
-                  </div>
+          </td>
+        </>
+      ) : (
+        <>
+          {/* Fabric */}
+          <td className="p-0 border-r border-slate-200 relative group/fabric" title={refCode}>
+            <div className="flex items-center h-full w-full">
+              <div className="flex-1 h-full flex flex-col justify-center">
+                <SearchDropdown
+                  id={`fabric-${row.id}`}
+                  options={fabrics}
+                  value={row.material}
+                  onChange={(val) => handleUpdateOrder(row.id, { material: val })}
+                  onCreateNew={handleCreateFabric}
+                  placeholder="Select Fabric..."
+                />
+                {hasComposition && (
+                   <div className="px-2 pb-1 text-[10px] text-slate-500 font-mono flex items-center gap-1 opacity-0 group-hover/fabric:opacity-100 transition-opacity">
+                     <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                     <span>Verified</span>
+                   </div>
                 )}
-                {statusInfo.planned.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {statusInfo.planned.map((m: string, i: number) => (
-                      <span key={`p-${i}`} className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium whitespace-nowrap border border-blue-200">
-                        {m}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {/* Fallback if no active/planned but statusInfo exists */}
-                {statusInfo.active.length === 0 && statusInfo.planned.length === 0 && (
-                   (displayRemaining || 0) > 0 ? (
+              </div>
+              {row.material && (
+                <button
+                  onClick={() => onOpenFabricDetails(row.material, row.requiredQty, row.id)}
+                  className={`absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded transition-all z-10 ${hasComposition ? 'text-emerald-600 bg-emerald-50 opacity-100' : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50 opacity-0 group-hover/fabric:opacity-100'}`}
+                  title="Yarn Composition"
+                >
+                  <Calculator className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          </td>
+
+          {/* Accessories */}
+          <td className="p-0 border-r border-slate-200 relative">
+            <input 
+              type="text"
+              className="w-full h-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50"
+              value={row.accessory}
+              onChange={(e) => handleUpdateOrder(row.id, { accessory: e.target.value })}
+              placeholder=""
+            />
+            {row.accessoryPercentage != null && row.accessoryPercentage > 0 && (
+              <div className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded pointer-events-none">
+                {row.accessoryPercentage}%
+              </div>
+            )}
+          </td>
+
+          {/* Acc. Qty */}
+          <td className="p-0 border-r border-slate-200">
+              <input 
+              type="number"
+              className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs"
+              value={row.accessoryQty ?? ''}
+              onChange={(e) => handleUpdateOrder(row.id, { accessoryQty: Number(e.target.value) })}
+              placeholder="-"
+            />
+          </td>
+        </>
+      )}
+
+      {!showDyehouse && (
+        <>
+          {/* Status / Plan (Combined) */}
+          <td className="p-2 border-r border-slate-200 align-middle">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-col gap-1 flex-1 min-w-0">
+                {statusInfo ? (
+                  <>
+                    {statusInfo.active.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {statusInfo.active.map((m: string, i: number) => (
+                          <span key={`a-${i}`} className="text-[10px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded-full font-medium whitespace-nowrap border border-emerald-200">
+                            {m}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {statusInfo.planned.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {statusInfo.planned.map((m: string, i: number) => (
+                          <span key={`p-${i}`} className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium whitespace-nowrap border border-blue-200">
+                            {m}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {/* Fallback if no active/planned but statusInfo exists */}
+                    {statusInfo.active.length === 0 && statusInfo.planned.length === 0 && (
+                       (displayRemaining || 0) > 0 ? (
+                        <span className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit">
+                          Not Planned
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit">
+                          Finished
+                        </span>
+                      )
+                    )}
+                  </>
+                ) : (
+                  (displayRemaining || 0) > 0 ? (
                     <span className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit">
                       Not Planned
                     </span>
@@ -338,29 +418,19 @@ const MemoizedOrderRow = React.memo(({
                     </span>
                   )
                 )}
-              </>
-            ) : (
-              (displayRemaining || 0) > 0 ? (
-                <span className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit">
-                  Not Planned
-                </span>
-              ) : (
-                <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit">
-                  Finished
-                </span>
-              )
-            )}
-          </div>
-          
-          <button
-            onClick={() => handlePlanSearch(selectedCustomerName, row.material)}
-            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-all flex-shrink-0"
-            title="Search Plan"
-          >
-            <Search className="w-4 h-4" />
-          </button>
-        </div>
-      </td>
+              </div>
+              
+              <button
+                onClick={() => handlePlanSearch(selectedCustomerName, row.material)}
+                className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-all flex-shrink-0"
+                title="Search Plan"
+              >
+                <Search className="w-4 h-4" />
+              </button>
+            </div>
+          </td>
+        </>
+      )}
 
       {/* Ordered Qty */}
       <td className="p-0 border-r border-slate-200">
@@ -380,78 +450,82 @@ const MemoizedOrderRow = React.memo(({
         />
       </td>
 
-      {/* Remaining Qty */}
-      <td className={`p-0 border-r border-slate-200 font-mono font-bold ${hasActive ? 'bg-emerald-50/30' : ''}`}>
-        <input 
-          type="number"
-          className={`w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 ${hasActive ? 'text-emerald-600' : 'text-slate-600'}`}
-          value={displayRemaining ?? ''}
-          onChange={(e) => handleUpdateOrder(row.id, { remainingQty: Number(e.target.value) })}
-        />
-      </td>
+      {!showDyehouse && (
+        <>
+          {/* Remaining Qty */}
+          <td className={`p-0 border-r border-slate-200 font-mono font-bold ${hasActive ? 'bg-emerald-50/30' : ''}`}>
+            <input 
+              type="number"
+              className={`w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 ${hasActive ? 'text-emerald-600' : 'text-slate-600'}`}
+              value={displayRemaining ?? ''}
+              onChange={(e) => handleUpdateOrder(row.id, { remainingQty: Number(e.target.value) })}
+            />
+          </td>
 
-      {/* Order Receive Date */}
-      <td className="p-0 border-r border-slate-200">
-        <input 
-          type="date"
-          className="w-full h-full px-2 py-2 text-center bg-transparent outline-none focus:bg-blue-50 text-xs text-slate-600"
-          value={row.orderReceiptDate || ''}
-          onChange={(e) => handleUpdateOrder(row.id, { orderReceiptDate: e.target.value })}
-        />
-      </td>
+          {/* Order Receive Date */}
+          <td className="p-0 border-r border-slate-200">
+            <input 
+              type="date"
+              className="w-full h-full px-2 py-2 text-center bg-transparent outline-none focus:bg-blue-50 text-xs text-slate-600"
+              value={row.orderReceiptDate || ''}
+              onChange={(e) => handleUpdateOrder(row.id, { orderReceiptDate: e.target.value })}
+            />
+          </td>
 
-      {/* Start Date (Auto) */}
-      <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500">
-        {statusInfo?.startDate || '-'}
-      </td>
+          {/* Start Date (Auto) */}
+          <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500">
+            {statusInfo?.startDate || '-'}
+          </td>
 
-      {/* End Date (Auto) */}
-      <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500">
-        {statusInfo?.endDate || '-'}
-      </td>
+          {/* End Date (Auto) */}
+          <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500">
+            {statusInfo?.endDate || '-'}
+          </td>
 
-      {/* Scrap (Auto) */}
-      <td className="p-2 text-right border-r border-slate-200 text-xs text-red-500 font-mono">
-        {statusInfo?.scrap ? statusInfo.scrap.toFixed(1) : '-'}
-      </td>
+          {/* Scrap (Auto) */}
+          <td className="p-2 text-right border-r border-slate-200 text-xs text-red-500 font-mono">
+            {statusInfo?.scrap ? statusInfo.scrap.toFixed(1) : '-'}
+          </td>
 
-      {/* Others (Auto) */}
-      <td className="p-2 text-left border-r border-slate-200 text-xs text-slate-500 truncate max-w-[100px]" title={statusInfo?.others}>
-        {statusInfo?.others || '-'}
-      </td>
+          {/* Others (Auto) */}
+          <td className="p-2 text-left border-r border-slate-200 text-xs text-slate-500 truncate max-w-[100px]" title={statusInfo?.others}>
+            {statusInfo?.others || '-'}
+          </td>
 
-      {/* Notes */}
-      <td className="p-0 border-r border-slate-200">
-        <textarea
-          className="w-full h-full px-2 py-1 bg-transparent outline-none focus:bg-blue-50 text-xs resize-none overflow-hidden"
-          value={row.notes || ''}
-          onChange={(e) => handleUpdateOrder(row.id, { notes: e.target.value })}
-          placeholder="Notes..."
-          rows={1}
-        />
-      </td>
+          {/* Notes */}
+          <td className="p-0 border-r border-slate-200">
+            <textarea
+              className="w-full h-full px-2 py-1 bg-transparent outline-none focus:bg-blue-50 text-xs resize-none overflow-hidden"
+              value={row.notes || ''}
+              onChange={(e) => handleUpdateOrder(row.id, { notes: e.target.value })}
+              placeholder="Notes..."
+              rows={1}
+            />
+          </td>
 
-      {/* Fabric Delivery */}
-      <td className="p-0 border-r border-slate-200 bg-orange-50/50">
-        <input 
-          type="number"
-          className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-orange-100 font-mono text-slate-700 text-xs"
-          value={row.batchDeliveries ?? ''}
-          onChange={(e) => handleUpdateOrder(row.id, { batchDeliveries: Number(e.target.value) })}
-          placeholder="-"
-        />
-      </td>
+          {/* Fabric Delivery */}
+          <td className="p-0 border-r border-slate-200 bg-orange-50/50">
+            <input 
+              type="number"
+              className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-orange-100 font-mono text-slate-700 text-xs"
+              value={row.batchDeliveries ?? ''}
+              onChange={(e) => handleUpdateOrder(row.id, { batchDeliveries: Number(e.target.value) })}
+              placeholder="-"
+            />
+          </td>
 
-      {/* Accessory Delivery */}
-      <td className="p-0 border-r border-slate-200 bg-purple-50/50">
-        <input 
-          type="number"
-          className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-purple-100 font-mono text-slate-700 text-xs"
-          value={row.accessoryDeliveries ?? ''}
-          onChange={(e) => handleUpdateOrder(row.id, { accessoryDeliveries: Number(e.target.value) })}
-          placeholder="-"
-        />
-      </td>
+          {/* Accessory Delivery */}
+          <td className="p-0 border-r border-slate-200 bg-purple-50/50">
+            <input 
+              type="number"
+              className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-purple-100 font-mono text-slate-700 text-xs"
+              value={row.accessoryDeliveries ?? ''}
+              onChange={(e) => handleUpdateOrder(row.id, { accessoryDeliveries: Number(e.target.value) })}
+              placeholder="-"
+            />
+          </td>
+        </>
+      )}
 
       {/* Actions */}
       <td className="p-0 text-center">
@@ -463,6 +537,121 @@ const MemoizedOrderRow = React.memo(({
         </button>
       </td>
     </tr>
+    
+    {/* Expanded Dyehouse Plan Row */}
+    {showDyehouse && isExpanded && (
+      <tr className="bg-slate-50/50 animate-in slide-in-from-top-2">
+        <td colSpan={1} className="border-r border-slate-200"></td>
+        <td colSpan={5} className="p-4 border-b border-slate-200 shadow-inner">
+            <div className="bg-white rounded border border-slate-200 overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
+                  <tr>
+                    <th className="px-3 py-2 text-left w-1/4">Color</th>
+                    <th className="px-3 py-2 text-right w-24">Qty (kg)</th>
+                    <th className="px-3 py-2 text-left w-1/4">Assigned Machine</th>
+                    <th className="px-3 py-2 text-left">Notes</th>
+                    <th className="px-3 py-2 w-10"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(row.dyeingPlan || []).map((batch, idx) => (
+                    <tr key={batch.id || idx} className="group/batch hover:bg-blue-50/30">
+                      <td className="p-0">
+                        <input
+                          type="text"
+                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50"
+                          value={batch.color}
+                          onChange={(e) => {
+                            const newPlan = [...(row.dyeingPlan || [])];
+                            newPlan[idx] = { ...batch, color: e.target.value };
+                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                          }}
+                          placeholder="Color Name..."
+                        />
+                      </td>
+                      <td className="p-0">
+                        <input
+                          type="number"
+                          className="w-full px-3 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono"
+                          value={batch.quantity || ''}
+                          onChange={(e) => {
+                            const newPlan = [...(row.dyeingPlan || [])];
+                            newPlan[idx] = { ...batch, quantity: Number(e.target.value) };
+                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                          }}
+                          placeholder="0"
+                        />
+                      </td>
+                      <td className="p-0">
+                        <input
+                          type="text"
+                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50"
+                          value={batch.machine}
+                          onChange={(e) => {
+                            const newPlan = [...(row.dyeingPlan || [])];
+                            newPlan[idx] = { ...batch, machine: e.target.value };
+                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                          }}
+                          placeholder="Machine..."
+                        />
+                      </td>
+                      <td className="p-0">
+                        <input
+                          type="text"
+                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50"
+                          value={batch.notes}
+                          onChange={(e) => {
+                            const newPlan = [...(row.dyeingPlan || [])];
+                            newPlan[idx] = { ...batch, notes: e.target.value };
+                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                          }}
+                          placeholder="Notes..."
+                        />
+                      </td>
+                      <td className="p-0 text-center">
+                        <button
+                          onClick={() => {
+                            const newPlan = row.dyeingPlan?.filter((_, i) => i !== idx);
+                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                          }}
+                          className="p-2 text-slate-400 hover:text-red-500 opacity-0 group-hover/batch:opacity-100 transition-opacity"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {/* Add Button Row */}
+                  <tr>
+                    <td colSpan={5} className="p-2">
+                      <button
+                        onClick={() => {
+                          const newBatch = {
+                            id: crypto.randomUUID(),
+                            color: '',
+                            quantity: 0,
+                            machine: '',
+                            notes: ''
+                          };
+                          handleUpdateOrder(row.id, { 
+                            dyeingPlan: [...(row.dyeingPlan || []), newBatch] 
+                          });
+                        }}
+                        className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50 transition-colors"
+                      >
+                        <Plus className="w-3 h-3" />
+                        Add Color
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+        </div>
+        </td>
+      </tr>
+    )}
+    </>
   );
 });
 
@@ -479,6 +668,7 @@ export const ClientOrdersPage: React.FC = () => {
   const [activeDay, setActiveDay] = useState<string>(new Date().toISOString().split('T')[0]);
   const [showYarnRequirements, setShowYarnRequirements] = useState(false);
   const [selectedYarnDetails, setSelectedYarnDetails] = useState<any>(null);
+  const [showDyehouse, setShowDyehouse] = useState(false);
   
   // Fabric Details Modal State
   const [fabricDetailsModal, setFabricDetailsModal] = useState<{
@@ -487,7 +677,7 @@ export const ClientOrdersPage: React.FC = () => {
     orderQuantity: number;
     orderId?: string;
     customerId?: string;
-    allocations?: Record<string, string>;
+    allocations?: Record<string, YarnAllocationItem[]>;
   }>({ isOpen: false, fabric: null, orderQuantity: 0 });
 
   // Fix for state reset issue
@@ -509,7 +699,16 @@ export const ClientOrdersPage: React.FC = () => {
   const [inventoryViewModal, setInventoryViewModal] = useState<{
     isOpen: boolean;
     yarnName: string;
+    yarnId?: string;
   }>({ isOpen: false, yarnName: '' });
+
+  // Yarn Breakdown Modal State
+  const [yarnBreakdownModal, setYarnBreakdownModal] = useState<{
+    isOpen: boolean;
+    yarnName: string;
+    totalWeight: number;
+    fabrics: { name: string; weight: number }[];
+  }>({ isOpen: false, yarnName: '', totalWeight: 0, fabrics: [] });
 
   // Fetch Data
   useEffect(() => {
@@ -1006,7 +1205,7 @@ export const ClientOrdersPage: React.FC = () => {
 
   const handleOpenFabricDetails = (fabricName: string, qty: number, orderId?: string) => {
     const fabric = fabrics.find(f => f.name === fabricName);
-    let allocations: Record<string, string> | undefined;
+    let allocations: Record<string, YarnAllocationItem[]> | undefined;
 
     if (orderId && selectedCustomer) {
         const order = selectedCustomer.orders.find(o => o.id === orderId);
@@ -1027,13 +1226,11 @@ export const ClientOrdersPage: React.FC = () => {
     }
   };
 
-  const handleUpdateOrderAllocations = async (orderId: string, allocations: Record<string, string>) => {
+  const handleUpdateOrderAllocations = async (orderId: string, allocations: Record<string, YarnAllocationItem[]>) => {
     if (!selectedCustomerId || !selectedCustomer) return;
     
     const updatedOrders = selectedCustomer.orders.map(order => {
       if (order.id === orderId) {
-        // We need to add yarnAllocations to OrderRow type first, but for now we can cast or just add it if Firestore accepts it.
-        // Ideally we update OrderRow interface.
         return { ...order, yarnAllocations: allocations };
       }
       return order;
@@ -1073,7 +1270,8 @@ export const ClientOrdersPage: React.FC = () => {
   const totalYarnRequirements = useMemo(() => {
     if (!selectedCustomer) return [];
     
-    const totals = new Map<string, number>();
+    // Map<yarnId, { totalWeight: number, fabrics: Map<fabricName, number> }>
+    const totals = new Map<string, { totalWeight: number, fabrics: Map<string, number> }>();
     
     selectedCustomer.orders.forEach(order => {
       if (!order.material || !order.requiredQty) return;
@@ -1085,17 +1283,29 @@ export const ClientOrdersPage: React.FC = () => {
           const scrapFactor = 1 + ((comp.scrapPercentage || 0) / 100);
           const totalWeight = baseWeight * scrapFactor;
           
-          const current = totals.get(comp.yarnId) || 0;
-          totals.set(comp.yarnId, current + totalWeight);
+          if (!totals.has(comp.yarnId)) {
+            totals.set(comp.yarnId, { totalWeight: 0, fabrics: new Map() });
+          }
+          
+          const entry = totals.get(comp.yarnId)!;
+          entry.totalWeight += totalWeight;
+          
+          const currentFabricWeight = entry.fabrics.get(order.material) || 0;
+          entry.fabrics.set(order.material, currentFabricWeight + totalWeight);
         });
       }
     });
 
-    return Array.from(totals.entries()).map(([yarnId, weight]) => {
+    return Array.from(totals.entries()).map(([yarnId, data]) => {
       const yarn = yarns.find(y => y.id === yarnId);
       return {
+        id: yarnId,
         name: yarn ? yarn.name : 'Unknown Yarn',
-        weight
+        weight: data.totalWeight,
+        fabrics: Array.from(data.fabrics.entries()).map(([fabricName, weight]) => ({
+            name: fabricName,
+            weight
+        })).sort((a, b) => b.weight - a.weight)
       };
     }).sort((a, b) => b.weight - a.weight);
   }, [selectedCustomer, fabrics, yarns]);
@@ -1157,6 +1367,16 @@ export const ClientOrdersPage: React.FC = () => {
                 </button>
              </div>
           )}
+
+          <div className="h-6 w-px bg-slate-200 hidden sm:block mx-2"></div>
+
+          <button 
+            onClick={() => setShowDyehouse(!showDyehouse)}
+            className={`flex items-center gap-2 px-3 py-2 border text-sm rounded-lg transition-colors font-medium ${showDyehouse ? 'bg-purple-100 border-purple-300 text-purple-800' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}
+          >
+            <Droplets className="w-4 h-4" />
+            {showDyehouse ? 'Show Fabric Info' : 'Show Dyehouse Info'}
+          </button>
         </div>
 
         {/* Right Actions */}
@@ -1312,6 +1532,8 @@ export const ClientOrdersPage: React.FC = () => {
                     Set Receive Date
                   </button>
                 )}
+
+                <div className="h-6 w-px bg-slate-300 mx-2"></div>
               </div>
             )}
 
@@ -1329,20 +1551,38 @@ export const ClientOrdersPage: React.FC = () => {
                           )}
                         </button>
                       </th>
-                      <th className="p-3 text-left border-b border-r border-slate-200 min-w-[120px]">Fabric</th>
-                      <th className="p-3 text-left border-b border-r border-slate-200 min-w-[140px]">Accessories</th>
-                      <th className="p-3 text-right border-b border-r border-slate-200 w-20">Acc. Qty</th>
-                      <th className="p-3 text-center border-b border-r border-slate-200 min-w-[140px]">Status</th>
-                      <th className="p-3 text-right border-b border-r border-slate-200 w-24">Ordered</th>
-                      <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-slate-50">Remaining</th>
-                      <th className="p-3 text-center border-b border-r border-slate-200 w-24">Receive Date</th>
-                      <th className="p-3 text-center border-b border-r border-slate-200 w-24">Start Date</th>
-                      <th className="p-3 text-center border-b border-r border-slate-200 w-24">End Date</th>
-                      <th className="p-3 text-right border-b border-r border-slate-200 w-20">Scrap</th>
-                      <th className="p-3 text-left border-b border-r border-slate-200 min-w-[100px]">Others</th>
-                      <th className="p-3 text-left border-b border-r border-slate-200 min-w-[150px]">Notes</th>
-                      <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-orange-50">Fab. Deliv</th>
-                      <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-purple-50">Acc. Deliv</th>
+                      {showDyehouse ? (
+                        <>
+                          <th className="p-3 text-left border-b border-r border-slate-200 min-w-[120px]">Fabric</th>
+                          <th className="p-3 text-left border-b border-r border-slate-200 min-w-[120px]">Dyehouse</th>
+                          <th className="p-3 text-left border-b border-r border-slate-200 min-w-[200px]">Assigned Machines</th>
+                          <th className="p-3 text-center border-b border-r border-slate-200 w-10"></th>
+                        </>
+                      ) : (
+                        <>
+                          <th className="p-3 text-left border-b border-r border-slate-200 min-w-[120px]">Fabric</th>
+                          <th className="p-3 text-left border-b border-r border-slate-200 min-w-[140px]">Accessories</th>
+                          <th className="p-3 text-right border-b border-r border-slate-200 w-20">Acc. Qty</th>
+                        </>
+                      )}
+                      {!showDyehouse && (
+                        <>
+                          <th className="p-3 text-center border-b border-r border-slate-200 min-w-[140px]">Status</th>
+                          <th className="p-3 text-right border-b border-r border-slate-200 w-24">Ordered</th>
+                          <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-slate-50">Remaining</th>
+                          <th className="p-3 text-center border-b border-r border-slate-200 w-24">Receive Date</th>
+                          <th className="p-3 text-center border-b border-r border-slate-200 w-24">Start Date</th>
+                          <th className="p-3 text-center border-b border-r border-slate-200 w-24">End Date</th>
+                          <th className="p-3 text-right border-b border-r border-slate-200 w-20">Scrap</th>
+                          <th className="p-3 text-left border-b border-r border-slate-200 min-w-[100px]">Others</th>
+                          <th className="p-3 text-left border-b border-r border-slate-200 min-w-[150px]">Notes</th>
+                          <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-orange-50">Fab. Deliv</th>
+                          <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-purple-50">Acc. Deliv</th>
+                        </>
+                      )}
+                      {showDyehouse && (
+                         <th className="p-3 text-right border-b border-r border-slate-200 w-24">Ordered</th>
+                      )}
                       <th className="p-3 w-10 border-b border-slate-200"></th>
                     </tr>
                   </thead>
@@ -1370,6 +1610,7 @@ export const ClientOrdersPage: React.FC = () => {
                           handleDeleteRow={handleDeleteRow}
                           selectedCustomerName={selectedCustomer.name}
                           onOpenFabricDetails={handleOpenFabricDetails}
+                          showDyehouse={showDyehouse}
                         />
                       );
                     })}
@@ -1441,23 +1682,44 @@ export const ClientOrdersPage: React.FC = () => {
                     <div className="bg-white rounded-lg shadow border border-slate-200 p-4 animate-in slide-in-from-bottom-4">
                     <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
                         <Calculator className="w-4 h-4 text-blue-600" />
-                        Total Yarn Requirements for {selectedCustomer.name}
+                        Total Yarn Requirements for <span className="truncate max-w-[200px] inline-block align-bottom" title={selectedCustomer.name}>{selectedCustomer.name}</span>
                     </h3>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                        {totalYarnRequirements.map((yarn, idx) => (
-                        <div 
-                            key={idx} 
-                            onClick={() => setInventoryViewModal({ isOpen: true, yarnName: yarn.name })}
-                            className="bg-slate-50 p-3 rounded-lg border border-slate-100 cursor-pointer hover:bg-blue-50 hover:border-blue-200 transition-all group"
-                        >
-                            <div className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-1 truncate group-hover:text-blue-600" title={yarn.name}>
-                            {yarn.name}
-                            </div>
-                            <div className="text-lg font-bold text-slate-800 font-mono group-hover:text-blue-700">
-                            {yarn.weight.toLocaleString(undefined, { maximumFractionDigits: 1 })} <span className="text-xs font-normal text-slate-500 group-hover:text-blue-400">kg</span>
-                            </div>
-                        </div>
-                        ))}
+                    <div className="overflow-hidden rounded-lg border border-slate-200">
+                      <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+                          <tr>
+                            <th className="px-4 py-3">Yarn Name</th>
+                            <th className="px-4 py-3 text-right">Total Requirement (kg)</th>
+                            <th className="px-4 py-3 w-20 text-center">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 bg-white">
+                          {totalYarnRequirements.map((yarn, idx) => (
+                            <tr 
+                              key={idx}
+                              onClick={() => setYarnBreakdownModal({ 
+                                isOpen: true, 
+                                yarnName: yarn.name, 
+                                totalWeight: yarn.weight,
+                                fabrics: yarn.fabrics
+                              })}
+                              className="hover:bg-blue-50 cursor-pointer transition-colors group"
+                            >
+                              <td className="px-4 py-3 font-medium text-slate-700 group-hover:text-blue-700">
+                                {yarn.name}
+                              </td>
+                              <td className="px-4 py-3 text-right font-mono font-bold text-slate-700 group-hover:text-blue-700">
+                                {yarn.weight.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <button className="p-1 rounded-full bg-slate-100 text-slate-500 group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors">
+                                  <Search className="w-4 h-4" />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                     </div>
                 )}
@@ -1521,6 +1783,27 @@ export const ClientOrdersPage: React.FC = () => {
           </div>
         )}
 
+        {/* Inventory View Modal */}
+        {inventoryViewModal.isOpen && (
+          <InventoryViewModal 
+            isOpen={inventoryViewModal.isOpen}
+            onClose={() => setInventoryViewModal({ isOpen: false, yarnName: '' })}
+            yarnName={inventoryViewModal.yarnName}
+            yarnId={inventoryViewModal.yarnId}
+          />
+        )}
+
+        {/* Yarn Breakdown Modal */}
+        {yarnBreakdownModal.isOpen && (
+          <YarnBreakdownModal
+            isOpen={yarnBreakdownModal.isOpen}
+            onClose={() => setYarnBreakdownModal(prev => ({ ...prev, isOpen: false }))}
+            yarnName={yarnBreakdownModal.yarnName}
+            totalWeight={yarnBreakdownModal.totalWeight}
+            fabrics={yarnBreakdownModal.fabrics}
+          />
+        )}
+
         {/* Fabric Details Modal */}
         {fabricDetailsModal.isOpen && fabricDetailsModal.fabric && (
           <FabricDetailsModal
@@ -1545,6 +1828,7 @@ export const ClientOrdersPage: React.FC = () => {
             isOpen={inventoryViewModal.isOpen}
             onClose={() => setInventoryViewModal({ isOpen: false, yarnName: '' })}
             yarnName={inventoryViewModal.yarnName}
+            yarnId={inventoryViewModal.yarnId}
           />
         )}
 
@@ -1719,32 +2003,114 @@ export const ClientOrdersPage: React.FC = () => {
   );
 };
 
+const YarnBreakdownModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  yarnName: string;
+  totalWeight: number;
+  fabrics: { name: string; weight: number }[];
+}> = ({ isOpen, onClose, yarnName, totalWeight, fabrics }) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh]">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+          <div>
+            <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <Package className="w-5 h-5 text-blue-600" />
+              {yarnName}
+            </h2>
+            <p className="text-sm text-slate-500">
+              Total Requirement: <span className="font-bold text-slate-700">{totalWeight.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg</span>
+            </p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+            <X className="w-5 h-5 text-slate-400" />
+          </button>
+        </div>
+
+        <div className="p-0 overflow-y-auto flex-1">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+                <tr>
+                  <th className="px-6 py-3">Fabric Name</th>
+                  <th className="px-6 py-3 text-right">Quantity (kg)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {fabrics.map((fabric, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-3 font-medium text-slate-700">{fabric.name}</td>
+                    <td className="px-6 py-3 text-right font-mono text-slate-600">
+                      {fabric.weight.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+        </div>
+        
+        <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+          <button 
+            onClick={onClose}
+            className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const InventoryViewModal: React.FC<{
   isOpen: boolean;
   onClose: () => void;
   yarnName: string;
-}> = ({ isOpen, onClose, yarnName }) => {
+  yarnId?: string;
+}> = ({ isOpen, onClose, yarnName, yarnId }) => {
   const [items, setItems] = useState<YarnInventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (isOpen && yarnName) {
+    if (isOpen && (yarnName || yarnId)) {
       const fetchInventory = async () => {
         setLoading(true);
         try {
-          const q = query(collection(db, 'yarn_inventory'), where('yarnName', '==', yarnName));
+          let q;
+          if (yarnId) {
+             // Try to find by ID or Name
+             q = query(collection(db, 'yarn_inventory'), 
+                or(
+                    where('yarnName', '==', yarnName),
+                    where('yarnId', '==', yarnId)
+                )
+             );
+          } else {
+             q = query(collection(db, 'yarn_inventory'), where('yarnName', '==', yarnName));
+          }
           const snapshot = await getDocs(q);
           const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as YarnInventoryItem));
           setItems(data);
         } catch (err) {
           console.error("Error fetching inventory:", err);
+          // Fallback to name only if OR query fails (e.g. old SDK or index issues)
+          try {
+             const qFallback = query(collection(db, 'yarn_inventory'), where('yarnName', '==', yarnName));
+             const snapshotFallback = await getDocs(qFallback);
+             const dataFallback = snapshotFallback.docs.map(d => ({ id: d.id, ...d.data() } as YarnInventoryItem));
+             setItems(dataFallback);
+          } catch (e) {
+             console.error("Fallback failed:", e);
+          }
         } finally {
           setLoading(false);
         }
       };
       fetchInventory();
     }
-  }, [isOpen, yarnName]);
+  }, [isOpen, yarnName, yarnId]);
 
   if (!isOpen) return null;
 

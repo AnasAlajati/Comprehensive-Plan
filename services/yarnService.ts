@@ -69,6 +69,18 @@ export const YarnService = {
 
     // --- Inventory Search & Pagination ---
 
+    // Get All Inventory (for client-side filtering/sorting)
+    async getAllInventory(): Promise<YarnInventoryItem[]> {
+        try {
+            const q = query(collection(db, INVENTORY_COLLECTION));
+            const snapshot = await getDocs(q);
+            return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as YarnInventoryItem));
+        } catch (error) {
+            console.error("Error fetching all inventory:", error);
+            return [];
+        }
+    },
+
     // Optimized Search: Server-side prefix search
     async searchInventory(term: string, limitCount = 20): Promise<YarnInventoryItem[]> {
         if (!term) return [];

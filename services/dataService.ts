@@ -252,6 +252,23 @@ export const DataService = {
     }
   },
 
+  async updateOrderAllocations(orderId: string, fabricName: string, allocations: any[]): Promise<void> {
+    const docRef = doc(db, 'OrderSS', orderId);
+    const snapshot = await getDoc(docRef);
+    
+    if (snapshot.exists()) {
+      const data = snapshot.data() as CustomerOrder;
+      const updatedFabrics = data.fabrics.map(f => {
+        if (f.fabricName === fabricName) {
+          return { ...f, allocations };
+        }
+        return f;
+      });
+      
+      await setDoc(docRef, { fabrics: updatedFabrics, lastUpdated: new Date().toISOString() }, { merge: true });
+    }
+  },
+  
   async addFabricToOrder(customerName: string, fabricName: string, initialQuantity: number = 0): Promise<void> {
     const docRef = doc(db, 'OrderSS', customerName);
     const snapshot = await getDoc(docRef);

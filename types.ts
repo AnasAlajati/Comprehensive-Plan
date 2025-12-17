@@ -36,12 +36,22 @@ export interface PlanItem {
   fabricId?: string;     // NEW: Link to fabrics collection
 }
 
+export interface YarnAllocation {
+  yarnId?: string; // ID from yarn_inventory
+  yarnName: string;
+  lotNumber: string;
+  location: string;
+  quantityAllocated: number;
+  allocatedAt: string;
+}
+
 export interface OrderFabric {
   fabricName: string;
   orderReference?: string; // NEW: Unique Reference Code (e.g., ZARA-SJ-001)
   totalQuantity: number;
   remainingQuantity: number;
   assignedMachines: string[];
+  allocations?: YarnAllocation[]; // NEW: Track allocated yarn lots
 }
 
 export interface CustomerOrder {
@@ -96,6 +106,21 @@ export interface MachineRow {
   };
 }
 
+export interface DyeingBatch {
+  id: string;
+  color: string;
+  quantity: number;
+  machine: string;
+  notes: string;
+}
+
+export interface YarnAllocationItem {
+  lotId?: string; // ID of the inventory item
+  lotNumber: string;
+  quantity: number;
+  allocatedAt: string;
+}
+
 export interface OrderRow {
   id: string;
   material: string;        // الخامة
@@ -116,7 +141,11 @@ export interface OrderRow {
   accessoryType?: string; // 'Rib', 'Derby', etc.
   accessoryPercentage?: number; // 3, 5, etc.
   accessoryQty?: number; // Calculated or manual quantity
-  yarnAllocations?: Record<string, string>; // yarnId -> lotNumber
+  yarnAllocations?: Record<string, YarnAllocationItem[]>; // yarnId -> List of allocations
+  dyehouse?: string; // NEW: Dyehouse Name
+  dyehouseMachine?: string; // NEW: Dyehouse Machine
+  fabricColor?: string; // NEW: Fabric Color
+  dyeingPlan?: DyeingBatch[]; // NEW: Detailed Dyeing Plan
 }
 
 export interface CustomerSheet {
@@ -263,9 +292,11 @@ export interface YarnInventoryItem {
   lotNumber: string;
   quantity: number;
   lastUpdated: string;
+  location?: string; // NEW: Warehouse location (e.g., BU/مخزن الخيوط)
   allocations?: {
     orderId: string;
     customerId: string;
+    clientName?: string; // Added optional client name
     fabricName: string;
     quantity: number; // Amount allocated
     timestamp: string;

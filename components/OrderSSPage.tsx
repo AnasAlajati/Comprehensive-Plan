@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { DataService } from '../services/dataService';
 import { CustomerOrder, MachineRow, PlanItem } from '../types';
-import { ChevronDown, ChevronRight, Package, AlertCircle, Activity, Calendar, Plus } from 'lucide-react';
+import { ChevronDown, ChevronRight, Package, AlertCircle, Activity, Calendar, Plus, Layers, MapPin } from 'lucide-react';
 import { AddOrderModal } from './AddOrderModal';
+import { AllocationModal } from './AllocationModal';
 
 interface FabricStatus {
   fabricName: string;
@@ -26,6 +27,14 @@ export const OrderSSPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [expandedClient, setExpandedClient] = useState<string | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [allocationModalOpen, setAllocationModalOpen] = useState(false);
+  const [selectedFabricForAllocation, setSelectedFabricForAllocation] = useState<{
+    orderId: string;
+    clientName: string;
+    fabricName: string;
+    requiredQuantity: number;
+    currentAllocations: any[];
+  } | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -39,6 +48,7 @@ export const OrderSSPage: React.FC = () => {
       console.error("Failed to fetch data", err);
     } finally {
       setLoading(false);
+      
     }
   }, []);
 
@@ -48,6 +58,17 @@ export const OrderSSPage: React.FC = () => {
 
   const toggleClient = (clientName: string) => {
     setExpandedClient(expandedClient === clientName ? null : clientName);
+  };
+
+  const openAllocationModal = (order: CustomerOrder, fabric: any) => {
+    setSelectedFabricForAllocation({
+      orderId: order.id || order.customerName, // Fallback if id missing
+      clientName: order.customerName,
+      fabricName: fabric.fabricName,
+      requiredQuantity: fabric.totalQuantity,
+      currentAllocations: fabric.allocations || []
+    });
+    setAllocationModalOpen(true);
   };
 
   // Helper to aggregate real-time status for a specific client and fabric
@@ -162,6 +183,7 @@ export const OrderSSPage: React.FC = () => {
                   <div className="grid gap-6">
                     {order.fabrics.map((fabric, idx) => {
                       const liveStatus = getFabricStatus(order.customerName, fabric.fabricName, fabric.orderReference);
+                      const allocatedTotal = fabric.allocations?.reduce((sum, a) => sum + a.quantityAllocated, 0) || 0;
                       
                       return (
                         <div key={idx} className="rounded-xl border border-slate-200 overflow-hidden">
@@ -193,7 +215,23 @@ export const OrderSSPage: React.FC = () => {
                               </div>
                             </div>
 
-                            <div className="flex gap-6 text-right">
+                            <div className="flex gap-6 text-right items-center">
+                                <div className="flex flex-col items-end">
+                                    <div className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Yarn Allocated</div>
+                                    <div className="flex items-center gap-2">
+                                      <div className={`font-bold text-lg ${allocatedTotal >= fabric.totalQuantity ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                        {allocatedTotal.toLocaleString()} <span className="text-xs font-normal text-slate-400">kg</span>
+                                      </div>
+                                      <button 
+                                        onClick={() => openAllocationModal(order, fabric)}
+                                        className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-indigo-600 transition-colors"
+                                        title="Manage Allocation"
+                                      >
+                                        <Layers className="w-4 h-4" />
+                                      </button>
+                                    </div>
+                                </div>
+                                <div className="h-8 w-px bg-slate-200 mx-2"></div>
                                 <div>
                                     <div className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Total Planned</div>
                                     <div className="font-bold text-slate-700 text-lg">{liveStatus.totalPlanned.toLocaleString()} <span className="text-xs font-normal text-slate-400">kg</span></div>
@@ -206,6 +244,34 @@ export const OrderSSPage: React.FC = () => {
                                 </div>
                             </div>
                           </div>
+
+                          {/* Allocation Details */}
+                          {fabric.allocations && fabric.allocations.length > 0 && (
+                            <div className="px-4 py-3 bg-indigo-50/30 border-b border-slate-100">
+                              <h5 className="text-[10px] uppercase tracking-wider font-bold text-indigo-400 mb-2 flex items-center gap-1">
+                                <Layers className="w-3 h-3" /> Allocated Yarn
+                              </h5>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                                {fabric.allocations.map((alloc, aIdx) => (
+                                  <div key={aIdx} className="flex items-center justify-between bg-white border border-indigo-100 rounded-lg px-3 py-2 shadow-sm">
+                                    <div>
+                                      <div className="font-bold text-slate-700 text-xs">{alloc.yarnName}</div>
+                                      <div className="flex items-center gap-2 mt-0.5">
+                                        <span className="text-[10px] font-mono bg-slate-100 text-slate-500 px-1 rounded">Lot: {alloc.lotNumber}</span>
+                                        <span className="text-[10px] text-slate-400 flex items-center gap-0.5">
+                                          <MapPin className="w-2.5 h-2.5" /> {alloc.location}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <div className="text-right">
+                                      <div className="font-bold text-indigo-600 text-sm">{alloc.quantityAllocated.toLocaleString()}</div>
+                                      <div className="text-[9px] text-slate-400">kg</div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
 
                           {/* Detailed Plans Table */}
                           {liveStatus.plans.length > 0 ? (
@@ -269,6 +335,21 @@ export const OrderSSPage: React.FC = () => {
         }}
         existingClients={orders.map(o => o.customerName)}
       />
+
+      {selectedFabricForAllocation && (
+        <AllocationModal
+          isOpen={allocationModalOpen}
+          onClose={() => setAllocationModalOpen(false)}
+          orderId={selectedFabricForAllocation.orderId}
+          clientName={selectedFabricForAllocation.clientName}
+          fabricName={selectedFabricForAllocation.fabricName}
+          requiredQuantity={selectedFabricForAllocation.requiredQuantity}
+          currentAllocations={selectedFabricForAllocation.currentAllocations}
+          onSave={() => {
+            fetchData();
+          }}
+        />
+      )}
     </div>
   );
 };

@@ -25,31 +25,18 @@ import {
   ChevronRight,
   X,
   LayoutGrid,
-  List
+  List,
+  ChevronDown
 } from 'lucide-react';
 
 import { YarnService } from '../services/yarnService';
-import { QueryDocumentSnapshot } from 'firebase/firestore';
-
-interface YarnInventoryItem {
-  id: string;
-  yarnName: string;
-  lotNumber: string;
-  quantity: number;
-  lastUpdated: string;
-  allocations?: {
-    orderId: string;
-    customerId: string;
-    clientName?: string;
-    fabricName: string;
-    quantity: number;
-    timestamp: string;
-  }[];
-}
+import { YarnInventoryItem } from '../types';
 
 interface GroupedYarn {
   name: string;
   totalQuantity: number;
+  totalAllocated: number;
+  netAvailable: number;
   lots: YarnInventoryItem[];
   isFavorite: boolean;
 }
@@ -60,22 +47,35 @@ export const YarnInventoryPage: React.FC = () => {
   const [importing, setImporting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [stats, setStats] = useState({ totalKg: 0, uniqueYarns: 0, lowStock: 0 });
+  const [stats, setStats] = useState<{
+      totalKg: number;
+      totalAllocated: number; // NEW
+      totalRemaining: number; // NEW
+      uniqueYarns: number;
+      lowStock: number;
+      locationTotals: Record<string, number>;
+  }>({ totalKg: 0, totalAllocated: 0, totalRemaining: 0, uniqueYarns: 0, lowStock: 0, locationTotals: {} });
   
   // New State for UI enhancements
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [selectedYarn, setSelectedYarn] = useState<GroupedYarn | null>(null);
+  const [showLocationOthers, setShowLocationOthers] = useState(false);
   const [viewType, setViewType] = useState<'grid' | 'list'>('grid');
-  const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot | null>(null);
-  const [hasMore, setHasMore] = useState(true);
+  const [lastImportedDate, setLastImportedDate] = useState<string | null>(null);
+  const [locationFilter, setLocationFilter] = useState<string>('All');
+  
+  // Import Preview State
+  const [importPreview, setImportPreview] = useState<{
+    added: any[];
+    updated: any[];
+    unchanged: number;
+    duplicates: number;
+    isOpen: boolean;
+  }>({ added: [], updated: [], unchanged: 0, duplicates: 0, isOpen: false });
 
   useEffect(() => {
-    // Debounce search
-    const timer = setTimeout(() => {
-        fetchInventory(true);
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [searchTerm]);
+    fetchInventory();
+  }, []);
 
   useEffect(() => {
     // Load favorites
@@ -87,10 +87,35 @@ export const YarnInventoryPage: React.FC = () => {
 
   useEffect(() => {
     // Calculate stats
-    const totalKg = inventory.reduce((sum, item) => sum + item.quantity, 0);
-    const uniqueYarns = new Set(inventory.map(i => i.yarnName)).size;
-    const lowStock = inventory.filter(i => i.quantity < 50).length; // Arbitrary threshold
-    setStats({ totalKg, uniqueYarns, lowStock });
+    let totalKg = 0;
+    let totalAllocated = 0;
+    const uniqueYarns = new Set<string>();
+    let lowStock = 0;
+    const locationTotals: Record<string, number> = {};
+
+    inventory.forEach(item => {
+        totalKg += item.quantity;
+        uniqueYarns.add(item.yarnName);
+        if (item.quantity < 50) lowStock++;
+
+        // Calculate allocated for this item
+        const itemAllocated = item.allocations?.reduce((sum, a) => sum + a.quantity, 0) || 0;
+        totalAllocated += itemAllocated;
+
+        const loc = item.location || 'Unknown';
+        locationTotals[loc] = (locationTotals[loc] || 0) + item.quantity;
+    });
+
+    const totalRemaining = totalKg - totalAllocated;
+
+    setStats({ totalKg, totalAllocated, totalRemaining, uniqueYarns: uniqueYarns.size, lowStock, locationTotals });
+
+    // Calculate Last Imported Date
+    if (inventory.length > 0) {
+        const dates = inventory.map(i => new Date(i.lastUpdated).getTime());
+        const maxDate = new Date(Math.max(...dates));
+        setLastImportedDate(maxDate.toLocaleString());
+    }
   }, [inventory]);
 
   const toggleFavorite = (e: React.MouseEvent, yarnName: string) => {
@@ -108,19 +133,37 @@ export const YarnInventoryPage: React.FC = () => {
   const groupedInventory = useMemo(() => {
     const groups = new Map<string, GroupedYarn>();
     
-    inventory.forEach(item => {
-      // Filter logic is now server-side, but we keep this for safety if needed
-      // or if we want to filter within the page (e.g. by lot number if not searched)
-      // But for now, let's assume inventory contains what we want.
+    // Filter inventory based on search term AND location (Client-side)
+    const filteredInventory = inventory.filter(item => {
+        // Location Filter
+        if (locationFilter !== 'All' && item.location !== locationFilter) {
+            return false;
+        }
 
+        // Search Filter
+        if (!searchTerm) return true;
+        const term = searchTerm.toLowerCase();
+        return (
+            item.yarnName.toLowerCase().includes(term) || 
+            item.lotNumber.toLowerCase().includes(term)
+        );
+    });
+
+    filteredInventory.forEach(item => {
+      const itemAllocated = item.allocations?.reduce((sum, a) => sum + a.quantity, 0) || 0;
       const existing = groups.get(item.yarnName);
+      
       if (existing) {
         existing.totalQuantity += item.quantity;
+        existing.totalAllocated += itemAllocated;
+        existing.netAvailable = existing.totalQuantity - existing.totalAllocated;
         existing.lots.push(item);
       } else {
         groups.set(item.yarnName, {
           name: item.yarnName,
           totalQuantity: item.quantity,
+          totalAllocated: itemAllocated,
+          netAvailable: item.quantity - itemAllocated,
           lots: [item],
           isFavorite: favorites.has(item.yarnName)
         });
@@ -134,32 +177,22 @@ export const YarnInventoryPage: React.FC = () => {
       // Then by Name
       return a.name.localeCompare(b.name);
     });
-  }, [inventory, favorites]);
+  }, [inventory, favorites, searchTerm, locationFilter]);
 
-  const fetchInventory = async (reset = false) => {
+  // Extract unique locations for filter
+  const uniqueLocations = useMemo(() => {
+      const locs = new Set<string>();
+      inventory.forEach(item => {
+          if (item.location) locs.add(item.location);
+      });
+      return Array.from(locs).sort();
+  }, [inventory]);
+
+  const fetchInventory = async () => {
     setLoading(true);
     try {
-      let newItems: YarnInventoryItem[] = [];
-      let newLastDoc = null;
-
-      if (searchTerm) {
-          // Search mode
-          newItems = await YarnService.searchInventory(searchTerm, 50);
-          setHasMore(false); // Search doesn't support pagination yet in this simple impl
-      } else {
-          // Pagination mode
-          const result = await YarnService.getInventoryPage(50, reset ? undefined : (lastDoc || undefined));
-          newItems = result.items;
-          newLastDoc = result.lastDoc;
-          setHasMore(!!newLastDoc);
-      }
-
-      if (reset) {
-          setInventory(newItems);
-      } else {
-          setInventory(prev => [...prev, ...newItems]);
-      }
-      setLastDoc(newLastDoc);
+      const items = await YarnService.getAllInventory();
+      setInventory(items);
     } catch (error) {
       console.error("Error fetching inventory:", error);
     } finally {
@@ -182,80 +215,132 @@ export const YarnInventoryPage: React.FC = () => {
         const ws = wb.Sheets[wsname];
         const data = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
 
-        // Data starts at row 3 (index 2)
-        // Column A (0): Yarn Name
-        // Column B (1): Lot/Serial
-        // Column C (2): Quantity
-        
-        const batch = writeBatch(db);
-        let batchCount = 0;
-        const MAX_BATCH_SIZE = 450; // Firestore limit is 500
-
         // Get existing inventory to check for updates
         const existingSnapshot = await getDocs(collection(db, 'yarn_inventory'));
-        const existingMap = new Map<string, YarnInventoryItem>();
+        const existingMap = new Map<string, YarnInventoryItem>(); // Key: Name-Lot-Location
+        const unknownLocationMap = new Map<string, YarnInventoryItem[]>(); // Key: Name-Lot -> [Items with unknown loc]
+
         existingSnapshot.docs.forEach(doc => {
             const data = doc.data() as YarnInventoryItem;
-            // Create a unique key for Yarn + Lot
-            const key = `${data.yarnName.trim().toLowerCase()}-${data.lotNumber.trim().toLowerCase()}`;
-            existingMap.set(key, { ...data, id: doc.id });
+            const name = data.yarnName.trim().toLowerCase();
+            const lot = data.lotNumber.trim().toLowerCase();
+            const loc = data.location ? data.location.trim().toLowerCase() : 'unknown';
+            
+            const fullKey = `${name}-${lot}-${loc}`;
+            existingMap.set(fullKey, { ...data, id: doc.id });
+
+            if (loc === 'unknown') {
+                const lotKey = `${name}-${lot}`;
+                const list = unknownLocationMap.get(lotKey) || [];
+                list.push({ ...data, id: doc.id });
+                unknownLocationMap.set(lotKey, list);
+            }
         });
 
-        let updatesCount = 0;
-        let addsCount = 0;
+        const toAdd: any[] = [];
+        const toUpdate: any[] = [];
+        let unchangedCount = 0;
+        let fileDuplicatesCount = 0;
+        const processedKeys = new Set<string>();
 
         // Process rows starting from index 2
+        let currentSectionLocation = '';
+        let lastYarnName = '';
+
         for (let i = 2; i < data.length; i++) {
           const row = data[i];
-          if (!row || row.length < 3) continue;
+          if (!row || row.length === 0) continue;
 
-          const yarnName = String(row[0] || '').trim();
+          const firstCol = String(row[0] || '').trim();
+          
+          // Check for Header Row (starts with "BU/")
+          if (firstCol.startsWith('BU/')) {
+            currentSectionLocation = firstCol;
+            lastYarnName = ''; // Reset yarn name on section change
+            continue; 
+          }
+
+          // Normal Row Processing
           const lotNumber = String(row[1] || '').trim();
           const quantity = parseFloat(row[2]);
 
-          if (!yarnName || isNaN(quantity)) continue;
+          if (!lotNumber || isNaN(quantity)) continue;
 
-          const key = `${yarnName.toLowerCase()}-${lotNumber.toLowerCase()}`;
-          const existingItem = existingMap.get(key);
+          // Handle Yarn Name (Fill Down for merged cells)
+          let yarnName = firstCol;
+          if (!yarnName && lastYarnName) {
+              yarnName = lastYarnName;
+          }
+          
+          if (!yarnName) continue; // Still no yarn name? Skip.
+          lastYarnName = yarnName; // Update last seen
+
+          // Handle Location
+          // Priority: Column D -> Section Header -> 'Unknown'
+          let location = String(row[3] || '').trim();
+          if (!location) {
+              location = currentSectionLocation || 'Unknown';
+          }
+
+          // Unique Key now includes Location to allow same lot in multiple locations
+          const key = `${yarnName.toLowerCase()}-${lotNumber.toLowerCase()}-${location.toLowerCase()}`;
+          
+          // Check for duplicates within the file itself
+          if (processedKeys.has(key)) {
+            fileDuplicatesCount++;
+            continue; 
+          }
+          processedKeys.add(key);
+
+          let existingItem = existingMap.get(key);
+
+          // If no exact match (Name+Lot+Loc), try to find an unclaimed 'Unknown' location item to migrate
+          if (!existingItem) {
+             const lotKey = `${yarnName.toLowerCase()}-${lotNumber.toLowerCase()}`;
+             const unknowns = unknownLocationMap.get(lotKey);
+             if (unknowns && unknowns.length > 0) {
+                 existingItem = unknowns.shift(); // Take one and remove it from pool
+                 // We found a match to migrate!
+             }
+          }
 
           if (existingItem) {
-            // Update if quantity changed
-            if (Math.abs(existingItem.quantity - quantity) > 0.01) {
-              const ref = doc(db, 'yarn_inventory', existingItem.id);
-              batch.update(ref, {
-                quantity,
-                lastUpdated: new Date().toISOString()
+            // Update if quantity OR location changed
+            const qtyChanged = Math.abs(existingItem.quantity - quantity) > 0.01;
+            const locChanged = existingItem.location !== location;
+
+            if (qtyChanged || locChanged) {
+              toUpdate.push({
+                id: existingItem.id,
+                yarnName,
+                lotNumber,
+                oldQuantity: existingItem.quantity,
+                newQuantity: quantity,
+                oldLocation: existingItem.location,
+                newLocation: location
               });
-              batchCount++;
-              updatesCount++;
+            } else {
+              unchangedCount++;
             }
           } else {
             // Add new
-            const ref = doc(collection(db, 'yarn_inventory'));
-            batch.set(ref, {
+            toAdd.push({
               yarnName,
               lotNumber,
               quantity,
-              lastUpdated: new Date().toISOString()
+              location
             });
-            batchCount++;
-            addsCount++;
-          }
-
-          // Commit batch if full
-          if (batchCount >= MAX_BATCH_SIZE) {
-            await batch.commit();
-            batchCount = 0;
           }
         }
 
-        // Commit remaining
-        if (batchCount > 0) {
-          await batch.commit();
-        }
-
-        alert(`Import Complete!\nAdded: ${addsCount}\nUpdated: ${updatesCount}`);
-        fetchInventory();
+        // Open Preview Modal instead of writing immediately
+        setImportPreview({
+            added: toAdd,
+            updated: toUpdate,
+            unchanged: unchangedCount,
+            duplicates: fileDuplicatesCount,
+            isOpen: true
+        });
         
         // Reset file input
         if (fileInputRef.current) fileInputRef.current.value = '';
@@ -271,6 +356,53 @@ export const YarnInventoryPage: React.FC = () => {
     reader.readAsBinaryString(file);
   };
 
+  const confirmImport = async () => {
+      setImporting(true);
+      try {
+          const batch = writeBatch(db);
+          let batchCount = 0;
+          const MAX_BATCH_SIZE = 450;
+
+          // Process Adds
+          for (const item of importPreview.added) {
+              const ref = doc(collection(db, 'yarn_inventory'));
+              batch.set(ref, {
+                  yarnName: item.yarnName,
+                  lotNumber: item.lotNumber,
+                  quantity: item.quantity,
+                  location: item.location,
+                  lastUpdated: new Date().toISOString()
+              });
+              batchCount++;
+              if (batchCount >= MAX_BATCH_SIZE) { await batch.commit(); batchCount = 0; }
+          }
+
+          // Process Updates
+          for (const item of importPreview.updated) {
+              const ref = doc(db, 'yarn_inventory', item.id);
+              batch.update(ref, {
+                  quantity: item.newQuantity,
+                  location: item.newLocation,
+                  lastUpdated: new Date().toISOString()
+              });
+              batchCount++;
+              if (batchCount >= MAX_BATCH_SIZE) { await batch.commit(); batchCount = 0; }
+          }
+
+          if (batchCount > 0) await batch.commit();
+
+          setImportPreview(prev => ({ ...prev, isOpen: false }));
+          fetchInventory();
+          alert("Inventory updated successfully!");
+
+      } catch (error) {
+          console.error("Error committing import:", error);
+          alert("Error saving changes to database.");
+      } finally {
+          setImporting(false);
+      }
+  };
+
   return (
     <div className="w-full h-full flex flex-col bg-slate-50/50">
       
@@ -282,7 +414,15 @@ export const YarnInventoryPage: React.FC = () => {
               <Package className="w-6 h-6 text-indigo-600" />
               Yarn Inventory
             </h1>
-            <p className="text-slate-500 text-sm mt-1">Manage yarn stock levels and lots</p>
+            <div className="flex flex-col">
+                <p className="text-slate-500 text-sm mt-1">Manage yarn stock levels and lots</p>
+                {lastImportedDate && (
+                    <p className="text-xs text-slate-400 mt-0.5 flex items-center gap-1">
+                        <RefreshCw className="w-3 h-3" />
+                        Inventory date fetched from: <span className="font-medium text-slate-600">{lastImportedDate}</span>
+                    </p>
+                )}
+            </div>
           </div>
           
           <div className="flex items-center gap-3">
@@ -350,19 +490,87 @@ export const YarnInventoryPage: React.FC = () => {
                     className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm shadow-sm"
                 />
             </div>
+
+            <div className="relative min-w-[200px]">
+                <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <select
+                    value={locationFilter}
+                    onChange={(e) => setLocationFilter(e.target.value)}
+                    className="w-full pl-10 pr-8 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm shadow-sm appearance-none cursor-pointer"
+                >
+                    <option value="All">All Locations</option>
+                    {uniqueLocations.map(loc => (
+                        <option key={loc} value={loc}>{loc}</option>
+                    ))}
+                </select>
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                </div>
+            </div>
             
-            <div className="flex gap-6 text-sm">
-                <div className="flex items-center gap-2">
+            <div className="flex flex-wrap gap-4 text-sm items-center">
+                <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">
                     <span className="text-slate-500">Total Stock:</span>
                     <span className="font-bold text-slate-800">{stats.totalKg.toLocaleString()} kg</span>
                 </div>
+
+                <div className="flex items-center gap-2 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-100 shadow-sm">
+                    <span className="text-emerald-600 font-medium">Net Available:</span>
+                    <span className="font-bold text-emerald-700">{stats.totalRemaining.toLocaleString()} kg</span>
+                </div>
+                
+                {/* Priority Locations */}
+                {Object.entries(stats.locationTotals)
+                    .filter(([loc]) => loc.includes('مخزن صرف صاله الانتاج') || loc.includes('مخزن الخيوط'))
+                    .map(([loc, qty]) => (
+                    <div key={loc} className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
+                        <span className="text-slate-500 text-xs uppercase tracking-wider">{loc.replace('BU/', '')}:</span>
+                        <span className="font-bold text-indigo-600">{qty.toLocaleString()} kg</span>
+                    </div>
+                ))}
+
+                {/* Others Dropdown */}
+                {(() => {
+                    const otherLocations = Object.entries(stats.locationTotals)
+                        .filter(([loc]) => !loc.includes('مخزن صرف صاله الانتاج') && !loc.includes('مخزن الخيوط'));
+                    
+                    if (otherLocations.length === 0) return null;
+
+                    const otherTotal = otherLocations.reduce((sum, [_, qty]) => sum + qty, 0);
+
+                    return (
+                        <div className="relative">
+                            <button 
+                                onClick={() => setShowLocationOthers(!showLocationOthers)}
+                                className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 transition-colors"
+                            >
+                                <span className="text-slate-500 text-xs uppercase tracking-wider">Others:</span>
+                                <span className="font-bold text-slate-700">{otherTotal.toLocaleString()} kg</span>
+                                <ChevronDown className="w-3 h-3 text-slate-400" />
+                            </button>
+
+                            {showLocationOthers && (
+                                <>
+                                    <div className="fixed inset-0 z-10" onClick={() => setShowLocationOthers(false)} />
+                                    <div className="absolute top-full right-0 mt-1 w-64 bg-white rounded-lg shadow-xl border border-slate-200 z-20 p-2 max-h-60 overflow-y-auto">
+                                        {otherLocations.map(([loc, qty]) => (
+                                            <div key={loc} className="flex justify-between items-center p-2 hover:bg-slate-50 rounded text-xs">
+                                                <span className="text-slate-600">{loc.replace('BU/', '')}</span>
+                                                <span className="font-mono font-bold text-indigo-600">{qty.toLocaleString()}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    );
+                })()}
+
+                <div className="h-4 w-px bg-slate-300 mx-2 hidden md:block"></div>
+
                 <div className="flex items-center gap-2">
                     <span className="text-slate-500">Unique Yarns:</span>
                     <span className="font-bold text-slate-800">{stats.uniqueYarns}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                    <span className="text-slate-500">Low Stock:</span>
-                    <span className={`font-bold ${stats.lowStock > 0 ? 'text-orange-600' : 'text-slate-800'}`}>{stats.lowStock}</span>
                 </div>
             </div>
         </div>
@@ -401,10 +609,18 @@ export const YarnInventoryPage: React.FC = () => {
                                 
                                 <div className="flex items-end justify-between mt-4">
                                     <div>
-                                        <p className="text-xs text-slate-500 uppercase font-semibold tracking-wider">Available</p>
-                                        <p className="text-2xl font-bold text-indigo-600 font-mono">
-                                            {group.totalQuantity.toLocaleString()} <span className="text-sm text-slate-400 font-normal">kg</span>
-                                        </p>
+                                        <div className="mb-1">
+                                            <p className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Total Stock</p>
+                                            <p className="text-sm font-bold text-slate-600 font-mono">
+                                                {group.totalQuantity.toLocaleString()} kg
+                                            </p>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-emerald-600 uppercase font-bold tracking-wider">Net Available</p>
+                                            <p className="text-2xl font-bold text-emerald-600 font-mono">
+                                                {group.netAvailable.toLocaleString()} <span className="text-sm text-emerald-400 font-normal">kg</span>
+                                            </p>
+                                        </div>
                                     </div>
                                     <div className="text-right">
                                         <p className="text-xs text-slate-500 uppercase font-semibold tracking-wider">Lots</p>
@@ -425,7 +641,8 @@ export const YarnInventoryPage: React.FC = () => {
                         <thead className="bg-slate-50 text-slate-600 font-semibold text-xs uppercase tracking-wider">
                             <tr>
                                 <th className="px-6 py-3 border-b border-slate-200">Yarn Name</th>
-                                <th className="px-6 py-3 border-b border-slate-200 text-right">Total Quantity</th>
+                                <th className="px-6 py-3 border-b border-slate-200 text-right">Total Stock</th>
+                                <th className="px-6 py-3 border-b border-slate-200 text-right">Net Available</th>
                                 <th className="px-6 py-3 border-b border-slate-200 text-center">Lots</th>
                                 <th className="px-6 py-3 border-b border-slate-200 text-center">Actions</th>
                             </tr>
@@ -442,8 +659,11 @@ export const YarnInventoryPage: React.FC = () => {
                                         </button>
                                         {group.name}
                                     </td>
-                                    <td className="px-6 py-4 text-right font-mono font-bold text-indigo-600">
+                                    <td className="px-6 py-4 text-right font-mono font-bold text-slate-600">
                                         {group.totalQuantity.toLocaleString()} kg
+                                    </td>
+                                    <td className="px-6 py-4 text-right font-mono font-bold text-emerald-600">
+                                        {group.netAvailable.toLocaleString()} kg
                                     </td>
                                     <td className="px-6 py-4 text-center text-slate-600">
                                         {group.lots.length}
@@ -467,20 +687,119 @@ export const YarnInventoryPage: React.FC = () => {
                     <p className="text-slate-500 mt-1">Import an Excel file or adjust your search filters.</p>
                 </div>
             )}
-
-            {hasMore && !searchTerm && groupedInventory.length > 0 && (
-                <div className="mt-8 text-center">
-                    <button 
-                        onClick={() => fetchInventory(false)}
-                        disabled={loading}
-                        className="px-6 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-colors shadow-sm disabled:opacity-50"
-                    >
-                        {loading ? 'Loading...' : 'Load More'}
-                    </button>
-                </div>
-            )}
         </div>
       </div>
+
+      {/* Import Preview Modal */}
+      {importPreview.isOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95 duration-200">
+                <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                    <div>
+                        <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                            <FileSpreadsheet className="w-6 h-6 text-indigo-600" />
+                            Import Preview
+                        </h2>
+                        <p className="text-sm text-slate-500">Review changes before applying</p>
+                    </div>
+                    <button onClick={() => setImportPreview(prev => ({ ...prev, isOpen: false }))} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
+                        <X className="w-6 h-6 text-slate-400" />
+                    </button>
+                </div>
+
+                <div className="p-6 space-y-6 overflow-y-auto">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                        <div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100 text-center">
+                            <div className="text-2xl font-bold text-emerald-600">{importPreview.added.length}</div>
+                            <div className="text-xs font-medium text-emerald-800 uppercase tracking-wide">New Items</div>
+                        </div>
+                        <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 text-center">
+                            <div className="text-2xl font-bold text-blue-600">{importPreview.updated.length}</div>
+                            <div className="text-xs font-medium text-blue-800 uppercase tracking-wide">Updates</div>
+                        </div>
+                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 text-center">
+                            <div className="text-2xl font-bold text-slate-600">{importPreview.unchanged}</div>
+                            <div className="text-xs font-medium text-slate-800 uppercase tracking-wide">Unchanged</div>
+                        </div>
+                        <div className="bg-orange-50 p-3 rounded-lg border border-orange-100 text-center">
+                            <div className="text-2xl font-bold text-orange-600">{importPreview.duplicates}</div>
+                            <div className="text-xs font-medium text-orange-800 uppercase tracking-wide">Duplicates</div>
+                        </div>
+                    </div>
+
+                    {importPreview.updated.length > 0 && (
+                        <div>
+                            <h3 className="font-bold text-slate-800 mb-2 text-sm uppercase tracking-wide">Updates Preview</h3>
+                            <div className="bg-slate-50 rounded-lg border border-slate-200 overflow-hidden max-h-60 overflow-y-auto">
+                                <table className="w-full text-sm text-left">
+                                    <thead className="bg-slate-100 text-slate-500 font-medium text-xs uppercase">
+                                        <tr>
+                                            <th className="px-4 py-2">Yarn / Lot</th>
+                                            <th className="px-4 py-2 text-right">Old Qty</th>
+                                            <th className="px-4 py-2 text-right">New Qty</th>
+                                            <th className="px-4 py-2">Location</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-200">
+                                        {importPreview.updated.slice(0, 50).map((item, i) => (
+                                            <tr key={i}>
+                                                <td className="px-4 py-2">
+                                                    <div className="font-medium text-slate-700">{item.yarnName}</div>
+                                                    <div className="text-xs text-slate-500 font-mono">{item.lotNumber}</div>
+                                                </td>
+                                                <td className="px-4 py-2 text-right text-slate-500 line-through">{item.oldQuantity}</td>
+                                                <td className="px-4 py-2 text-right font-bold text-blue-600">{item.newQuantity}</td>
+                                                <td className="px-4 py-2 text-xs">
+                                                    {item.oldLocation !== item.newLocation ? (
+                                                        <span className="text-blue-600 font-medium">{item.newLocation}</span>
+                                                    ) : (
+                                                        <span className="text-slate-400">{item.newLocation}</span>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                        {importPreview.updated.length > 50 && (
+                                            <tr>
+                                                <td colSpan={4} className="px-4 py-2 text-center text-xs text-slate-500 italic">
+                                                    ...and {importPreview.updated.length - 50} more updates
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+                </div>
+                
+                <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-3">
+                    <button 
+                        onClick={() => setImportPreview(prev => ({ ...prev, isOpen: false }))}
+                        className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-colors"
+                    >
+                        Cancel
+                    </button>
+                    <button 
+                        onClick={confirmImport}
+                        disabled={importing}
+                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium transition-colors shadow-sm flex items-center gap-2"
+                    >
+                        {importing ? (
+                            <>
+                                <RefreshCw className="w-4 h-4 animate-spin" />
+                                Importing...
+                            </>
+                        ) : (
+                            <>
+                                <CheckCircle2 className="w-4 h-4" />
+                                Confirm Import
+                            </>
+                        )}
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
 
       {/* Yarn Details Modal */}
       {selectedYarn && (
@@ -505,7 +824,7 @@ export const YarnInventoryPage: React.FC = () => {
                     <table className="w-full text-sm text-left">
                         <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200 sticky top-0">
                             <tr>
-                                <th className="px-6 py-3">Lot Number</th>
+                                <th className="px-6 py-3">Lot Number / Location</th>
                                 <th className="px-6 py-3 text-right">Quantity (kg)</th>
                                 <th className="px-6 py-3">Allocations</th>
                                 <th className="px-6 py-3 text-right">Last Updated</th>
@@ -518,7 +837,14 @@ export const YarnInventoryPage: React.FC = () => {
                                 
                                 return (
                                 <tr key={lot.id} className="hover:bg-slate-50 transition-colors">
-                                    <td className="px-6 py-4 font-medium text-slate-700 font-mono align-top">{lot.lotNumber}</td>
+                                    <td className="px-6 py-4 font-medium text-slate-700 font-mono align-top">
+                                        {lot.lotNumber}
+                                        {lot.location && (
+                                            <div className="mt-1 text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 inline-block ml-2">
+                                                {lot.location}
+                                            </div>
+                                        )}
+                                    </td>
                                     <td className="px-6 py-4 text-right font-mono align-top">
                                         <div className="font-bold text-indigo-600">{lot.quantity.toLocaleString()}</div>
                                         {allocatedTotal > 0 && (
