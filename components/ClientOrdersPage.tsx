@@ -15,6 +15,7 @@ import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
 import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem } from '../types';
 import { FabricDetailsModal } from './FabricDetailsModal';
+import { CreatePlanModal } from './CreatePlanModal';
 import { 
   Plus, 
   Trash2, 
@@ -209,7 +210,8 @@ const MemoizedOrderRow = React.memo(({
   handleDeleteRow,
   selectedCustomerName,
   onOpenFabricDetails,
-  showDyehouse
+  showDyehouse,
+  onOpenCreatePlan
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -223,6 +225,7 @@ const MemoizedOrderRow = React.memo(({
   selectedCustomerName: string;
   onOpenFabricDetails: (fabricName: string, qty: number, orderId: string) => void;
   showDyehouse: boolean;
+  onOpenCreatePlan: (order: OrderRow) => void;
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const refCode = row.material ? `${selectedCustomerName}-${row.material}` : '-';
@@ -397,9 +400,14 @@ const MemoizedOrderRow = React.memo(({
                     {/* Fallback if no active/planned but statusInfo exists */}
                     {statusInfo.active.length === 0 && statusInfo.planned.length === 0 && (
                        (displayRemaining || 0) > 0 ? (
-                        <span className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit">
+                        <button 
+                          onClick={() => onOpenCreatePlan(row)}
+                          className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit hover:bg-amber-100 hover:border-amber-300 transition-colors flex items-center gap-1"
+                          title="Click to assign machine"
+                        >
                           Not Planned
-                        </span>
+                          <Plus size={10} />
+                        </button>
                       ) : (
                         <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit">
                           Finished
@@ -409,9 +417,14 @@ const MemoizedOrderRow = React.memo(({
                   </>
                 ) : (
                   (displayRemaining || 0) > 0 ? (
-                    <span className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit">
+                    <button 
+                      onClick={() => onOpenCreatePlan(row)}
+                      className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit hover:bg-amber-100 hover:border-amber-300 transition-colors flex items-center gap-1"
+                      title="Click to assign machine"
+                    >
                       Not Planned
-                    </span>
+                      <Plus size={10} />
+                    </button>
                   ) : (
                     <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit">
                       Finished
@@ -670,6 +683,13 @@ export const ClientOrdersPage: React.FC = () => {
   const [selectedYarnDetails, setSelectedYarnDetails] = useState<any>(null);
   const [showDyehouse, setShowDyehouse] = useState(false);
   
+  // Create Plan Modal State
+  const [createPlanModal, setCreatePlanModal] = useState<{
+    isOpen: boolean;
+    order: OrderRow | null;
+    customerName: string;
+  }>({ isOpen: false, order: null, customerName: '' });
+
   // Fabric Details Modal State
   const [fabricDetailsModal, setFabricDetailsModal] = useState<{
     isOpen: boolean;
@@ -1611,6 +1631,11 @@ export const ClientOrdersPage: React.FC = () => {
                           selectedCustomerName={selectedCustomer.name}
                           onOpenFabricDetails={handleOpenFabricDetails}
                           showDyehouse={showDyehouse}
+                          onOpenCreatePlan={(order) => setCreatePlanModal({ 
+                            isOpen: true, 
+                            order, 
+                            customerName: selectedCustomer.name 
+                          })}
                         />
                       );
                     })}
@@ -1819,6 +1844,16 @@ export const ClientOrdersPage: React.FC = () => {
             customerName={selectedCustomer?.name}
             existingAllocations={fabricDetailsModal.allocations}
             onUpdateOrderAllocations={handleUpdateOrderAllocations}
+          />
+        )}
+
+        {/* Create Plan Modal */}
+        {createPlanModal.isOpen && createPlanModal.order && (
+          <CreatePlanModal
+            isOpen={createPlanModal.isOpen}
+            onClose={() => setCreatePlanModal({ ...createPlanModal, isOpen: false })}
+            order={createPlanModal.order}
+            customerName={createPlanModal.customerName}
           />
         )}
 

@@ -16,8 +16,10 @@ import {
   UserPlus, 
   Search,
   FileSpreadsheet,
-  X
+  X,
+  CalendarPlus
 } from 'lucide-react';
+import { CreatePlanModal } from './CreatePlanModal';
 
 const NAVIGABLE_FIELDS: (keyof OrderRow)[] = [
   'material', 'machine', 'requiredQty', 'accessory', 
@@ -33,6 +35,11 @@ export const OrdersPage: React.FC = () => {
   const [newCustomerName, setNewCustomerName] = useState('');
   const [isAddingCustomer, setIsAddingCustomer] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [createPlanModal, setCreatePlanModal] = useState<{
+    isOpen: boolean;
+    order: OrderRow | null;
+    customerName: string;
+  }>({ isOpen: false, order: null, customerName: '' });
 
   // Refs for keyboard navigation
   const tableRef = useRef<HTMLTableElement>(null);
@@ -330,28 +337,25 @@ export const OrdersPage: React.FC = () => {
                           />
                         </td>
                         {/* Machine */}
-                        <td className="p-0 border-r border-slate-200">
-                          <select
-                            className="w-full h-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 focus:ring-2 focus:ring-inset focus:ring-blue-500 appearance-none"
-                            value={row.machine}
-                            onChange={(e) => handleUpdateRow(row.id, 'machine', e.target.value)}
-                            data-row={rowIndex}
-                            data-col={1}
-                            onKeyDown={(e) => handleKeyDown(e, rowIndex, 1)}
-                          >
-                            <option value="">Select Machine</option>
-                            {machines.map(m => (
-                              <option key={m.machineid} value={m.name}>
-                                {m.name}
-                           input 
-                            type="text"
-                            className="w-full h-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 focus:ring-2 focus:ring-inset focus:ring-blue-500"
-                            value={row.machine}
-                            onChange={(e) => handleUpdateRow(row.id, 'machine', e.target.value)}
-                            data-row={rowIndex}
-                            data-col={1}
-                            onKeyDown={(e) => handleKeyDown(e, rowIndex, 1)}
-                          /
+                        <td className="p-0 border-r border-slate-200 relative group/cell">
+                          <div className="flex items-center h-full">
+                            <input
+                              type="text"
+                              className="flex-1 h-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 focus:ring-2 focus:ring-inset focus:ring-blue-500"
+                              value={row.machine}
+                              onChange={(e) => handleUpdateRow(row.id, 'machine', e.target.value)}
+                              data-row={rowIndex}
+                              data-col={1}
+                              onKeyDown={(e) => handleKeyDown(e, rowIndex, 1)}
+                            />
+                            <button
+                              onClick={() => setCreatePlanModal({ isOpen: true, order: row, customerName: selectedCustomer.name })}
+                              className="opacity-0 group-hover/cell:opacity-100 p-1 text-blue-600 hover:bg-blue-100 rounded mr-1"
+                              title="Create Plan"
+                            >
+                              <CalendarPlus size={16} />
+                            </button>
+                          </div>
                         </td>
                         {/* Accessory */}
                         <td className="p-0 border-r border-slate-200">
@@ -406,6 +410,15 @@ export const OrdersPage: React.FC = () => {
           </button>
         )}
       </div>
+
+      {createPlanModal.isOpen && createPlanModal.order && (
+        <CreatePlanModal
+          isOpen={createPlanModal.isOpen}
+          onClose={() => setCreatePlanModal({ ...createPlanModal, isOpen: false })}
+          order={createPlanModal.order}
+          customerName={createPlanModal.customerName}
+        />
+      )}
     </div>
   );
 };
