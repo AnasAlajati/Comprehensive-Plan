@@ -4,12 +4,16 @@ import {
   onSnapshot, 
   doc, 
   addDoc, 
+  setDoc,
   updateDoc,
   deleteDoc,
   query,
   where,
   or,
-  getDocs
+  getDocs,
+  collectionGroup,
+  writeBatch,
+  deleteField
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
@@ -23,6 +27,7 @@ import {
   Search,
   FileSpreadsheet,
   MapPin,
+  Layers,
   CheckCircle2,
   AlertCircle,
   X,
@@ -211,7 +216,10 @@ const MemoizedOrderRow = React.memo(({
   selectedCustomerName,
   onOpenFabricDetails,
   showDyehouse,
-  onOpenCreatePlan
+  onOpenCreatePlan,
+  dyehouses,
+  handleCreateDyehouse,
+  machines
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -226,6 +234,9 @@ const MemoizedOrderRow = React.memo(({
   onOpenFabricDetails: (fabricName: string, qty: number, orderId: string) => void;
   showDyehouse: boolean;
   onOpenCreatePlan: (order: OrderRow) => void;
+  dyehouses: any[];
+  handleCreateDyehouse: (name: string) => void;
+  machines: MachineSS[];
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const refCode = row.material ? `${selectedCustomerName}-${row.material}` : '-';
@@ -245,23 +256,32 @@ const MemoizedOrderRow = React.memo(({
     }, 0);
   }
 
-  // Calculate Assigned Machines Summary
-  const assignedMachinesSummary = useMemo(() => {
-    if (!row.dyeingPlan || row.dyeingPlan.length === 0) return '-';
+  // Calculate Assigned Machines Summary & Total Capacity
+  const { summary: assignedMachinesSummary, totalCapacity, totalSent, totalReceived } = useMemo(() => {
+    if (!row.dyeingPlan || row.dyeingPlan.length === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0 };
     
     const machineCounts = new Map<string, number>();
+    let total = 0;
+    let sent = 0;
+    let received = 0;
+
     row.dyeingPlan.forEach(batch => {
       if (batch.machine) {
         const current = machineCounts.get(batch.machine) || 0;
         machineCounts.set(batch.machine, current + 1);
       }
+      total += batch.quantity || 0;
+      sent += batch.quantitySent || 0;
+      received += batch.receivedQuantity || 0;
     });
 
-    if (machineCounts.size === 0) return '-';
+    if (machineCounts.size === 0 && total === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0 };
 
-    return Array.from(machineCounts.entries())
+    const summary = Array.from(machineCounts.entries())
       .map(([machine, count]) => `${machine}*${count}`)
       .join(' + ');
+      
+    return { summary, totalCapacity: total, totalSent: sent, totalReceived: received };
   }, [row.dyeingPlan]);
 
   return (
@@ -284,18 +304,48 @@ const MemoizedOrderRow = React.memo(({
           </td>
           {/* Dyehouse */}
           <td className="p-0 border-r border-slate-200">
-            <input 
-              type="text"
-              className="w-full h-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50"
+            <SearchDropdown
+              id={`dyehouse-${row.id}`}
+              options={dyehouses}
               value={row.dyehouse || ''}
-              onChange={(e) => handleUpdateOrder(row.id, { dyehouse: e.target.value })}
-              placeholder="Dyehouse..."
+              onChange={(val) => handleUpdateOrder(row.id, { dyehouse: val })}
+              onCreateNew={handleCreateDyehouse}
+              placeholder="اختر المصبغة..."
             />
           </td>
           {/* Assigned Machines (Calculated) */}
           <td className="p-0 border-r border-slate-200">
-             <div className="flex items-center h-full w-full px-3 py-2 text-slate-700 font-mono text-xs">
-                {assignedMachinesSummary}
+             <div className="flex flex-col justify-center h-full w-full px-3 py-1">
+                <div className="text-slate-700 font-mono text-xs">{assignedMachinesSummary}</div>
+                {totalCapacity > 0 && (
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <span className="font-bold text-slate-800 text-xs">= {totalCapacity}</span>
+                    <span className="text-[10px] text-slate-400">/ {row.requiredQty}</span>
+                    {(() => {
+                      const diff = Math.abs(totalCapacity - row.requiredQty);
+                      const percentage = row.requiredQty > 0 ? (diff / row.requiredQty) * 100 : 0;
+                      const isProblem = percentage > 15;
+                      
+                      return isProblem ? (
+                        <AlertCircle className="w-3 h-3 text-amber-500" title={`الفرق: ${percentage.toFixed(1)}%`} />
+                      ) : (
+                        <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                      );
+                    })()}
+                  </div>
+                )}
+             </div>
+          </td>
+          {/* Total Sent */}
+          <td className="p-0 border-r border-slate-200 text-right">
+             <div className="px-3 py-2 font-mono text-blue-600 font-medium text-xs">
+                {totalSent > 0 ? totalSent : '-'}
+             </div>
+          </td>
+          {/* Total Received */}
+          <td className="p-0 border-r border-slate-200 text-right">
+             <div className="px-3 py-2 font-mono text-emerald-600 font-medium text-xs">
+                {totalReceived > 0 ? totalReceived : '-'}
              </div>
           </td>
           {/* Expand Button */}
@@ -381,11 +431,20 @@ const MemoizedOrderRow = React.memo(({
                   <>
                     {statusInfo.active.length > 0 && (
                       <div className="flex flex-wrap gap-1">
-                        {statusInfo.active.map((m: string, i: number) => (
-                          <span key={`a-${i}`} className="text-[10px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded-full font-medium whitespace-nowrap border border-emerald-200">
-                            {m}
-                          </span>
-                        ))}
+                        {statusInfo.active.map((mName: string, i: number) => {
+                          const machine = machines.find(m => m.name === mName);
+                          const status = machine?.status || 'Active';
+                          
+                          let badgeClass = "bg-emerald-100 text-emerald-700 border-emerald-200";
+                          if (status === 'Stopped') badgeClass = "bg-red-100 text-red-700 border-red-200";
+                          if (status === 'Under Operation' || status === 'Maintenance' || status === 'Under Construction') badgeClass = "bg-amber-100 text-amber-700 border-amber-200";
+
+                          return (
+                            <span key={`a-${i}`} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap border ${badgeClass}`}>
+                              {mName} - {status}
+                            </span>
+                          );
+                        })}
                       </div>
                     )}
                     {statusInfo.planned.length > 0 && (
@@ -400,14 +459,40 @@ const MemoizedOrderRow = React.memo(({
                     {/* Fallback if no active/planned but statusInfo exists */}
                     {statusInfo.active.length === 0 && statusInfo.planned.length === 0 && (
                        (displayRemaining || 0) > 0 ? (
-                        <button 
-                          onClick={() => onOpenCreatePlan(row)}
-                          className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit hover:bg-amber-100 hover:border-amber-300 transition-colors flex items-center gap-1"
-                          title="Click to assign machine"
-                        >
-                          Not Planned
-                          <Plus size={10} />
-                        </button>
+                        (() => {
+                          // Check if machine is assigned in the row
+                          if (row.machine) {
+                            const assignedMachine = machines.find(m => m.name === row.machine);
+                            if (assignedMachine) {
+                              const status = assignedMachine.status || 'Unknown';
+                              const isWorking = status === 'Working';
+                              const isStopped = status === 'Stopped';
+                              const isMaintenance = status === 'Under Operation' || status === 'Maintenance';
+                              
+                              let badgeClass = "bg-slate-100 text-slate-600 border-slate-200";
+                              if (isWorking) badgeClass = "bg-emerald-50 text-emerald-600 border-emerald-200";
+                              if (isStopped) badgeClass = "bg-red-50 text-red-600 border-red-200";
+                              if (isMaintenance) badgeClass = "bg-amber-50 text-amber-600 border-amber-200";
+
+                              return (
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap border w-fit ${badgeClass}`}>
+                                  {assignedMachine.name} - {status}
+                                </span>
+                              );
+                            }
+                          }
+                          
+                          return (
+                            <button 
+                              onClick={() => onOpenCreatePlan(row)}
+                              className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit hover:bg-amber-100 hover:border-amber-300 transition-colors flex items-center gap-1"
+                              title="Click to assign machine"
+                            >
+                              Not Planned
+                              <Plus size={10} />
+                            </button>
+                          );
+                        })()
                       ) : (
                         <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit">
                           Finished
@@ -417,14 +502,40 @@ const MemoizedOrderRow = React.memo(({
                   </>
                 ) : (
                   (displayRemaining || 0) > 0 ? (
-                    <button 
-                      onClick={() => onOpenCreatePlan(row)}
-                      className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit hover:bg-amber-100 hover:border-amber-300 transition-colors flex items-center gap-1"
-                      title="Click to assign machine"
-                    >
-                      Not Planned
-                      <Plus size={10} />
-                    </button>
+                    (() => {
+                      // Check if machine is assigned in the row
+                      if (row.machine) {
+                        const assignedMachine = machines.find(m => m.name === row.machine);
+                        if (assignedMachine) {
+                          const status = assignedMachine.status || 'Unknown';
+                          const isWorking = status === 'Working';
+                          const isStopped = status === 'Stopped';
+                          const isMaintenance = status === 'Under Operation' || status === 'Maintenance';
+                          
+                          let badgeClass = "bg-slate-100 text-slate-600 border-slate-200";
+                          if (isWorking) badgeClass = "bg-emerald-50 text-emerald-600 border-emerald-200";
+                          if (isStopped) badgeClass = "bg-red-50 text-red-600 border-red-200";
+                          if (isMaintenance) badgeClass = "bg-amber-50 text-amber-600 border-amber-200";
+
+                          return (
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap border w-fit ${badgeClass}`}>
+                              {assignedMachine.name} - {status}
+                            </span>
+                          );
+                        }
+                      }
+
+                      return (
+                        <button 
+                          onClick={() => onOpenCreatePlan(row)}
+                          className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit hover:bg-amber-100 hover:border-amber-300 transition-colors flex items-center gap-1"
+                          title="Click to assign machine"
+                        >
+                          Not Planned
+                          <Plus size={10} />
+                        </button>
+                      );
+                    })()
                   ) : (
                     <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit">
                       Finished
@@ -555,15 +666,22 @@ const MemoizedOrderRow = React.memo(({
     {showDyehouse && isExpanded && (
       <tr className="bg-slate-50/50 animate-in slide-in-from-top-2">
         <td colSpan={1} className="border-r border-slate-200"></td>
-        <td colSpan={5} className="p-4 border-b border-slate-200 shadow-inner">
+        <td colSpan={10} className="p-4 border-b border-slate-200 shadow-inner">
             <div className="bg-white rounded border border-slate-200 overflow-hidden">
-              <table className="w-full text-xs">
+              <table className="w-full text-xs" dir="rtl">
                 <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                   <tr>
-                    <th className="px-3 py-2 text-left w-1/4">Color</th>
-                    <th className="px-3 py-2 text-right w-24">Qty (kg)</th>
-                    <th className="px-3 py-2 text-left w-1/4">Assigned Machine</th>
-                    <th className="px-3 py-2 text-left">Notes</th>
+                    <th className="px-3 py-2 text-right min-w-[120px]">اللون</th>
+                    <th className="px-3 py-2 text-right w-24">رقم الازن</th>
+                    <th className="px-3 py-2 text-right w-32">تاريخ التشكيل</th>
+                    <th className="px-3 py-2 text-center w-16 text-[10px] text-slate-400">ايام</th>
+                    <th className="px-3 py-2 text-right w-32">تاريخ الارسال</th>
+                    <th className="px-3 py-2 text-center w-16 text-[10px] text-slate-400">ايام</th>
+                    <th className="px-3 py-2 text-center w-20">حوض الصباغة</th>
+                    <th className="px-3 py-2 text-center w-20">مرسل</th>
+                    <th className="px-3 py-2 text-center w-20">مستلم</th>
+                    <th className="px-3 py-2 text-center w-20">الحالة</th>
+                    <th className="px-3 py-2 text-right">ملاحظات</th>
                     <th className="px-3 py-2 w-10"></th>
                   </tr>
                 </thead>
@@ -573,20 +691,71 @@ const MemoizedOrderRow = React.memo(({
                       <td className="p-0">
                         <input
                           type="text"
-                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50"
+                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right"
                           value={batch.color}
                           onChange={(e) => {
                             const newPlan = [...(row.dyeingPlan || [])];
                             newPlan[idx] = { ...batch, color: e.target.value };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                           }}
-                          placeholder="Color Name..."
+                          placeholder="اللون..."
                         />
                       </td>
                       <td className="p-0">
                         <input
+                          type="text"
+                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right"
+                          value={batch.dispatchNumber || ''}
+                          onChange={(e) => {
+                            const newPlan = [...(row.dyeingPlan || [])];
+                            newPlan[idx] = { ...batch, dispatchNumber: e.target.value };
+                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                          }}
+                          placeholder="رقم..."
+                        />
+                      </td>
+                      <td className="p-0">
+                        <input
+                          type="date"
+                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right"
+                          value={batch.formationDate || ''}
+                          onChange={(e) => {
+                            const newPlan = [...(row.dyeingPlan || [])];
+                            newPlan[idx] = { ...batch, formationDate: e.target.value };
+                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                          }}
+                        />
+                      </td>
+                      <td className="p-0 text-center align-middle">
+                        {batch.formationDate && (
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            {Math.floor((new Date().getTime() - new Date(batch.formationDate).getTime()) / (1000 * 60 * 60 * 24))}
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-0">
+                        <input
+                          type="date"
+                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right"
+                          value={batch.dateSent || ''}
+                          onChange={(e) => {
+                            const newPlan = [...(row.dyeingPlan || [])];
+                            newPlan[idx] = { ...batch, dateSent: e.target.value };
+                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                          }}
+                        />
+                      </td>
+                      <td className="p-0 text-center align-middle">
+                        {batch.dateSent && (
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            {Math.floor((new Date().getTime() - new Date(batch.dateSent).getTime()) / (1000 * 60 * 60 * 24))}
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-0">
+                        <input
                           type="number"
-                          className="w-full px-3 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono"
+                          className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-400"
                           value={batch.quantity || ''}
                           onChange={(e) => {
                             const newPlan = [...(row.dyeingPlan || [])];
@@ -598,28 +767,52 @@ const MemoizedOrderRow = React.memo(({
                       </td>
                       <td className="p-0">
                         <input
-                          type="text"
-                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50"
-                          value={batch.machine}
+                          type="number"
+                          className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono font-medium text-blue-600"
+                          value={batch.quantitySent || ''}
                           onChange={(e) => {
                             const newPlan = [...(row.dyeingPlan || [])];
-                            newPlan[idx] = { ...batch, machine: e.target.value };
+                            newPlan[idx] = { ...batch, quantitySent: Number(e.target.value) };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                           }}
-                          placeholder="Machine..."
+                          placeholder="0"
                         />
                       </td>
                       <td className="p-0">
                         <input
+                          type="number"
+                          className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono font-medium text-emerald-600"
+                          value={batch.receivedQuantity || ''}
+                          onChange={(e) => {
+                            const newPlan = [...(row.dyeingPlan || [])];
+                            newPlan[idx] = { ...batch, receivedQuantity: Number(e.target.value) };
+                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                          }}
+                          placeholder="0"
+                        />
+                      </td>
+                      <td className="p-0 text-center align-middle">
+                        {(() => {
+                           if (batch.receivedQuantity && batch.receivedQuantity > 0) {
+                             return <span className="inline-block text-[10px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded border border-emerald-200 font-medium">تم الاستلام</span>;
+                           }
+                           if (batch.dispatchNumber) {
+                             return <span className="inline-block text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded border border-blue-200 font-medium">تم الارسال</span>;
+                           }
+                           return <span className="inline-block text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded border border-slate-200 font-medium">مخطط</span>;
+                        })()}
+                      </td>
+                      <td className="p-0">
+                        <input
                           type="text"
-                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50"
+                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right"
                           value={batch.notes}
                           onChange={(e) => {
                             const newPlan = [...(row.dyeingPlan || [])];
                             newPlan[idx] = { ...batch, notes: e.target.value };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                           }}
-                          placeholder="Notes..."
+                          placeholder="ملاحظات..."
                         />
                       </td>
                       <td className="p-0 text-center">
@@ -637,7 +830,7 @@ const MemoizedOrderRow = React.memo(({
                   ))}
                   {/* Add Button Row */}
                   <tr>
-                    <td colSpan={5} className="p-2">
+                    <td colSpan={13} className="p-2">
                       <button
                         onClick={() => {
                           const newBatch = {
@@ -654,7 +847,7 @@ const MemoizedOrderRow = React.memo(({
                         className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50 transition-colors"
                       >
                         <Plus className="w-3 h-3" />
-                        Add Color
+                        اضافة لون
                       </button>
                     </td>
                   </tr>
@@ -670,6 +863,8 @@ const MemoizedOrderRow = React.memo(({
 
 export const ClientOrdersPage: React.FC = () => {
   const [customers, setCustomers] = useState<CustomerSheet[]>([]);
+  const [rawCustomers, setRawCustomers] = useState<CustomerSheet[]>([]);
+  const [flatOrders, setFlatOrders] = useState<OrderRow[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [newCustomerName, setNewCustomerName] = useState('');
@@ -682,6 +877,7 @@ export const ClientOrdersPage: React.FC = () => {
   const [showYarnRequirements, setShowYarnRequirements] = useState(false);
   const [selectedYarnDetails, setSelectedYarnDetails] = useState<any>(null);
   const [showDyehouse, setShowDyehouse] = useState(false);
+  const [dyehouses, setDyehouses] = useState<{ id: string; name: string }[]>([]);
   
   // Create Plan Modal State
   const [createPlanModal, setCreatePlanModal] = useState<{
@@ -732,17 +928,16 @@ export const ClientOrdersPage: React.FC = () => {
 
   // Fetch Data
   useEffect(() => {
-    // Customers
+    // 1. Customers (Shells)
     const unsubCustomers = onSnapshot(collection(db, 'CustomerSheets'), (snapshot) => {
       const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as CustomerSheet));
-      data.sort((a, b) => a.name.localeCompare(b.name));
-      setCustomers(data);
-      
-      // Only set initial selection once
-      if (!initialSelectionMade.current && data.length > 0) {
-        setSelectedCustomerId(data[0].id);
-        initialSelectionMade.current = true;
-      }
+      setRawCustomers(data);
+    });
+
+    // 2. All Orders (Sub-collections) - Optimized for Global View
+    const unsubOrders = onSnapshot(query(collectionGroup(db, 'orders')), (snapshot) => {
+      const orders = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as OrderRow));
+      setFlatOrders(orders);
     });
 
     // Machines (for active status)
@@ -756,6 +951,9 @@ export const ClientOrdersPage: React.FC = () => {
 
     // Yarns
     DataService.getYarns().then(setYarns);
+
+    // Dyehouses
+    DataService.getDyehouses().then(setDyehouses);
 
     // Inventory
     const unsubInventory = onSnapshot(collection(db, 'yarn_inventory'), (snapshot) => {
@@ -772,11 +970,30 @@ export const ClientOrdersPage: React.FC = () => {
 
     return () => {
       unsubCustomers();
+      unsubOrders();
       unsubMachines();
       unsubInventory();
       unsubSettings();
     };
   }, []);
+
+  // Merge Customers & Orders
+  useEffect(() => {
+    const merged = rawCustomers.map(c => {
+        const subCollectionOrders = flatOrders.filter(o => o.customerId === c.id);
+        // Backward Compatibility: Use legacy array if sub-collection is empty
+        // Note: If you have migrated, subCollectionOrders will be populated.
+        const finalOrders = subCollectionOrders.length > 0 ? subCollectionOrders : (c.orders || []);
+        return { ...c, orders: finalOrders };
+    });
+    merged.sort((a, b) => a.name.localeCompare(b.name));
+    setCustomers(merged);
+    
+    if (!initialSelectionMade.current && merged.length > 0) {
+      setSelectedCustomerId(merged[0].id);
+      initialSelectionMade.current = true;
+    }
+  }, [rawCustomers, flatOrders]);
 
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
 
@@ -808,7 +1025,7 @@ export const ClientOrdersPage: React.FC = () => {
 
             // Check Active Logs
             const activeLog = m.dailyLogs?.find(l => l.date === activeDay);
-            if (activeLog && (activeLog.status === 'Working' || activeLog.status === 'تعمل')) {
+            if (activeLog) {
                 // Robust Match: Check Reference OR (Client AND Fabric)
                 // We normalize client/fabric to handle case/whitespace differences
                 const logClient = normalize(activeLog.client);
@@ -1042,6 +1259,14 @@ export const ClientOrdersPage: React.FC = () => {
   const handleDeleteCustomer = async (id: string) => {
     if (!window.confirm("Delete customer and all orders?")) return;
     try {
+      // Delete sub-collection orders first to prevent orphans in collectionGroup queries
+      const ordersSnapshot = await getDocs(collection(db, 'CustomerSheets', id, 'orders'));
+      const batch = writeBatch(db);
+      ordersSnapshot.docs.forEach(doc => {
+          batch.delete(doc.ref);
+      });
+      await batch.commit();
+
       await deleteDoc(doc(db, 'CustomerSheets', id));
       if (selectedCustomerId === id) setSelectedCustomerId(null);
     } catch (error) {
@@ -1066,10 +1291,22 @@ export const ClientOrdersPage: React.FC = () => {
       others: '',
       notes: '',
       batchDeliveries: '',
-      accessoryDeliveries: ''
+      accessoryDeliveries: '',
+      customerId: selectedCustomerId // Link to parent
     };
-    const updatedOrders = [...selectedCustomer.orders, newRow];
-    await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+
+    // Check if we should use sub-collection (if already migrated or empty)
+    const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
+    const hasLegacyData = selectedCustomer.orders && selectedCustomer.orders.length > 0 && !hasSubCollectionData;
+
+    if (hasLegacyData) {
+        // Legacy Mode: Append to array
+        const updatedOrders = [...selectedCustomer.orders, newRow];
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+    } else {
+        // Optimized Mode: Add to sub-collection
+        await setDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', newRow.id), newRow);
+    }
   };
 
   const handleUpdateOrder = async (rowId: string, updates: Partial<OrderRow>) => {
@@ -1105,7 +1342,7 @@ export const ClientOrdersPage: React.FC = () => {
       return order;
     });
 
-    // Update local state immediately
+    // Update local state immediately (for responsiveness)
     setCustomers(prev => prev.map(c => {
       if (c.id === selectedCustomerId) {
         return { ...c, orders: updatedOrders };
@@ -1114,7 +1351,15 @@ export const ClientOrdersPage: React.FC = () => {
     }));
 
     // Send to Firestore
-    await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+    const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
+    
+    if (hasSubCollectionData) {
+        // Optimized Mode
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', rowId), finalUpdates);
+    } else {
+        // Legacy Mode
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+    }
   };
 
   const toggleSelectAll = () => {
@@ -1154,7 +1399,20 @@ export const ClientOrdersPage: React.FC = () => {
       return c;
     }));
 
-    await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+    const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
+    if (hasSubCollectionData) {
+        const batch = writeBatch(db);
+        selectedCustomer.orders.forEach(order => {
+            if (selectedRows.has(order.id)) {
+                const ref = doc(db, 'CustomerSheets', selectedCustomerId, 'orders', order.id);
+                batch.update(ref, { orderReceiptDate: bulkDate });
+            }
+        });
+        await batch.commit();
+    } else {
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+    }
+
     setShowBulkDateInput(false);
     setBulkDate('');
     setSelectedRows(new Set());
@@ -1165,8 +1423,17 @@ export const ClientOrdersPage: React.FC = () => {
   const handleDeleteRow = async (rowId: string) => {
     if (!selectedCustomerId || !selectedCustomer) return;
     if (!window.confirm("Delete this order row?")) return;
-    const updatedOrders = selectedCustomer.orders.filter(o => o.id !== rowId);
-    await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+    
+    const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
+
+    if (hasSubCollectionData) {
+        // Optimized Mode
+        await deleteDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', rowId));
+    } else {
+        // Legacy Mode
+        const updatedOrders = selectedCustomer.orders.filter(o => o.id !== rowId);
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+    }
   };
 
   const handlePlanSearch = (clientName: string, fabricName: string) => {
@@ -1223,6 +1490,15 @@ export const ClientOrdersPage: React.FC = () => {
     setFabrics(await DataService.getFabrics());
   };
 
+  const handleCreateDyehouse = async (name: string) => {
+    try {
+      await DataService.addDyehouse(name);
+      setDyehouses(await DataService.getDyehouses());
+    } catch (err) {
+      console.error("Failed to create dyehouse", err);
+    }
+  };
+
   const handleOpenFabricDetails = (fabricName: string, qty: number, orderId?: string) => {
     const fabric = fabrics.find(f => f.name === fabricName);
     let allocations: Record<string, YarnAllocationItem[]> | undefined;
@@ -1264,7 +1540,12 @@ export const ClientOrdersPage: React.FC = () => {
       return c;
     }));
 
-    await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+    const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
+    if (hasSubCollectionData) {
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', orderId), { yarnAllocations: allocations });
+    } else {
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+    }
   };
 
   const handleUpdateFabric = async (fabricId: string, updates: Partial<Fabric>) => {
@@ -1280,6 +1561,25 @@ export const ClientOrdersPage: React.FC = () => {
     });
     setYarns(await DataService.getYarns());
     return newId;
+  };
+
+  const handleMigrateData = async () => {
+      if (!selectedCustomerId || !selectedCustomer) return;
+      if (!window.confirm(`Migrate ${selectedCustomer.orders.length} orders to new structure? This is irreversible.`)) return;
+      
+      const batch = writeBatch(db);
+      const customerRef = doc(db, 'CustomerSheets', selectedCustomerId);
+      
+      selectedCustomer.orders.forEach(order => {
+          const newOrderRef = doc(collection(db, 'CustomerSheets', selectedCustomerId, 'orders'), order.id);
+          batch.set(newOrderRef, { ...order, customerId: selectedCustomerId });
+      });
+      
+      // Delete legacy array
+      batch.update(customerRef, { orders: deleteField() });
+      
+      await batch.commit();
+      alert("Migration Complete! Database is now optimized.");
   };
 
   const filteredCustomers = customers.filter(c => 
@@ -1402,6 +1702,26 @@ export const ClientOrdersPage: React.FC = () => {
         {/* Right Actions */}
         {selectedCustomer && (
           <div className="flex items-center gap-3">
+             {/* Migration Button (Only if legacy data exists and not yet migrated) */}
+             {(() => {
+                const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
+                const hasLegacyData = rawCustomers.find(c => c.id === selectedCustomerId)?.orders?.length;
+                
+                if (hasLegacyData && !hasSubCollectionData) {
+                    return (
+                        <button 
+                            onClick={handleMigrateData}
+                            className="flex items-center gap-2 px-3 py-2 bg-amber-100 text-amber-700 hover:bg-amber-200 rounded-lg transition-colors text-sm font-medium border border-amber-200"
+                            title="Optimize Database Structure"
+                        >
+                            <Layers className="w-4 h-4" />
+                            Migrate Data
+                        </button>
+                    );
+                }
+                return null;
+             })()}
+
              <button 
                 onClick={() => handleDeleteCustomer(selectedCustomer.id)}
                 className="flex items-center gap-2 px-3 py-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors text-sm font-medium"
@@ -1573,9 +1893,11 @@ export const ClientOrdersPage: React.FC = () => {
                       </th>
                       {showDyehouse ? (
                         <>
-                          <th className="p-3 text-left border-b border-r border-slate-200 min-w-[120px]">Fabric</th>
-                          <th className="p-3 text-left border-b border-r border-slate-200 min-w-[120px]">Dyehouse</th>
-                          <th className="p-3 text-left border-b border-r border-slate-200 min-w-[200px]">Assigned Machines</th>
+                          <th className="p-3 text-right border-b border-r border-slate-200 min-w-[120px]">القماش</th>
+                          <th className="p-3 text-right border-b border-r border-slate-200 min-w-[120px]">المصبغة</th>
+                          <th className="p-3 text-right border-b border-r border-slate-200 min-w-[200px]">الماكينات</th>
+                          <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي المرسل</th>
+                          <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي المستلم</th>
                           <th className="p-3 text-center border-b border-r border-slate-200 w-10"></th>
                         </>
                       ) : (
@@ -1601,7 +1923,7 @@ export const ClientOrdersPage: React.FC = () => {
                         </>
                       )}
                       {showDyehouse && (
-                         <th className="p-3 text-right border-b border-r border-slate-200 w-24">Ordered</th>
+                         <th className="p-3 text-right border-b border-r border-slate-200 w-24">المطلوب</th>
                       )}
                       <th className="p-3 w-10 border-b border-slate-200"></th>
                     </tr>
@@ -1636,6 +1958,9 @@ export const ClientOrdersPage: React.FC = () => {
                             order, 
                             customerName: selectedCustomer.name 
                           })}
+                          dyehouses={dyehouses}
+                          handleCreateDyehouse={handleCreateDyehouse}
+                          machines={machines}
                         />
                       );
                     })}

@@ -62,6 +62,8 @@ export interface CustomerOrder {
 }
 
 export interface DailyLogEntry {
+  id?: string; // Firestore Doc ID
+  machineId?: number; // Link to parent machine
   date: string;
   dayProduction: number;
   scrap: number;
@@ -112,6 +114,11 @@ export interface DyeingBatch {
   quantity: number;
   machine: string;
   notes: string;
+  dispatchNumber?: string; // رقم الازن
+  dateSent?: string;       // تاريخ بعت المصبغة
+  formationDate?: string;  // تاريخ التشكيل
+  quantitySent?: number;   // الكمية المبعوتة
+  receivedQuantity?: number; // المستلم
 }
 
 export interface YarnAllocationItem {
@@ -146,6 +153,7 @@ export interface OrderRow {
   dyehouseMachine?: string; // NEW: Dyehouse Machine
   fabricColor?: string; // NEW: Fabric Color
   dyeingPlan?: DyeingBatch[]; // NEW: Detailed Dyeing Plan
+  customerId?: string; // NEW: Link to parent customer for collectionGroup queries
 }
 
 export interface CustomerSheet {

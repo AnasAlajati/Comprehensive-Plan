@@ -10,7 +10,9 @@ import {
   limit,
   deleteDoc,
   setDoc,
-  getDoc
+  getDoc,
+  collectionGroup,
+  where
 } from 'firebase/firestore';
 import { db } from './services/firebase';
 import { DataService } from './services/dataService';
@@ -30,6 +32,7 @@ import { ProductionHistoryPage } from './components/ProductionHistoryPage';
 import { OrderFulfillmentPage } from './components/OrderFulfillmentPage';
 import { AnalyticsPage } from './components/AnalyticsPage';
 import { YarnInventoryPage } from './components/YarnInventoryPage';
+import { DyehouseInventoryPage } from './components/DyehouseInventoryPage';
 import { 
   Send, 
   CheckCircle, 
@@ -45,12 +48,14 @@ import {
   BarChart3,
   Sparkles,
   PieChart,
-  Truck
+  Truck,
+  Layers
 } from 'lucide-react';
 import { MachineStatus } from './types';
 
 const App: React.FC = () => {
   const [rawMachines, setRawMachines] = useState<any[]>([]);
+  const [todaysLogs, setTodaysLogs] = useState<any[]>([]); // NEW: Store logs from sub-collection
   const [machines, setMachines] = useState<MachineRow[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
@@ -65,7 +70,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'orders' | 'compare' | 'history' | 'fulfillment' | 'analytics' | 'yarn-inventory'>('planning'); 
+  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'orders' | 'compare' | 'history' | 'fulfillment' | 'analytics' | 'yarn-inventory' | 'dyehouse-inventory'>('planning'); 
   
   // External Production State
   const [externalProduction, setExternalProduction] = useState<number>(0);
@@ -147,6 +152,19 @@ const App: React.FC = () => {
       setMachineLoading(false);
     });
 
+    // NEW: Daily Logs Listener (Sub-collection support)
+    // We only fetch logs for the selected date to keep it lightweight
+    const qLogs = query(collectionGroup(db, 'dailyLogs'), where('date', '==', selectedDate));
+    const unsubscribeLogs = onSnapshot(qLogs, (snapshot) => {
+      const fetchedLogs = snapshot.docs.map(doc => ({
+        ...doc.data(),
+        id: doc.id
+      }));
+      setTodaysLogs(fetchedLogs);
+    }, (error) => {
+      console.error("Snapshot Error (DailyLogs):", error);
+    });
+
     // Factory Stats Listener (for External Production)
     const statsDocRef = doc(db, 'factory_stats', 'daily_production');
     const unsubscribeStats = onSnapshot(statsDocRef, (docSnap) => {
@@ -160,15 +178,21 @@ const App: React.FC = () => {
 
     return () => {
       unsubscribeMachines();
+      unsubscribeLogs();
       unsubscribeStats();
     };
-  }, [isConnected]);
+  }, [isConnected, selectedDate]); // Added selectedDate dependency so logs re-fetch when date changes
 
   // 3. Process Machines based on Selected Date
   useEffect(() => {
     const processedMachines: MachineRow[] = rawMachines.map(data => {
-      // Find log for selectedDate
-      const dailyLog = (data.dailyLogs || []).find((l: any) => l.date === selectedDate);
+      // 1. Try to find log in the new sub-collection state
+      let dailyLog = todaysLogs.find((l: any) => String(l.machineId) === String(data.id));
+
+      // 2. Fallback to legacy array if not found in sub-collection
+      if (!dailyLog) {
+         dailyLog = (data.dailyLogs || []).find((l: any) => l.date === selectedDate);
+      }
       
       return {
         id: data.id,
@@ -194,25 +218,29 @@ const App: React.FC = () => {
       } as MachineRow;
     });
     setMachines(processedMachines);
-  }, [rawMachines, selectedDate]);
+  }, [rawMachines, selectedDate, todaysLogs]);
 
-  // 4. Update Machine (Refactored to use MachineSS)
+  // 4. Update Machine (Refactored to use MachineSS and Sub-collections)
   const handleUpdateMachine = async (updatedMachine: MachineRow, reportDate?: string) => {
     try {
       const machineId = String(updatedMachine.id);
       // Use reportDate if provided, otherwise use the currently selected date in the UI
       const date = reportDate || selectedDate;
       
-      // 1. Get current machine data to preserve logs
+      // 1. Get current machine data (Parent)
       const machineRef = doc(db, 'MachineSS', machineId);
-      const docSnap = await import('firebase/firestore').then(mod => mod.getDoc(machineRef));
+      const docSnap = await getDoc(machineRef);
       
       if (!docSnap.exists()) {
         throw new Error("Machine not found");
       }
       
       const currentData = docSnap.data();
-      const currentLogs = currentData.dailyLogs || [];
+      
+      // 2. Get existing log (Sub-collection)
+      const logRef = doc(db, 'MachineSS', machineId, 'dailyLogs', date);
+      const logSnap = await getDoc(logRef);
+      const existingLog = logSnap.exists() ? logSnap.data() : null;
       
       // --- NEW: Running Balance Logic ---
       // We calculate the new remaining quantity based on the previous state to ensure consistency.
@@ -222,7 +250,6 @@ const App: React.FC = () => {
       // Only apply auto-calculation if we are working on the latest state or a future date
       // (Editing old history without cascading updates is complex, so we focus on the "Running Balance" of now)
       if (!currentData.lastLogDate || date >= currentData.lastLogDate) {
-          const existingLog = currentLogs.find((l: any) => l.date === date);
           const newProduction = Number(updatedMachine.dayProduction) || 0;
           
           let baseRemaining = 0;
@@ -253,11 +280,10 @@ const App: React.FC = () => {
       }
       // ----------------------------------
 
-      // 2. Update or Create Log for the date
-      const logIndex = currentLogs.findIndex((l: any) => l.date === date);
-      
+      // 3. Create Log Entry
       const newLogEntry = {
         id: date,
+        machineId: Number(machineId),
         date: date,
         dayProduction: Number(updatedMachine.dayProduction) || 0,
         scrap: Number(updatedMachine.scrap) || 0,
@@ -268,16 +294,15 @@ const App: React.FC = () => {
         remainingMfg: calculatedRemaining, // Use Calculated Value
         reason: updatedMachine.reason || '',
         customStatusNote: updatedMachine.customStatusNote || '',
+        orderReference: updatedMachine.orderReference || '',
         timestamp: new Date().toISOString()
       };
 
-      if (logIndex >= 0) {
-        updatedLogs[logIndex] = { ...updatedLogs[logIndex], ...newLogEntry };
-      } else {
-        updatedLogs.push(newLogEntry);
-      }
+      // 4. Write to Sub-collection
+      await setDoc(logRef, newLogEntry, { merge: true });
 
-      // 3. Prepare updates
+      // 5. Prepare updates (Parent Document)
+      // Note: We NO LONGER update the 'dailyLogs' array on the parent document.
       const updates: any = {
         name: updatedMachine.machineName,
         brand: updatedMachine.brand,
@@ -285,11 +310,10 @@ const App: React.FC = () => {
         avgProduction: updatedMachine.avgProduction,
         futurePlans: updatedMachine.futurePlans || [],
         orderIndex: updatedMachine.orderIndex,
-        dailyLogs: updatedLogs,
         lastUpdated: new Date().toISOString()
       };
 
-      // 4. Update lastLogData if this is the latest log
+      // 6. Update lastLogData if this is the latest log
       if (!currentData.lastLogDate || date >= currentData.lastLogDate) {
         updates.lastLogDate = date;
         updates.lastLogData = {
@@ -503,6 +527,13 @@ const App: React.FC = () => {
                     <Wrench size={20} />
                   </button>
                   <button 
+                    onClick={() => setViewMode('dyehouse-inventory')}
+                    title="Dyehouse Inventory"
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'dyehouse-inventory' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    <Layers size={20} />
+                  </button>
+                  <button 
                     onClick={() => setViewMode('idle')}
                     title="Idle Machines"
                     className={`p-2.5 rounded-lg transition-all ${viewMode === 'idle' ? 'bg-red-50 text-red-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
@@ -543,6 +574,10 @@ const App: React.FC = () => {
               <MaintenanceDashboard 
                 machines={machines}
               />
+            )}
+
+            {viewMode === 'dyehouse-inventory' && (
+              <DyehouseInventoryPage />
             )}
 
             {viewMode === 'idle' && (

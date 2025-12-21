@@ -67,6 +67,19 @@ export const DataService = {
     return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as { id: string; name: string }));
   },
 
+  async getDyehouses(): Promise<{ id: string; name: string }[]> {
+    const snapshot = await getDocs(collection(db, 'dyehouses'));
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as { id: string; name: string }));
+  },
+
+  async addDyehouse(name: string): Promise<string> {
+    const docRef = await addDoc(collection(db, 'dyehouses'), {
+      name,
+      createdAt: Timestamp.now()
+    });
+    return docRef.id;
+  },
+
   async addFabric(fabric: Omit<Fabric, 'id'>): Promise<string> {
     const docRef = await addDoc(collection(db, 'fabrics'), {
       ...fabric,
