@@ -17,7 +17,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
-import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem } from '../types';
+import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem, FabricDefinition } from '../types';
 import { FabricDetailsModal } from './FabricDetailsModal';
 import { CreatePlanModal } from './CreatePlanModal';
 import { 
@@ -86,9 +86,13 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
   const [inputValue, setInputValue] = useState(value);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Helper to get display label
+  const getLabel = (opt: any) => opt.shortName || opt.name;
+
   useEffect(() => {
-    setInputValue(value);
-  }, [value]);
+    const selected = options.find(o => o.name === value);
+    setInputValue(selected ? getLabel(selected) : value);
+  }, [value, options]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -110,12 +114,12 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
   }, [isOpen]);
 
   const filteredOptions = options.filter(opt =>
-    opt.name.toLowerCase().includes(searchTerm.toLowerCase())
+    getLabel(opt).toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const handleSelect = (optionName: string) => {
-    setInputValue(optionName);
-    onChange(optionName);
+  const handleSelect = (option: any) => {
+    setInputValue(getLabel(option));
+    onChange(option.name); // Save full name
     setSearchTerm('');
     setIsOpen(false);
   };
@@ -143,7 +147,7 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
         }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && filteredOptions.length > 0) {
-             handleSelect(filteredOptions[0].name);
+             handleSelect(filteredOptions[0]);
           } else if (e.key === 'Enter' && onCreateNew && searchTerm) {
              onCreateNew(searchTerm);
              setIsOpen(false);
@@ -165,13 +169,14 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
               {filteredOptions.map((opt, idx) => (
                 <div
                   key={idx}
-                  onClick={() => handleSelect(opt.name)}
+                  onClick={() => handleSelect(opt)}
                   className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm border-b border-slate-50 last:border-b-0 text-left"
                 >
-                  {opt.name}
+                  <div className="font-medium">{getLabel(opt)}</div>
+                  {opt.code && <div className="text-[10px] text-slate-400">{opt.code}</div>}
                 </div>
               ))}
-              {onCreateNew && searchTerm && !options.some(o => o.name.toLowerCase() === searchTerm.toLowerCase()) && (
+              {onCreateNew && searchTerm && !options.some(o => getLabel(o).toLowerCase() === searchTerm.toLowerCase()) && (
                 <div
                   onClick={() => {
                     onCreateNew(searchTerm);
@@ -219,11 +224,12 @@ const MemoizedOrderRow = React.memo(({
   onOpenCreatePlan,
   dyehouses,
   handleCreateDyehouse,
-  machines
+  machines,
+  externalFactories
 }: {
   row: OrderRow;
   statusInfo: any;
-  fabrics: any[];
+  fabrics: FabricDefinition[];
   isSelected: boolean;
   toggleSelectRow: (id: string) => void;
   handleUpdateOrder: (id: string, updates: Partial<OrderRow>) => void;
@@ -237,6 +243,7 @@ const MemoizedOrderRow = React.memo(({
   dyehouses: any[];
   handleCreateDyehouse: (name: string) => void;
   machines: MachineSS[];
+  externalFactories: any[];
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const refCode = row.material ? `${selectedCustomerName}-${row.material}` : '-';
@@ -245,11 +252,27 @@ const MemoizedOrderRow = React.memo(({
 
   // Calculate Total Yarn for this order if fabric has composition
   const fabricDetails = fabrics.find(f => f.name === row.material);
-  const hasComposition = fabricDetails?.yarnComposition && fabricDetails.yarnComposition.length > 0;
+  
+  // Determine active composition based on variantId or fallback to legacy
+  let activeComposition: any[] = [];
+  if (fabricDetails) {
+      if (row.variantId && fabricDetails.variants) {
+          const variant = fabricDetails.variants.find(v => v.id === row.variantId);
+          if (variant) activeComposition = variant.yarns;
+      } else if (fabricDetails.yarnComposition) {
+          // Legacy fallback
+          activeComposition = fabricDetails.yarnComposition;
+      } else if (fabricDetails.variants && fabricDetails.variants.length === 1) {
+          // Auto-select single variant if only one exists
+          activeComposition = fabricDetails.variants[0].yarns;
+      }
+  }
+
+  const hasComposition = activeComposition.length > 0;
   
   let totalYarnForOrder = 0;
   if (hasComposition && row.requiredQty > 0) {
-    totalYarnForOrder = fabricDetails.yarnComposition.reduce((sum: number, comp: any) => {
+    totalYarnForOrder = activeComposition.reduce((sum: number, comp: any) => {
       const base = (row.requiredQty * (comp.percentage || 0)) / 100;
       const scrap = 1 + ((comp.scrapPercentage || 0) / 100);
       return sum + (base * scrap);
@@ -299,7 +322,10 @@ const MemoizedOrderRow = React.memo(({
           {/* Fabric (Read-only in Dyehouse View) */}
           <td className="p-0 border-r border-slate-200 relative group/fabric" title={refCode}>
              <div className="flex items-center h-full w-full px-3 py-2 text-slate-700 font-medium">
-                {row.material || '-'}
+                {(() => {
+                  const fabricDef = fabrics.find(f => f.name === row.material);
+                  return fabricDef ? (fabricDef.shortName || fabricDef.name) : (row.material || '-');
+                })()}
              </div>
           </td>
           {/* Dyehouse */}
@@ -369,10 +395,47 @@ const MemoizedOrderRow = React.memo(({
                   id={`fabric-${row.id}`}
                   options={fabrics}
                   value={row.material}
-                  onChange={(val) => handleUpdateOrder(row.id, { material: val })}
+                  onChange={(val) => {
+                      // Reset variant when fabric changes
+                      handleUpdateOrder(row.id, { material: val, variantId: undefined });
+                  }}
                   onCreateNew={handleCreateFabric}
                   placeholder="Select Fabric..."
                 />
+                
+                {/* Variant Selector */}
+                {fabricDetails && fabricDetails.variants && fabricDetails.variants.length > 1 && (
+                    <div className="mt-1 px-1">
+                        <select
+                            value={row.variantId || ''}
+                            onChange={(e) => handleUpdateOrder(row.id, { variantId: e.target.value })}
+                            className={`w-full text-[10px] p-1 border rounded focus:outline-none cursor-pointer ${!row.variantId ? 'bg-amber-50 border-amber-300 text-amber-700 font-bold animate-pulse' : 'bg-slate-50 border-slate-200 text-slate-600'}`}
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <option value="">{row.variantId ? 'Change Variant...' : '⚠️ Select Variant (Required)'}</option>
+                            {fabricDetails.variants.map((v, idx) => (
+                                <option key={v.id} value={v.id}>
+                                    {v.yarns.map(y => `${y.percentage}% ${y.name || 'Unknown'}`).join(', ')}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                )}
+
+                {/* Single Variant Info */}
+                {fabricDetails && fabricDetails.variants && fabricDetails.variants.length === 1 && (
+                     <div className="mt-1 px-2 text-[10px] text-slate-500 truncate" title={fabricDetails.variants[0].yarns.map(y => `${y.percentage}% ${y.name}`).join(', ')}>
+                        {fabricDetails.variants[0].yarns.map(y => `${y.percentage}% ${y.name || 'Unknown'}`).join(', ')}
+                     </div>
+                )}
+
+                {/* Legacy Composition Info */}
+                {fabricDetails && (!fabricDetails.variants || fabricDetails.variants.length === 0) && fabricDetails.yarnComposition && (
+                     <div className="mt-1 px-2 text-[10px] text-slate-500 truncate">
+                        {fabricDetails.yarnComposition.map((y: any) => `${y.percentage}% ${y.name || y.yarnName || 'Unknown'}`).join(', ')}
+                     </div>
+                )}
+
                 {hasComposition && (
                    <div className="px-2 pb-1 text-[10px] text-slate-500 font-mono flex items-center gap-1 opacity-0 group-hover/fabric:opacity-100 transition-opacity">
                      <CheckCircle2 className="w-3 h-3 text-emerald-500" />
@@ -427,105 +490,57 @@ const MemoizedOrderRow = React.memo(({
           <td className="p-2 border-r border-slate-200 align-middle">
             <div className="flex items-center justify-between gap-2">
               <div className="flex flex-col gap-1 flex-1 min-w-0">
-                {statusInfo ? (
-                  <>
-                    {statusInfo.active.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {statusInfo.active.map((mName: string, i: number) => {
-                          const machine = machines.find(m => m.name === mName);
-                          const status = machine?.status || 'Active';
-                          
-                          let badgeClass = "bg-emerald-100 text-emerald-700 border-emerald-200";
-                          if (status === 'Stopped') badgeClass = "bg-red-100 text-red-700 border-red-200";
-                          if (status === 'Under Operation' || status === 'Maintenance' || status === 'Under Construction') badgeClass = "bg-amber-100 text-amber-700 border-amber-200";
+                {(() => {
+                  // 1. Internal Active & Planned from statsMap
+                  const internalActive = statusInfo?.active || [];
+                  const internalPlanned = statusInfo?.planned || [];
 
-                          return (
-                            <span key={`a-${i}`} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap border ${badgeClass}`}>
-                              {mName} - {status}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    )}
-                    {statusInfo.planned.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {statusInfo.planned.map((m: string, i: number) => (
-                          <span key={`p-${i}`} className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium whitespace-nowrap border border-blue-200">
-                            {m}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {/* Fallback if no active/planned but statusInfo exists */}
-                    {statusInfo.active.length === 0 && statusInfo.planned.length === 0 && (
-                       (displayRemaining || 0) > 0 ? (
-                        (() => {
-                          // Check if machine is assigned in the row
-                          if (row.machine) {
-                            const assignedMachine = machines.find(m => m.name === row.machine);
-                            if (assignedMachine) {
-                              const status = assignedMachine.status || 'Unknown';
-                              const isWorking = status === 'Working';
-                              const isStopped = status === 'Stopped';
-                              const isMaintenance = status === 'Under Operation' || status === 'Maintenance';
-                              
-                              let badgeClass = "bg-slate-100 text-slate-600 border-slate-200";
-                              if (isWorking) badgeClass = "bg-emerald-50 text-emerald-600 border-emerald-200";
-                              if (isStopped) badgeClass = "bg-red-50 text-red-600 border-red-200";
-                              if (isMaintenance) badgeClass = "bg-amber-50 text-amber-600 border-amber-200";
+                  // 2. External Matches
+                  const externalMatches: { factoryName: string; status: string }[] = [];
+                  const reference = `${selectedCustomerName}-${row.material}`;
+                  
+                  if (externalFactories && externalFactories.length > 0) {
+                    for (const factory of externalFactories) {
+                      if (factory.plans && Array.isArray(factory.plans)) {
+                        for (const plan of factory.plans) {
+                           const isClientMatch = plan.client && plan.client.trim().toLowerCase() === selectedCustomerName.toLowerCase();
+                           const isFabricMatch = plan.fabric && row.material && plan.fabric.trim().toLowerCase() === row.material.toLowerCase();
+                           
+                           const constructedRef = `${plan.client}-${plan.fabric ? plan.fabric.split(/[\s-]+/).map((w: string) => w[0]).join('').toUpperCase() : ''}`;
+                           const isRefMatch = (plan.orderReference && plan.orderReference.toLowerCase() === reference.toLowerCase()) ||
+                                              (constructedRef.toLowerCase() === reference.toLowerCase());
 
-                              return (
-                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap border w-fit ${badgeClass}`}>
-                                  {assignedMachine.name} - {status}
-                                </span>
-                              );
-                            }
-                          }
-                          
-                          return (
-                            <button 
-                              onClick={() => onOpenCreatePlan(row)}
-                              className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit hover:bg-amber-100 hover:border-amber-300 transition-colors flex items-center gap-1"
-                              title="Click to assign machine"
-                            >
-                              Not Planned
-                              <Plus size={10} />
-                            </button>
-                          );
-                        })()
-                      ) : (
-                        <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit">
-                          Finished
-                        </span>
-                      )
-                    )}
-                  </>
-                ) : (
-                  (displayRemaining || 0) > 0 ? (
-                    (() => {
-                      // Check if machine is assigned in the row
-                      if (row.machine) {
-                        const assignedMachine = machines.find(m => m.name === row.machine);
-                        if (assignedMachine) {
-                          const status = assignedMachine.status || 'Unknown';
-                          const isWorking = status === 'Working';
-                          const isStopped = status === 'Stopped';
-                          const isMaintenance = status === 'Under Operation' || status === 'Maintenance';
-                          
-                          let badgeClass = "bg-slate-100 text-slate-600 border-slate-200";
-                          if (isWorking) badgeClass = "bg-emerald-50 text-emerald-600 border-emerald-200";
-                          if (isStopped) badgeClass = "bg-red-50 text-red-600 border-red-200";
-                          if (isMaintenance) badgeClass = "bg-amber-50 text-amber-600 border-amber-200";
-
-                          return (
-                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap border w-fit ${badgeClass}`}>
-                              {assignedMachine.name} - {status}
-                            </span>
-                          );
+                           if ((isClientMatch && isFabricMatch) || isRefMatch) {
+                              externalMatches.push({
+                                factoryName: factory.name,
+                                status: plan.status === 'ACTIVE' ? 'Active' : 'Planned'
+                              });
+                           }
                         }
                       }
+                    }
+                  }
 
-                      return (
+                  // 3. Direct Machine Assignment (Legacy/Fallback)
+                  let directMachine = null;
+                  if (internalActive.length === 0 && internalPlanned.length === 0 && row.machine) {
+                     const m = machines.find(m => m.name === row.machine);
+                     if (m) {
+                        directMachine = m;
+                     }
+                  }
+
+                  const hasAnyPlan = internalActive.length > 0 || internalPlanned.length > 0 || externalMatches.length > 0 || directMachine;
+
+                  if (!hasAnyPlan) {
+                     if ((displayRemaining || 0) <= 0) {
+                        return (
+                            <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit">
+                              Finished
+                            </span>
+                        );
+                     }
+                     return (
                         <button 
                           onClick={() => onOpenCreatePlan(row)}
                           className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit hover:bg-amber-100 hover:border-amber-300 transition-colors flex items-center gap-1"
@@ -534,14 +549,86 @@ const MemoizedOrderRow = React.memo(({
                           Not Planned
                           <Plus size={10} />
                         </button>
-                      );
-                    })()
-                  ) : (
-                    <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit">
-                      Finished
-                    </span>
-                  )
-                )}
+                     );
+                  }
+
+                  return (
+                    <>
+                      {/* Internal Active */}
+                      {internalActive.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {internalActive.map((mName: string, i: number) => {
+                            const machine = machines.find(m => m.name === mName);
+                            const status = machine?.status || 'Active';
+                            
+                            let badgeClass = "bg-emerald-100 text-emerald-700 border-emerald-200";
+                            if (status === 'Stopped') badgeClass = "bg-red-100 text-red-700 border-red-200";
+                            if (status === 'Under Operation' || status === 'Maintenance' || status === 'Under Construction') badgeClass = "bg-amber-100 text-amber-700 border-amber-200";
+
+                            return (
+                              <span key={`a-${i}`} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap border ${badgeClass}`}>
+                                {mName} - {status}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Direct Machine Assignment (if not covered by Active) */}
+                      {directMachine && (
+                         <div className="flex flex-wrap gap-1">
+                            {(() => {
+                                const status = directMachine.status || 'Unknown';
+                                const isWorking = status === 'Working';
+                                const isStopped = status === 'Stopped';
+                                const isMaintenance = status === 'Under Operation' || status === 'Maintenance';
+                                
+                                let badgeClass = "bg-slate-100 text-slate-600 border-slate-200";
+                                if (isWorking) badgeClass = "bg-emerald-50 text-emerald-600 border-emerald-200";
+                                if (isStopped) badgeClass = "bg-red-50 text-red-600 border-red-200";
+                                if (isMaintenance) badgeClass = "bg-amber-50 text-amber-600 border-amber-200";
+
+                                return (
+                                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap border w-fit ${badgeClass}`}>
+                                        {directMachine.name} - {status}
+                                    </span>
+                                );
+                            })()}
+                         </div>
+                      )}
+
+                      {/* Internal Planned */}
+                      {internalPlanned.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {internalPlanned.map((m: string, i: number) => (
+                            <span key={`p-${i}`} className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium whitespace-nowrap border border-blue-200">
+                              {m}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* External Matches */}
+                      {externalMatches.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {externalMatches.map((match, i) => {
+                             const isActive = match.status === 'Active';
+                             // Active External: Cyan to differentiate from Internal Active (Emerald)
+                             const badgeClass = isActive 
+                                ? "bg-cyan-100 text-cyan-700 border-cyan-200" 
+                                : "bg-purple-50 text-purple-700 border-purple-200";
+                             
+                             return (
+                                <span key={`ext-${i}`} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap border ${badgeClass}`}>
+                                  {match.factoryName} (Ext) - {match.status}
+                                </span>
+                             );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
               
               <button
@@ -869,7 +956,7 @@ export const ClientOrdersPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [newCustomerName, setNewCustomerName] = useState('');
   const [isAddingCustomer, setIsAddingCustomer] = useState(false);
-  const [fabrics, setFabrics] = useState<Fabric[]>([]);
+  const [fabrics, setFabrics] = useState<FabricDefinition[]>([]);
   const [yarns, setYarns] = useState<Yarn[]>([]);
   const [inventory, setInventory] = useState<YarnInventoryItem[]>([]);
   const [machines, setMachines] = useState<MachineSS[]>([]);
@@ -878,6 +965,7 @@ export const ClientOrdersPage: React.FC = () => {
   const [selectedYarnDetails, setSelectedYarnDetails] = useState<any>(null);
   const [showDyehouse, setShowDyehouse] = useState(false);
   const [dyehouses, setDyehouses] = useState<{ id: string; name: string }[]>([]);
+  const [externalFactories, setExternalFactories] = useState<any[]>([]);
   
   // Create Plan Modal State
   const [createPlanModal, setCreatePlanModal] = useState<{
@@ -889,11 +977,12 @@ export const ClientOrdersPage: React.FC = () => {
   // Fabric Details Modal State
   const [fabricDetailsModal, setFabricDetailsModal] = useState<{
     isOpen: boolean;
-    fabric: Fabric | null;
+    fabric: FabricDefinition | null;
     orderQuantity: number;
     orderId?: string;
     customerId?: string;
     allocations?: Record<string, YarnAllocationItem[]>;
+    variantId?: string;
   }>({ isOpen: false, fabric: null, orderQuantity: 0 });
 
   // Fix for state reset issue
@@ -944,6 +1033,12 @@ export const ClientOrdersPage: React.FC = () => {
     const unsubMachines = onSnapshot(collection(db, 'MachineSS'), (snapshot) => {
       const data = snapshot.docs.map(d => d.data() as MachineSS);
       setMachines(data);
+    });
+
+    // External Plans
+    const unsubExternal = onSnapshot(collection(db, 'ExternalPlans'), (snapshot) => {
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setExternalFactories(data);
     });
 
     // Fabrics
@@ -1144,30 +1239,43 @@ export const ClientOrdersPage: React.FC = () => {
         if (!order.material || !order.requiredQty) return;
         
         const fabric = fabrics.find(f => f.name === order.material);
-        if (!fabric?.yarnComposition) return;
+        if (!fabric) return;
 
-        fabric.yarnComposition.forEach(comp => {
-          // Use yarnId if available, otherwise fallback to name
-          const key = comp.yarnId || comp.yarnName;
-          if (!key) return;
-          
-          const baseQty = (order.requiredQty * (comp.percentage || 0)) / 100;
-          const scrapMultiplier = 1 + ((comp.scrapPercentage || 0) / 100);
-          const totalNeeded = baseQty * scrapMultiplier;
+        // Determine active composition
+        let composition: any[] = [];
+        if (order.variantId && fabric.variants) {
+            const variant = fabric.variants.find(v => v.id === order.variantId);
+            if (variant) composition = variant.yarns;
+        } else if (fabric.yarnComposition) {
+            composition = fabric.yarnComposition;
+        } else if (fabric.variants && fabric.variants.length === 1) {
+            composition = fabric.variants[0].yarns;
+        }
 
-          const current = requirements.get(key) || { total: 0, allocations: [] };
-          
-          current.total += totalNeeded;
-          current.allocations.push({
-            clientName: client.name,
-            orderId: order.id,
-            fabricName: order.material,
-            requiredQty: totalNeeded,
-            percentage: comp.percentage || 0
-          });
-          
-          requirements.set(key, current);
-        });
+        if (composition.length > 0) {
+            composition.forEach(comp => {
+              // Use yarnId if available, otherwise fallback to name
+              const key = comp.yarnId || comp.name;
+              if (!key) return;
+              
+              const baseQty = (order.requiredQty * (comp.percentage || 0)) / 100;
+              const scrapMultiplier = 1 + ((comp.scrapPercentage || 0) / 100);
+              const totalNeeded = baseQty * scrapMultiplier;
+
+              const current = requirements.get(key) || { total: 0, allocations: [] };
+              
+              current.total += totalNeeded;
+              current.allocations.push({
+                clientName: client.name,
+                orderId: order.id,
+                fabricName: order.material,
+                requiredQty: totalNeeded,
+                percentage: comp.percentage || 0
+              });
+              
+              requirements.set(key, current);
+            });
+        }
       });
     });
 
@@ -1334,6 +1442,13 @@ export const ClientOrdersPage: React.FC = () => {
        }
     }
 
+    // Sanitize updates to remove undefined values
+    Object.keys(finalUpdates).forEach(key => {
+        if (finalUpdates[key as keyof OrderRow] === undefined) {
+            delete finalUpdates[key as keyof OrderRow];
+        }
+    });
+
     // Optimistic Update
     const updatedOrders = selectedCustomer.orders.map(order => {
       if (order.id === rowId) {
@@ -1440,6 +1555,7 @@ export const ClientOrdersPage: React.FC = () => {
     const reference = `${clientName}-${fabricName}`;
     const results: { machineName: string; type: 'ACTIVE' | 'PLANNED'; details: string; date?: string }[] = [];
   
+    // 1. Internal Machines
     machines.forEach(machine => {
       // Check Active (Daily Logs)
       const activeLog = machine.dailyLogs?.find(l => l.date === activeDay);
@@ -1468,6 +1584,33 @@ export const ClientOrdersPage: React.FC = () => {
                 type: 'PLANNED',
                 details: `Planned for ${plan.days} days (Qty: ${plan.quantity})`,
                 date: plan.startDate
+              });
+           }
+        });
+      }
+    });
+
+    // 2. External Factories
+    externalFactories.forEach(factory => {
+      if (factory.plans && Array.isArray(factory.plans)) {
+        factory.plans.forEach((plan: any) => {
+           // Robust matching for external plans
+           const isClientMatch = plan.client && plan.client.trim() === clientName;
+           const isFabricMatch = plan.fabric && plan.fabric.trim() === fabricName;
+           // Also check constructed reference if explicit one is missing
+           const constructedRef = `${plan.client}-${plan.fabric ? plan.fabric.split(/[\s-]+/).map((w: string) => w[0]).join('').toUpperCase() : ''}`;
+           const isRefMatch = (plan.orderReference && plan.orderReference.toLowerCase() === reference.toLowerCase()) ||
+                              (constructedRef.toLowerCase() === reference.toLowerCase());
+
+           if ((isClientMatch && isFabricMatch) || isRefMatch) {
+              const isExternalActive = plan.status === 'ACTIVE';
+              results.push({
+                machineName: `${factory.name} (Ext)`,
+                type: isExternalActive ? 'ACTIVE' : 'PLANNED',
+                details: isExternalActive 
+                  ? `Active External (Rem: ${plan.remaining})` 
+                  : `Planned External (Qty: ${plan.quantity})`,
+                date: plan.startDate || '-'
               });
            }
         });
@@ -1502,11 +1645,13 @@ export const ClientOrdersPage: React.FC = () => {
   const handleOpenFabricDetails = (fabricName: string, qty: number, orderId?: string) => {
     const fabric = fabrics.find(f => f.name === fabricName);
     let allocations: Record<string, YarnAllocationItem[]> | undefined;
+    let variantId: string | undefined;
 
     if (orderId && selectedCustomer) {
         const order = selectedCustomer.orders.find(o => o.id === orderId);
         if (order) {
             allocations = order.yarnAllocations;
+            variantId = order.variantId;
         }
     }
 
@@ -1517,7 +1662,8 @@ export const ClientOrdersPage: React.FC = () => {
         orderQuantity: qty,
         orderId,
         customerId: selectedCustomerId || undefined,
-        allocations
+        allocations,
+        variantId
       });
     }
   };
@@ -1597,17 +1743,33 @@ export const ClientOrdersPage: React.FC = () => {
       if (!order.material || !order.requiredQty) return;
       
       const fabric = fabrics.find(f => f.name === order.material);
-      if (fabric && fabric.yarnComposition) {
-        fabric.yarnComposition.forEach(comp => {
+      if (!fabric) return;
+
+      // Determine active composition
+      let composition: any[] = [];
+      if (order.variantId && fabric.variants) {
+          const variant = fabric.variants.find(v => v.id === order.variantId);
+          if (variant) composition = variant.yarns;
+      } else if (fabric.yarnComposition) {
+          composition = fabric.yarnComposition;
+      } else if (fabric.variants && fabric.variants.length === 1) {
+          composition = fabric.variants[0].yarns;
+      }
+
+      if (composition.length > 0) {
+        composition.forEach(comp => {
           const baseWeight = (order.requiredQty * (comp.percentage || 0)) / 100;
           const scrapFactor = 1 + ((comp.scrapPercentage || 0) / 100);
           const totalWeight = baseWeight * scrapFactor;
           
-          if (!totals.has(comp.yarnId)) {
-            totals.set(comp.yarnId, { totalWeight: 0, fabrics: new Map() });
+          // Use yarnId if available, otherwise fallback to name
+          const key = comp.yarnId || comp.name; // Note: FabricYarn has 'name', YarnComponent has 'yarnId'
+          
+          if (!totals.has(key)) {
+            totals.set(key, { totalWeight: 0, fabrics: new Map() });
           }
           
-          const entry = totals.get(comp.yarnId)!;
+          const entry = totals.get(key)!;
           entry.totalWeight += totalWeight;
           
           const currentFabricWeight = entry.fabrics.get(order.material) || 0;
@@ -1616,11 +1778,14 @@ export const ClientOrdersPage: React.FC = () => {
       }
     });
 
-    return Array.from(totals.entries()).map(([yarnId, data]) => {
-      const yarn = yarns.find(y => y.id === yarnId);
+    return Array.from(totals.entries()).map(([yarnIdOrName, data]) => {
+      // Try to resolve name if key is an ID
+      const yarn = yarns.find(y => y.id === yarnIdOrName);
+      const name = yarn ? yarn.name : yarnIdOrName;
+      
       return {
-        id: yarnId,
-        name: yarn ? yarn.name : 'Unknown Yarn',
+        id: yarnIdOrName,
+        name: name,
         weight: data.totalWeight,
         fabrics: Array.from(data.fabrics.entries()).map(([fabricName, weight]) => ({
             name: fabricName,
@@ -1961,6 +2126,7 @@ export const ClientOrdersPage: React.FC = () => {
                           dyehouses={dyehouses}
                           handleCreateDyehouse={handleCreateDyehouse}
                           machines={machines}
+                          externalFactories={externalFactories}
                         />
                       );
                     })}
@@ -2169,6 +2335,7 @@ export const ClientOrdersPage: React.FC = () => {
             customerName={selectedCustomer?.name}
             existingAllocations={fabricDetailsModal.allocations}
             onUpdateOrderAllocations={handleUpdateOrderAllocations}
+            variantId={fabricDetailsModal.variantId}
           />
         )}
 

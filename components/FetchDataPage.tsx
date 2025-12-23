@@ -7,7 +7,8 @@ import { PlanItem, MachineStatus, CustomerOrder, MachineRow } from '../types';
 import { LinkOrderModal } from './LinkOrderModal';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import { CheckCircle, Send, Link } from 'lucide-react';
+import { CheckCircle, Send, Link, Truck, Layout, Factory } from 'lucide-react';
+import { ExternalProductionSheet } from './ExternalProductionSheet'; // New Component - Force Refresh
 
 // Navigable fields across the whole row (including read-only) for smooth Excel-like movement
 const NAVIGABLE_FIELDS: (keyof any)[] = [
@@ -400,6 +401,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [activeCell, setActiveCell] = useState<{ rowIndex: number; field: string } | null>(null);
   const [draggedRowIndex, setDraggedRowIndex] = useState<number | null>(null);
   const [externalProduction, setExternalProduction] = useState<number>(0);
+  const [showExternalSheet, setShowExternalSheet] = useState(false); // Toggle for External Sheet
 
   // Sync with propSelectedDate if it changes (e.g. from global app state)
   useEffect(() => {
@@ -1758,6 +1760,34 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           </div>
         </div>
 
+        {/* View Toggle - Centered Below Header */}
+        <div className="flex justify-center mb-6">
+          <div className="bg-slate-100 p-1 rounded-lg flex items-center border border-slate-200 shadow-sm">
+            <button
+              onClick={() => setShowExternalSheet(false)}
+              className={`flex items-center gap-2 px-6 py-2 rounded-md text-sm font-bold transition-all ${
+                !showExternalSheet
+                  ? 'bg-white text-blue-600 shadow-sm ring-1 ring-black/5'
+                  : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
+              }`}
+            >
+              <Layout size={18} />
+              Internal Schedule
+            </button>
+            <button
+              onClick={() => setShowExternalSheet(true)}
+              className={`flex items-center gap-2 px-6 py-2 rounded-md text-sm font-bold transition-all ${
+                showExternalSheet
+                  ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-black/5'
+                  : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
+              }`}
+            >
+              <Factory size={18} />
+              External Schedule
+            </button>
+          </div>
+        </div>
+
         {/* Messages */}
         {message && (
           <div className={`px-3 py-2 rounded-lg text-sm font-medium shadow-sm ${message.startsWith('✅') ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
@@ -1766,7 +1796,9 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         )}
         
         {/* Excel-like Table */}
-        <div ref={printRef} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+        {!showExternalSheet ? (
+          <>
+          <div ref={printRef} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
             {/* Header for PDF only */}
             <div className="hidden print-header mb-4 text-center border-b border-slate-100 pb-4">
                 <h1 className="text-xl font-bold text-slate-800 uppercase tracking-wide">Daily Machine Plan</h1>
@@ -2853,7 +2885,20 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           onLink={handleLinkOrder}
         />
 
-      </div>
+      </>
+      ) : (
+        <ExternalProductionSheet 
+          date={selectedDate} 
+          onClose={() => setShowExternalSheet(false)}
+          onUpdateTotal={(total) => {
+             setExternalProduction(total);
+             // Also update the daily summary immediately so the main view reflects it
+             DataService.updateDailySummary(selectedDate, { externalProduction: total });
+          }}
+          isEmbedded={true}
+        />
+      )}
+    </div>
     </div>
   );
 };

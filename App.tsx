@@ -33,6 +33,8 @@ import { OrderFulfillmentPage } from './components/OrderFulfillmentPage';
 import { AnalyticsPage } from './components/AnalyticsPage';
 import { YarnInventoryPage } from './components/YarnInventoryPage';
 import { DyehouseInventoryPage } from './components/DyehouseInventoryPage';
+import { FabricsPage } from './components/FabricsPage';
+import { MachinesPage } from './components/MachinesPage';
 import { 
   Send, 
   CheckCircle, 
@@ -49,7 +51,9 @@ import {
   Sparkles,
   PieChart,
   Truck,
-  Layers
+  Layers,
+  FileSpreadsheet,
+  Settings
 } from 'lucide-react';
 import { MachineStatus } from './types';
 
@@ -70,7 +74,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'orders' | 'compare' | 'history' | 'fulfillment' | 'analytics' | 'yarn-inventory' | 'dyehouse-inventory'>('planning'); 
+  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'orders' | 'compare' | 'history' | 'fulfillment' | 'analytics' | 'yarn-inventory' | 'dyehouse-inventory' | 'fabrics' | 'machines'>('planning'); 
   
   // External Production State
   const [externalProduction, setExternalProduction] = useState<number>(0);
@@ -154,16 +158,28 @@ const App: React.FC = () => {
 
     // NEW: Daily Logs Listener (Sub-collection support)
     // We only fetch logs for the selected date to keep it lightweight
-    const qLogs = query(collectionGroup(db, 'dailyLogs'), where('date', '==', selectedDate));
-    const unsubscribeLogs = onSnapshot(qLogs, (snapshot) => {
-      const fetchedLogs = snapshot.docs.map(doc => ({
-        ...doc.data(),
-        id: doc.id
-      }));
-      setTodaysLogs(fetchedLogs);
-    }, (error) => {
-      console.error("Snapshot Error (DailyLogs):", error);
-    });
+    // NOTE: This requires a composite index on collectionGroup 'dailyLogs' for field 'date'.
+    // If index is missing, this will fail silently in console but not crash app.
+    let unsubscribeLogs = () => {};
+    try {
+      const qLogs = query(collectionGroup(db, 'dailyLogs'), where('date', '==', selectedDate));
+      unsubscribeLogs = onSnapshot(qLogs, (snapshot) => {
+        const fetchedLogs = snapshot.docs.map(doc => ({
+          ...doc.data(),
+          id: doc.id
+        }));
+        setTodaysLogs(fetchedLogs);
+      }, (error) => {
+        // Suppress index error to avoid user confusion if they haven't created it yet
+        if (error.code === 'failed-precondition') {
+           console.warn("DailyLogs index missing. Create it in Firebase Console to see daily logs.");
+        } else {
+           console.error("Snapshot Error (DailyLogs):", error);
+        }
+      });
+    } catch (e) {
+      console.error("Error setting up logs listener:", e);
+    }
 
     // Factory Stats Listener (for External Production)
     const statsDocRef = doc(db, 'factory_stats', 'daily_production');
@@ -195,6 +211,7 @@ const App: React.FC = () => {
       }
       
       return {
+        ...data,
         id: data.id,
         machineName: data.name || '',
         brand: data.brand || '',
@@ -458,7 +475,7 @@ const App: React.FC = () => {
                   }`}
                 >
                   <Table size={18} />
-                  Excel View
+                  Daily Machine Plan
                 </button>
              </div>
 
@@ -532,6 +549,20 @@ const App: React.FC = () => {
                     className={`p-2.5 rounded-lg transition-all ${viewMode === 'dyehouse-inventory' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
                   >
                     <Layers size={20} />
+                  </button>
+                  <button 
+                    onClick={() => setViewMode('fabrics')}
+                    title="Fabrics Database"
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'fabrics' ? 'bg-green-50 text-green-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    <FileSpreadsheet size={20} />
+                  </button>
+                  <button 
+                    onClick={() => setViewMode('machines')}
+                    title="Machines Directory"
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'machines' ? 'bg-slate-100 text-slate-800' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    <Settings size={20} />
                   </button>
                   <button 
                     onClick={() => setViewMode('idle')}
@@ -619,6 +650,14 @@ const App: React.FC = () => {
               <AnalyticsPage 
                 machines={machines}
               />
+            )}
+
+            {viewMode === 'fabrics' && (
+              <FabricsPage />
+            )}
+
+            {viewMode === 'machines' && (
+              <MachinesPage machines={machines} />
             )}
         </div>
       </main>

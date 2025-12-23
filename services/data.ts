@@ -1,5 +1,36 @@
 import { MachineRow, MachineStatus, PlanItem } from '../types';
 
+// Helper to parse fabric names
+export const parseFabricName = (fullName: string): { code: string, shortName: string } => {
+  if (!fullName) return { code: '', shortName: '' };
+  
+  let code = '';
+  let shortName = fullName;
+
+  // Extract Code [CODE]
+  const codeMatch = fullName.match(/^\[(.*?)\]/);
+  if (codeMatch) {
+    code = codeMatch[1];
+    shortName = fullName.replace(codeMatch[0], '').trim();
+  }
+
+  // Remove keywords
+  // "جاكار " (with space) and "خام"
+  const keywordsToRemove = ["جاكار ", "خام"]; 
+  keywordsToRemove.forEach(keyword => {
+    // Use global flag to remove all occurrences
+    shortName = shortName.replace(new RegExp(keyword, 'g'), '').trim();
+  });
+  
+  // Remove empty parentheses ()
+  shortName = shortName.replace(/\(\s*\)/g, '').trim();
+
+  // Clean up double spaces
+  shortName = shortName.replace(/\s+/g, ' ').trim();
+
+  return { code, shortName };
+};
+
 // Helper to generate dates for initial data
 export const addDays = (dateStr: string, daysToAdd: number): string => {
   // Be defensive: accept empty/invalid dateStr and invalid daysToAdd

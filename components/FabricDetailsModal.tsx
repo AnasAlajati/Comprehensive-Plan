@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Fabric, Yarn, YarnComponent, YarnInventoryItem, YarnAllocationItem } from '../types';
+import { Fabric, Yarn, YarnComponent, YarnInventoryItem, YarnAllocationItem, FabricDefinition } from '../types';
 import { Plus, Trash2, Save, Calculator, X, AlertCircle, Package, Check, MapPin, ChevronDown, CheckCircle2, Search as SearchIcon } from 'lucide-react';
 import { DataService } from '../services/dataService';
 import { YarnService } from '../services/yarnService';
@@ -9,16 +9,17 @@ import { db } from '../services/firebase';
 interface FabricDetailsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  fabric: Fabric;
+  fabric: FabricDefinition;
   orderQuantity: number;
   allYarns: Yarn[];
-  onUpdateFabric: (fabricId: string, updates: Partial<Fabric>) => Promise<void>;
+  onUpdateFabric: (fabricId: string, updates: Partial<FabricDefinition>) => Promise<void>;
   onAddYarn: (name: string) => Promise<string>; // Returns new yarn ID
   orderId?: string;
   customerId?: string;
   customerName?: string;
   existingAllocations?: Record<string, YarnAllocationItem[]>;
   onUpdateOrderAllocations?: (orderId: string, allocations: Record<string, YarnAllocationItem[]>) => Promise<void>;
+  variantId?: string;
 }
 
 const normalizeAllocations = (input: Record<string, any>): Record<string, YarnAllocationItem[]> => {
@@ -50,9 +51,11 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
   customerId,
   customerName,
   existingAllocations,
-  onUpdateOrderAllocations
+  onUpdateOrderAllocations,
+  variantId
 }) => {
   const [composition, setComposition] = useState<any[]>([]);
+  const [activeVariantId, setActiveVariantId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -94,7 +97,41 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
 
   useEffect(() => {
     if (isOpen && fabric) {
-      setComposition(fabric.yarnComposition || []);
+        let initialComposition: any[] = [];
+        let vId: string | null = null;
+
+        if (variantId && fabric.variants) {
+            const v = fabric.variants.find(v => v.id === variantId);
+            if (v) {
+                vId = v.id;
+                initialComposition = v.yarns || [];
+            }
+        }
+        
+        // Fallback or default if no specific variant found/requested
+        if (!initialComposition.length) {
+            if (fabric.variants && fabric.variants.length > 0) {
+                vId = fabric.variants[0].id;
+                initialComposition = fabric.variants[0].yarns || [];
+            } else if (fabric.yarnComposition) {
+                vId = null; // Legacy
+                initialComposition = fabric.yarnComposition;
+            }
+        }
+
+        // Auto-link yarnId if missing but name matches an existing yarn
+        const resolvedComposition = initialComposition.map(comp => {
+            if (!comp.yarnId && comp.name) {
+                const matchingYarn = allYarns.find(y => y.name.toLowerCase().trim() === comp.name.toLowerCase().trim());
+                if (matchingYarn) {
+                    return { ...comp, yarnId: matchingYarn.id };
+                }
+            }
+            return comp;
+        });
+
+        setActiveVariantId(vId);
+        setComposition(resolvedComposition);
     }
     if (isOpen && existingAllocations) {
         const safeAllocations = normalizeAllocations(existingAllocations);
@@ -119,7 +156,7 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
   // Fetch Inventory for relevant yarns
   useEffect(() => {
     const fetchInventory = async () => {
-      if (!isOpen || !fabric || !fabric.yarnComposition || fabric.yarnComposition.length === 0) return;
+      if (!isOpen || !composition || composition.length === 0) return;
       if (!orderId) return; // Only fetch if in order context
 
       setLoadingInventory(true);
@@ -129,32 +166,42 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
         // Collect all potential names to query (Exact + Loose Matches)
         const namesToQuery = new Set<string>();
 
-        fabric.yarnComposition.forEach(c => {
+        composition.forEach(c => {
             // 1. Check manual session mapping
-            if (manualMapping[c.yarnId]) {
+            if (c.yarnId && manualMapping[c.yarnId]) {
                 namesToQuery.add(manualMapping[c.yarnId]);
                 return;
             }
             
             const y = allYarns.find(y => y.id === c.yarnId);
-            if (!y) return;
-
-            // 2. Check persistent mapping
-            if (persistentMappings[y.name]) {
-                namesToQuery.add(persistentMappings[y.name]);
-                return;
-            }
-
-            // 3. Default: Add exact name
-            namesToQuery.add(y.name);
-
-            // 4. Add Loose Matches from Inventory List (e.g. "Yarn A " vs "Yarn A")
-            const normalized = y.name.toLowerCase().trim();
-            inventoryYarnNames.forEach(invName => {
-                if (invName.toLowerCase().trim() === normalized) {
-                    namesToQuery.add(invName);
+            
+            if (y) {
+                // 2. Check persistent mapping
+                if (persistentMappings[y.name]) {
+                    namesToQuery.add(persistentMappings[y.name]);
+                    return;
                 }
-            });
+                // 3. Default: Add exact name
+                namesToQuery.add(y.name);
+                
+                // 4. Add Loose Matches from Inventory List
+                const normalized = y.name.toLowerCase().trim();
+                inventoryYarnNames.forEach(invName => {
+                    if (invName.toLowerCase().trim() === normalized) {
+                        namesToQuery.add(invName);
+                    }
+                });
+            } else if (c.name) {
+                // Fallback: Use component name directly if yarnId is missing
+                namesToQuery.add(c.name);
+                
+                const normalized = c.name.toLowerCase().trim();
+                inventoryYarnNames.forEach(invName => {
+                    if (invName.toLowerCase().trim() === normalized) {
+                        namesToQuery.add(invName);
+                    }
+                });
+            }
         });
 
         const uniqueNames = Array.from(namesToQuery);
@@ -173,24 +220,41 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
                     const item = { id: doc.id, ...doc.data() } as YarnInventoryItem;
                     
                     // Find which yarnId this inventory item belongs to
-                    fabric.yarnComposition.forEach(comp => {
+                    composition.forEach(comp => {
+                        // Try to find yarn by ID, or fallback to name matching if ID is missing
                         const y = allYarns.find(y => y.id === comp.yarnId);
-                        if (!y) return;
-
+                        
                         let match = false;
-                        // Strict Match
-                        if (y.name === item.yarnName) match = true;
-                        // Loose Match
-                        if (y.name.toLowerCase().trim() === item.yarnName.toLowerCase().trim()) match = true;
-                        // Mappings
-                        if (manualMapping[comp.yarnId] === item.yarnName) match = true;
-                        if (persistentMappings[y.name] === item.yarnName) match = true;
+                        
+                        if (y) {
+                            // Strict Match
+                            if (y.name === item.yarnName) match = true;
+                            // Loose Match
+                            if (y.name.toLowerCase().trim() === item.yarnName.toLowerCase().trim()) match = true;
+                            // Persistent Mapping
+                            if (persistentMappings[y.name] === item.yarnName) match = true;
+                        } else if (comp.name) {
+                            // Fallback: Match by component name directly if yarnId is missing
+                            if (comp.name === item.yarnName) match = true;
+                            if (comp.name.toLowerCase().trim() === item.yarnName.toLowerCase().trim()) match = true;
+                        }
+
+                        // Manual Mapping
+                        if (comp.yarnId && manualMapping[comp.yarnId] === item.yarnName) match = true;
 
                         if (match) {
-                            const list = map.get(comp.yarnId) || [];
-                            if (!list.find(i => i.id === item.id)) {
-                                list.push(item);
-                                map.set(comp.yarnId, list);
+                            // Use yarnId if available, otherwise we can't map it to a specific component ID yet
+                            // But wait, the map key IS the yarnId. If comp.yarnId is missing, we can't store it in the map keyed by yarnId.
+                            // However, we just auto-resolved yarnId in useEffect. So comp.yarnId SHOULD be present if the yarn exists.
+                            // If it's still missing, it means the yarn doesn't exist in 'yarns' collection.
+                            // In that case, we can't really allocate inventory to it until it's created/linked.
+                            
+                            if (comp.yarnId) {
+                                const list = map.get(comp.yarnId) || [];
+                                if (!list.find(i => i.id === item.id)) {
+                                    list.push(item);
+                                    map.set(comp.yarnId, list);
+                                }
                             }
                         }
                     });
@@ -226,7 +290,7 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
     };
 
     fetchInventory();
-  }, [isOpen, fabric, allYarns, orderId, manualMapping, persistentMappings, inventoryYarnNames]);
+  }, [isOpen, composition, allYarns, orderId, manualMapping, persistentMappings, inventoryYarnNames]);
 
   const handleSearchInventory = async (term: string) => {
     setInventorySearchTerm(term);
@@ -390,7 +454,21 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
         percentage: parseFloat(c.percentage) || 0,
         scrapPercentage: parseFloat(c.scrapPercentage) || 0
       }));
-      await onUpdateFabric(fabric.id!, { yarnComposition: cleanComposition });
+
+      if (activeVariantId && fabric.variants) {
+          // Update specific variant
+          const updatedVariants = fabric.variants.map(v => {
+              if (v.id === activeVariantId) {
+                  return { ...v, yarns: cleanComposition };
+              }
+              return v;
+          });
+          await onUpdateFabric(fabric.id!, { variants: updatedVariants });
+      } else {
+          // Legacy update
+          await onUpdateFabric(fabric.id!, { yarnComposition: cleanComposition });
+      }
+
       onClose();
     } catch (err) {
       console.error("Error saving fabric composition:", err);
@@ -419,6 +497,27 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
             <p className="text-sm text-slate-500">
               Fabric: <span className="font-medium text-slate-700">{fabric.name}</span>
             </p>
+            {/* Variant Selector */}
+            {fabric.variants && fabric.variants.length > 1 && (
+                <div className="mt-2">
+                    <select 
+                        value={activeVariantId || ''}
+                        onChange={(e) => {
+                            const vId = e.target.value;
+                            setActiveVariantId(vId);
+                            const v = fabric.variants.find(v => v.id === vId);
+                            if (v) setComposition(v.yarns || []);
+                        }}
+                        className="text-xs p-1 border border-slate-300 rounded bg-white max-w-md"
+                    >
+                        {fabric.variants.map((v, idx) => (
+                            <option key={v.id} value={v.id}>
+                                Variant {idx + 1}: {v.yarns.map(y => `${y.percentage}% ${y.name}`).join(', ')}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            )}
           </div>
           <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
             <X className="w-5 h-5 text-slate-400" />
@@ -463,10 +562,20 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
                 {/* Yarn Selector */}
                 <div className="col-span-5">
                   <YarnSelector 
-                    value={comp.yarnId} 
+                    value={comp.yarnId || comp.name} 
                     yarns={allYarns}
                     inventoryYarnNames={inventoryYarnNames}
-                    onChange={(val) => handleUpdateRow(index, 'yarnId', val)}
+                    onChange={(val) => {
+                        // Update both yarnId and name to keep them in sync
+                        const selectedYarn = allYarns.find(y => y.id === val);
+                        const newComp = [...composition];
+                        newComp[index] = { 
+                            ...newComp[index], 
+                            yarnId: val,
+                            name: selectedYarn ? selectedYarn.name : newComp[index].name
+                        };
+                        setComposition(newComp);
+                    }}
                     onAddYarn={onAddYarn}
                   />
                 </div>
@@ -920,6 +1029,7 @@ const YarnSelector: React.FC<{
   const [loading, setLoading] = useState(false);
 
   // Find current yarn name
+  // If value is an ID, find the yarn. If value is a name, use it directly.
   const currentYarn = yarns.find(y => y.id === value);
   const displayName = currentYarn ? currentYarn.name : (value || 'Select Yarn...');
 
@@ -950,8 +1060,8 @@ const YarnSelector: React.FC<{
       });
 
       // 2. Add remaining Yarns that weren't in inventory
-      // REMOVED: User requested to only show yarns that are in inventory.
-      /*
+      // RESTORED: We need to show yarns from FabricSS even if they are not in inventory yet,
+      // so the user can see what was imported from Excel.
       yarns.forEach(y => {
           if (!term || y.name.toLowerCase().includes(term)) {
               const normalized = y.name.toLowerCase().trim();
@@ -965,7 +1075,6 @@ const YarnSelector: React.FC<{
               }
           }
       });
-      */
       
       return results.sort((a, b) => a.name.localeCompare(b.name));
   }, [search, inventoryYarnNames, yarns]);

@@ -5,9 +5,9 @@ import { recalculateSchedule, addDays } from '../services/data';
 import { DataService } from '../services/dataService';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import { doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, updateDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { Search, Play, GripVertical } from 'lucide-react';
+import { Search, Play, GripVertical, Factory, Plus } from 'lucide-react';
 
 // Global CSS to hide number input spinners
 const globalStyles = `
@@ -20,6 +20,17 @@ const globalStyles = `
     -moz-appearance: textfield;
   }
 `;
+
+interface ExternalPlanItem extends PlanItem {
+  machineName?: string;
+  status?: 'PENDING' | 'ACTIVE' | 'COMPLETED';
+}
+
+interface ExternalFactory {
+  id: string;
+  name: string;
+  plans: ExternalPlanItem[];
+}
 
 interface SearchDropdownProps {
   id: string;
@@ -51,9 +62,13 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
   const [inputValue, setInputValue] = useState(value);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Helper to get display label
+  const getLabel = (opt: any) => opt.shortName || opt.name;
+
   useEffect(() => {
-    setInputValue(value);
-  }, [value]);
+    const selected = options.find(o => o.name === value);
+    setInputValue(selected ? getLabel(selected) : value);
+  }, [value, options]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -78,12 +93,12 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
   }, [id]);
 
   const filteredOptions = options.filter(opt =>
-    opt.name.toLowerCase().includes(searchTerm.toLowerCase())
+    getLabel(opt).toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const handleSelect = (optionName: string) => {
-    setInputValue(optionName);
-    onChange(optionName);
+  const handleSelect = (option: any) => {
+    setInputValue(getLabel(option));
+    onChange(option.name); // Save full name
     setSearchTerm('');
     setIsOpen(false);
   };
@@ -147,14 +162,17 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
               {filteredOptions.map((opt) => (
                 <div
                   key={opt.id}
-                  onClick={() => handleSelect(opt.name)}
+                  onClick={() => handleSelect(opt)}
                   className="px-2 py-1.5 hover:bg-blue-50 cursor-pointer text-xs border-b border-slate-100 last:border-b-0 text-left flex justify-between items-center"
                 >
-                  <span>{opt.name}</span>
+                  <div className="flex flex-col">
+                    <span>{getLabel(opt)}</span>
+                    {opt.code && <span className="text-[10px] text-slate-400">{opt.code}</span>}
+                  </div>
                   {extraInfo && extraInfo(opt)}
                 </div>
               ))}
-              {searchTerm && !options.some(o => o.name.toLowerCase() === searchTerm.toLowerCase()) && (
+              {searchTerm && !options.some(o => getLabel(o).toLowerCase() === searchTerm.toLowerCase()) && (
                 <div
                   onClick={handleCreateNew}
                   className="px-2 py-1.5 hover:bg-emerald-50 cursor-pointer text-xs border-t border-slate-200 text-emerald-600 font-medium text-left"
@@ -207,6 +225,148 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
   const [clients, setClients] = useState<any[]>([]);
   const [customerOrders, setCustomerOrders] = useState<CustomerOrder[]>([]);
 
+  // External Schedule State
+  const [viewMode, setViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
+  const [externalFactories, setExternalFactories] = useState<ExternalFactory[]>([]);
+  const [newFactoryName, setNewFactoryName] = useState('');
+
+  // Load External Factories
+  useEffect(() => {
+    if (viewMode === 'EXTERNAL') {
+      const loadExternalFactories = async () => {
+        try {
+          const snapshot = await getDocs(collection(db, 'ExternalPlans'));
+          const factories = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          })) as ExternalFactory[];
+          setExternalFactories(factories);
+        } catch (err) {
+          console.error("Failed to load external factories", err);
+        }
+      };
+      loadExternalFactories();
+    }
+  }, [viewMode]);
+
+  const handleAddFactory = async () => {
+    if (!newFactoryName.trim()) return;
+    try {
+      const factoryId = newFactoryName.trim();
+      const newFactory: ExternalFactory = {
+        id: factoryId,
+        name: newFactoryName.trim(),
+        plans: []
+      };
+      await setDoc(doc(db, 'ExternalPlans', factoryId), newFactory);
+      setExternalFactories([...externalFactories, newFactory]);
+      setNewFactoryName('');
+    } catch (err) {
+      console.error("Error adding factory:", err);
+    }
+  };
+
+  const handleAddExternalPlan = async (factoryId: string, type: 'PRODUCTION' | 'SETTINGS' = 'PRODUCTION') => {
+    const factory = externalFactories.find(f => f.id === factoryId);
+    if (!factory) return;
+
+    const newPlan: ExternalPlanItem = {
+      type,
+      fabric: '',
+      machineName: '',
+      productionPerDay: 0,
+      quantity: 0,
+      days: 0,
+      startDate: new Date().toISOString().split('T')[0],
+      endDate: new Date().toISOString().split('T')[0],
+      remaining: 0,
+      orderName: '',
+      originalSampleMachine: '',
+      notes: ''
+    };
+
+    const updatedPlans = [...factory.plans, newPlan];
+    
+    try {
+      await updateDoc(doc(db, 'ExternalPlans', factoryId), { plans: updatedPlans });
+      setExternalFactories(externalFactories.map(f => 
+        f.id === factoryId ? { ...f, plans: updatedPlans } : f
+      ));
+    } catch (err) {
+      console.error("Error adding external plan:", err);
+    }
+  };
+
+  const handleUpdateExternalPlan = async (factoryId: string, planIndex: number, field: string, value: any) => {
+    const factory = externalFactories.find(f => f.id === factoryId);
+    if (!factory) return;
+
+    const updatedPlans = [...factory.plans];
+    updatedPlans[planIndex] = { ...updatedPlans[planIndex], [field]: value };
+
+    // Auto-calculate logic similar to internal plans
+    if (field === 'startDate' || field === 'days' || field === 'quantity' || field === 'productionPerDay') {
+       const plan = updatedPlans[planIndex];
+       if (plan.type === 'PRODUCTION') {
+          if (plan.quantity > 0 && plan.productionPerDay > 0) {
+             const days = Math.ceil(plan.quantity / plan.productionPerDay);
+             plan.days = days;
+             plan.remaining = plan.quantity; // Reset remaining to full quantity initially or handle logic
+             
+             if (plan.startDate) {
+                const end = new Date(plan.startDate);
+                end.setDate(end.getDate() + days - 1);
+                plan.endDate = end.toISOString().split('T')[0];
+             }
+          }
+       } else if (plan.type === 'SETTINGS') {
+          if (plan.startDate && plan.days > 0) {
+             const end = new Date(plan.startDate);
+             end.setDate(end.getDate() + plan.days - 1);
+             plan.endDate = end.toISOString().split('T')[0];
+          }
+       }
+    }
+
+    // Auto-generate orderReference when client or fabric changes
+    if (field === 'client' || field === 'fabric') {
+        const plan = updatedPlans[planIndex];
+        if (plan.client && plan.fabric) {
+            // Simple initial extraction: First letter of each word in fabric
+            // e.g. "Cotton Lycra" -> "CL"
+            // "Zara" + "CL" -> "Zara-CL"
+            const fabricInitials = plan.fabric.split(/[\s-]+/).map((w: string) => w[0]).join('').toUpperCase();
+            plan.orderReference = `${plan.client}-${fabricInitials}`;
+        }
+    }
+
+    try {
+      await updateDoc(doc(db, 'ExternalPlans', factoryId), { plans: updatedPlans });
+      setExternalFactories(externalFactories.map(f => 
+        f.id === factoryId ? { ...f, plans: updatedPlans } : f
+      ));
+    } catch (err) {
+      console.error("Error updating external plan:", err);
+    }
+  };
+
+  const handleDeleteExternalPlan = async (factoryId: string, planIndex: number) => {
+    if (!window.confirm('Delete this plan?')) return;
+    const factory = externalFactories.find(f => f.id === factoryId);
+    if (!factory) return;
+
+    const updatedPlans = factory.plans.filter((_, idx) => idx !== planIndex);
+
+    try {
+      await updateDoc(doc(db, 'ExternalPlans', factoryId), { plans: updatedPlans });
+      setExternalFactories(externalFactories.map(f => 
+        f.id === factoryId ? { ...f, plans: updatedPlans } : f
+      ));
+    } catch (err) {
+      console.error("Error deleting external plan:", err);
+    }
+  };
+
   const scheduleRef = useRef<HTMLDivElement>(null);
 
   // Listen for Active Day changes
@@ -251,10 +411,17 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
   const handleCreateItem = async (type: 'fabric' | 'client', name: string) => {
     try {
       if (type === 'fabric') {
-        await DataService.addFabric({ name });
+        await DataService.addFabric({ 
+            name,
+            fabricId: `fabric-${Date.now()}`,
+            type: 'General'
+        });
         setFabrics(await DataService.getFabrics());
       } else {
-        await DataService.addClient({ name });
+        await DataService.addClient({ 
+            name,
+            clientId: `client-${Date.now()}`
+        });
         setClients(await DataService.getClients());
       }
     } catch (err) {
@@ -1090,6 +1257,34 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
 
   return (
     <div className="space-y-6 pb-10">
+      {/* View Toggle */}
+      <div className="flex justify-center mb-6">
+        <div className="bg-slate-100 p-1 rounded-lg inline-flex">
+          <button
+            onClick={() => setViewMode('INTERNAL')}
+            className={`px-6 py-2 rounded-md text-sm font-medium transition-all ${
+              viewMode === 'INTERNAL'
+                ? 'bg-white text-blue-600 shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Internal Schedule
+          </button>
+          <button
+            onClick={() => setViewMode('EXTERNAL')}
+            className={`px-6 py-2 rounded-md text-sm font-medium transition-all ${
+              viewMode === 'EXTERNAL'
+                ? 'bg-white text-blue-600 shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            External Schedule
+          </button>
+        </div>
+      </div>
+
+      {viewMode === 'INTERNAL' ? (
+        <>
       {/* Filter Bar */}
       <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
           <div className="flex flex-col lg:flex-row gap-4 justify-between items-start lg:items-center">
@@ -1194,7 +1389,6 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                     <th className="py-3 px-2 border-r border-slate-100 w-24 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Orig. Machine</span><span className="text-[10px] text-slate-400">الاصل</span></div></th>
                     <th className="py-3 px-2 border-r border-slate-100 w-20 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Days</span><span className="text-[10px] text-slate-400">المدة</span></div></th>
                     <th className="py-3 px-2 border-r border-slate-100 w-24"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Client</span><span className="text-[10px] text-slate-400">العميل</span></div></th>
-                    <th className="py-3 px-2 border-r border-slate-100 w-20 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Ref</span><span className="text-[10px] text-slate-400">المرجع</span></div></th>
                     <th className="py-3 px-2 border-r border-slate-100 w-20 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Remaining</span><span className="text-[10px] text-slate-400">متبقي</span></div></th>
                     <th className="py-3 px-2 border-r border-slate-100 w-20"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Qty</span><span className="text-[10px] text-slate-400">الكمية</span></div></th>
                     <th className="py-3 px-2 border-r border-slate-100 w-20 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Prod/Day</span><span className="text-[10px] text-slate-400">انتاج/يوم</span></div></th>
@@ -1212,8 +1406,15 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                       <td className="p-2 text-xs font-bold text-emerald-800 align-middle hidden md:table-cell">{currentEndDate}</td>
                       <td className="p-2 text-center text-xs text-slate-400 align-middle hidden md:table-cell">-</td>
                       <td className="p-2 text-center align-middle hidden md:table-cell"><div className="text-emerald-700 text-xs font-bold bg-white/50 py-1 rounded border border-emerald-200 mx-auto w-12">{currentRemainingDays}</div></td>
-                      <td className="p-2 text-center text-xs font-bold text-blue-600 align-middle">{machine.client}</td>
-                      <td className="p-2 text-center text-xs font-mono text-slate-500 align-middle hidden md:table-cell">{machine.orderReference || '-'}</td>
+                      <td className="p-2 text-center text-xs font-bold text-blue-600 align-middle relative group">
+                        {machine.client}
+                        {machine.orderReference && (
+                          <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 bg-slate-800 text-white text-xs rounded shadow-lg z-20 whitespace-nowrap pointer-events-none">
+                            Ref: {machine.orderReference}
+                            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+                          </div>
+                        )}
+                      </td>
                       <td className="p-2 text-center text-xs font-bold text-emerald-700 align-middle hidden md:table-cell">{machine.remainingMfg}</td>
                       <td className="p-2 text-center text-xs text-slate-500 align-middle">-</td>
                       <td className="p-2 text-center text-xs text-slate-600 align-middle hidden md:table-cell">{machine.dayProduction}</td>
@@ -1294,23 +1495,12 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                           />}
                           
                           {/* Reference Code Tooltip */}
-                          {!isSettings && plan.client && plan.fabric && (
+                          {!isSettings && plan.client && (
                             <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 bg-slate-800 text-white text-xs rounded shadow-lg z-20 whitespace-nowrap pointer-events-none">
                               {plan.client}-{plan.fabric}
+                              {plan.orderReference && <span className="block text-[10px] opacity-75">Ref: {plan.orderReference}</span>}
                               <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
                             </div>
-                          )}
-                        </td>
-                        <td className="p-1 align-middle hidden md:table-cell">
-                          {!isSettings && (
-                            <input 
-                              type="text"
-                              className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-500 text-xs font-mono"
-                              value={plan.orderReference || ''}
-                              onChange={(e) => handlePlanChange(machine, index, 'orderReference', e.target.value)}
-                              placeholder="-"
-                              title="Order Reference (Auto-generated)"
-                            />
                           )}
                         </td>
                         <td className="p-1 align-middle hidden md:table-cell">
@@ -1423,6 +1613,218 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
         }
       })}
       </div>
+      )}
+      </>
+      ) : (
+        <div className="space-y-8">
+          {/* External Schedule Content */}
+          <div className="flex justify-between items-center bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-8">
+             <div>
+                <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                  <Factory className="text-indigo-600" size={24} />
+                  External Production Sites
+                </h2>
+                <p className="text-sm text-slate-500 mt-1">Manage production schedules and tracking for external partners</p>
+             </div>
+             <button
+               onClick={() => {
+                 const name = window.prompt("Enter new factory name:");
+                 if (name) {
+                   setNewFactoryName(name);
+                   // We need to call handleAddFactory but it relies on state which might not update immediately if we just set it.
+                   // Better to refactor handleAddFactory to take a name or just call the logic directly here.
+                   // Let's just call the logic directly here to be safe and clean.
+                   const factoryId = `ext-factory-${Date.now()}`;
+                   const newFactory: ExternalFactory = {
+                     id: factoryId,
+                     name: name.trim(),
+                     plans: []
+                   };
+                   setDoc(doc(db, 'ExternalPlans', factoryId), newFactory).then(() => {
+                      setExternalFactories(prev => [...prev, newFactory]);
+                   }).catch(err => console.error("Error adding factory:", err));
+                 }
+               }}
+               className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg font-semibold transition-all shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
+             >
+               <Plus size={20} />
+               <span>Add New Factory</span>
+             </button>
+          </div>
+
+          {externalFactories.map(factory => (
+            <div key={factory.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mb-8">
+              <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-6 py-4 flex justify-between items-center text-white border-b border-slate-700">
+                <div className="flex items-center gap-4">
+                    <div className="p-2 bg-white/10 rounded-lg backdrop-blur-sm border border-white/10">
+                        <Factory size={24} className="text-indigo-300" />
+                    </div>
+                    <div>
+                        <h3 className="font-bold text-xl tracking-wide text-white">{factory.name}</h3>
+                        <div className="flex items-center gap-2 text-xs text-slate-400 font-medium uppercase tracking-wider mt-0.5">
+                            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                            External Partner
+                        </div>
+                    </div>
+                </div>
+                <div className="flex items-center gap-2">
+                    {/* Actions placeholder */}
+                </div>
+              </div>
+              
+              <div className="overflow-x-auto">
+                <table className="w-full text-center border-collapse text-sm">
+                  <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                    <tr>
+                      <th className="py-3 px-2 border-r border-slate-100 w-28">Start Date</th>
+                      <th className="py-3 px-2 border-r border-slate-100 w-28">End Date</th>
+                      <th className="py-3 px-2 border-r border-slate-100 w-20">Days</th>
+                      <th className="py-3 px-2 border-r border-slate-100 w-24">Client</th>
+                      <th className="py-3 px-2 border-r border-slate-100 w-20">Rem</th>
+                      <th className="py-3 px-2 border-r border-slate-100 w-20">Qty</th>
+                      <th className="py-3 px-2 border-r border-slate-100 w-20">Prod/Day</th>
+                      <th className="py-3 px-2 border-r border-slate-100">Fabric / Notes</th>
+                      <th className="py-3 px-2 border-r border-slate-100 w-24">Machine</th>
+                      <th className="py-3 px-2 w-20">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {factory.plans.map((plan, index) => (
+                      <tr key={index} className={`hover:bg-blue-50/50 ${plan.status === 'COMPLETED' ? 'opacity-50 bg-slate-50' : ''} ${plan.status === 'ACTIVE' ? 'bg-emerald-50 border-l-4 border-emerald-500' : ''}`}>
+                        <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50">
+                          <input
+                            type="date"
+                            className="w-full bg-transparent border-none focus:ring-0 text-xs p-0"
+                            value={plan.startDate || ''}
+                            onChange={(e) => handleUpdateExternalPlan(factory.id, index, 'startDate', e.target.value)}
+                          />
+                        </td>
+                        <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50">{plan.endDate || '-'}</td>
+                        <td className="p-1">
+                          <input
+                            type="number"
+                            className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-600 text-xs"
+                            value={plan.days}
+                            onChange={(e) => handleUpdateExternalPlan(factory.id, index, 'days', Number(e.target.value))}
+                          />
+                        </td>
+                        <td className="p-1 relative group">
+                           <SearchDropdown
+                            id={`ext-client-${factory.id}-${index}`}
+                            options={clients}
+                            value={plan.client || ''}
+                            onChange={(val) => handleUpdateExternalPlan(factory.id, index, 'client', val)}
+                            onCreateNew={async (val) => {
+                                await handleCreateItem('client', val);
+                                handleUpdateExternalPlan(factory.id, index, 'client', val);
+                            }}
+                            placeholder="-"
+                            className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent font-bold text-slate-700"
+                          />
+                          {plan.client && (
+                            <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 bg-slate-800 text-white text-xs rounded shadow-lg z-20 whitespace-nowrap pointer-events-none">
+                              {plan.client}
+                              {(() => {
+                                const ref = plan.orderReference || (plan.fabric ? `${plan.client}-${plan.fabric.split(/[\s-]+/).map((w: string) => w[0]).join('').toUpperCase()}` : '');
+                                return ref ? <span className="block text-[10px] opacity-75">Ref: {ref}</span> : null;
+                              })()}
+                              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+                            </div>
+                          )}
+                        </td>
+                        <td className="p-1">
+                          <input
+                            type="number"
+                            className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-600"
+                            value={plan.remaining}
+                            onChange={(e) => handleUpdateExternalPlan(factory.id, index, 'remaining', Number(e.target.value))}
+                          />
+                        </td>
+                        <td className="p-1">
+                          <input
+                            type="number"
+                            className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-600 font-medium"
+                            value={plan.quantity}
+                            onChange={(e) => handleUpdateExternalPlan(factory.id, index, 'quantity', Number(e.target.value))}
+                          />
+                        </td>
+                        <td className="p-1">
+                          <input
+                            type="number"
+                            className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-600"
+                            value={plan.productionPerDay}
+                            onChange={(e) => handleUpdateExternalPlan(factory.id, index, 'productionPerDay', Number(e.target.value))}
+                          />
+                        </td>
+                        <td className="p-1 relative">
+                           <SearchDropdown
+                                id={`ext-fabric-${factory.id}-${index}`}
+                                options={fabrics}
+                                value={plan.fabric || ''}
+                                onChange={(val) => handleUpdateExternalPlan(factory.id, index, 'fabric', val)}
+                                onCreateNew={async (val) => {
+                                    await handleCreateItem('fabric', val);
+                                    handleUpdateExternalPlan(factory.id, index, 'fabric', val);
+                                }}
+                                placeholder="-"
+                                className="w-full text-right py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-sm text-slate-700 leading-tight"
+                             />
+                        </td>
+                        <td className="p-1">
+                          <input
+                            type="text"
+                            className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-600 text-xs"
+                            value={plan.machineName || ''}
+                            onChange={(e) => handleUpdateExternalPlan(factory.id, index, 'machineName', e.target.value)}
+                            placeholder="-"
+                          />
+                        </td>
+                        <td className="p-1">
+                           <div className="flex items-center justify-center gap-1">
+                             <select
+                               value={plan.status || 'PENDING'}
+                               onChange={(e) => handleUpdateExternalPlan(factory.id, index, 'status', e.target.value)}
+                               className={`text-xs font-medium py-1 px-2 rounded border-none outline-none cursor-pointer ${
+                                 plan.status === 'ACTIVE' 
+                                   ? 'bg-emerald-100 text-emerald-700' 
+                                   : plan.status === 'COMPLETED'
+                                     ? 'bg-slate-100 text-slate-500'
+                                     : 'bg-white text-slate-600 hover:bg-slate-50'
+                               }`}
+                             >
+                               <option value="PENDING">Pending</option>
+                               <option value="ACTIVE">Active</option>
+                               <option value="COMPLETED">Finished</option>
+                             </select>
+
+                             <button 
+                                onClick={() => handleDeleteExternalPlan(factory.id, index)}
+                                className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                                title="Delete Plan"
+                             >
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                             </button>
+                           </div>
+                        </td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td colSpan={11} className="p-2 bg-slate-50 border-t border-slate-100">
+                        <button 
+                          onClick={() => handleAddExternalPlan(factory.id)}
+                          className="w-full flex items-center justify-center gap-2 py-2 border border-dashed border-slate-300 rounded-lg text-slate-500 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50/50 transition-all text-xs font-medium"
+                        >
+                          <Plus size={14} />
+                          Add External Plan
+                        </button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
       {detailsModal && detailsModal.isOpen && (

@@ -1,9 +1,20 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { collection, getDocs } from 'firebase/firestore';
+import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
 import { CustomerOrder, MachineRow, PlanItem } from '../types';
-import { ChevronDown, ChevronRight, Package, AlertCircle, Activity, Calendar, Plus, Layers, MapPin } from 'lucide-react';
+import { ChevronDown, ChevronRight, Package, AlertCircle, Activity, Calendar, Plus, Layers, MapPin, Factory, Info } from 'lucide-react';
 import { AddOrderModal } from './AddOrderModal';
 import { AllocationModal } from './AllocationModal';
+
+interface ExternalPlanInfo {
+  factoryName: string;
+  startDate: string;
+  quantity: number;
+  remaining: number;
+  status: string;
+  machineName: string;
+}
 
 interface FabricStatus {
   fabricName: string;
@@ -18,12 +29,20 @@ interface FabricStatus {
     quantity: number;
     remaining: number;
     status: string;
+    isExternal?: boolean;
+    factoryName?: string;
   }[];
+  debug?: {
+    searchCriteria: { client: string; fabric: string; ref: string };
+    internalMatches: any[];
+    externalMatches: any[];
+  };
 }
 
 export const OrderSSPage: React.FC = () => {
   const [orders, setOrders] = useState<CustomerOrder[]>([]);
   const [machines, setMachines] = useState<MachineRow[]>([]);
+  const [externalFactories, setExternalFactories] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedClient, setExpandedClient] = useState<string | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -35,15 +54,24 @@ export const OrderSSPage: React.FC = () => {
     requiredQuantity: number;
     currentAllocations: any[];
   } | null>(null);
+  const [debugInfo, setDebugInfo] = useState<any | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
-      const [ordersData, machinesData] = await Promise.all([
+      const [ordersData, machinesData, externalPlansSnapshot] = await Promise.all([
         DataService.getCustomerOrders(),
-        DataService.getMachinesFromMachineSS()
+        DataService.getMachinesFromMachineSS(),
+        getDocs(collection(db, 'ExternalPlans'))
       ]);
+      
+      const extFactories = externalPlansSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
       setOrders(ordersData);
       setMachines(machinesData);
+      setExternalFactories(extFactories);
     } catch (err) {
       console.error("Failed to fetch data", err);
     } finally {
@@ -74,7 +102,7 @@ export const OrderSSPage: React.FC = () => {
   // Helper to aggregate real-time status for a specific client and fabric
   const getFabricStatus = (clientName: string, fabricName: string, storedReference?: string): FabricStatus => {
     // Use stored reference if available, otherwise generate fallback
-    const fabricInitials = fabricName.split(/[\s-]+/).map((w: string) => w[0]).join('');
+    const fabricInitials = fabricName.split(/[\s-]+/).map((w: string) => w[0]).join('').toUpperCase();
     const orderReference = storedReference || `${clientName}-${fabricInitials}`;
 
     const status: FabricStatus = {
@@ -84,7 +112,12 @@ export const OrderSSPage: React.FC = () => {
       currentRemaining: 0,
       activeMachines: [],
       plannedMachines: [],
-      plans: []
+      plans: [],
+      debug: {
+        searchCriteria: { client: clientName, fabric: fabricName, ref: orderReference },
+        internalMatches: [],
+        externalMatches: []
+      }
     };
 
     machines.forEach(machine => {
@@ -106,6 +139,7 @@ export const OrderSSPage: React.FC = () => {
           remaining: Number(machine.remainingMfg) || 0,
           status: 'Active'
         });
+        status.debug?.internalMatches.push({ type: 'Active', machine: name, client: machine.client, fabric: machine.material });
       }
 
       // Check Future Plans
@@ -125,6 +159,7 @@ export const OrderSSPage: React.FC = () => {
               remaining: Number(plan.remaining) || 0,
               status: 'Planned'
             });
+            status.debug?.internalMatches.push({ type: 'Planned', machine: name, client: plan.client, fabric: plan.fabric });
           }
         });
       }
@@ -133,6 +168,42 @@ export const OrderSSPage: React.FC = () => {
     // Deduplicate machine names
     status.activeMachines = Array.from(new Set(status.activeMachines));
     status.plannedMachines = Array.from(new Set(status.plannedMachines));
+
+    // Check External Plans
+    externalFactories.forEach(factory => {
+      if (factory.plans && Array.isArray(factory.plans)) {
+        factory.plans.forEach((plan: any) => {
+          // Strict match like internal schedule, but with trim() for safety
+          const isClientMatch = plan.client && plan.client.trim() === clientName;
+          const isFabricMatch = plan.fabric && plan.fabric.trim() === fabricName;
+
+          if (isClientMatch && isFabricMatch) {
+            status.totalPlanned += Number(plan.quantity) || 0;
+            const name = `${factory.name} (Ext)`;
+            
+            const isExternalActive = plan.status === 'ACTIVE';
+            
+            if (isExternalActive) {
+               status.currentRemaining += Number(plan.remaining) || 0;
+               status.activeMachines.push(name);
+            } else {
+               status.plannedMachines.push(name);
+            }
+
+            status.plans.push({
+              machineName: plan.machineName || 'External Machine',
+              startDate: plan.startDate || 'Pending',
+              quantity: Number(plan.quantity) || 0,
+              remaining: isExternalActive ? (Number(plan.remaining) || 0) : 0,
+              status: plan.status || 'Planned',
+              isExternal: true,
+              factoryName: factory.name
+            });
+            status.debug?.externalMatches.push({ factory: factory.name, client: plan.client, fabric: plan.fabric, status: plan.status });
+          }
+        });
+      }
+    });
 
     return status;
   };
@@ -199,6 +270,17 @@ export const OrderSSPage: React.FC = () => {
                                     <span className="text-xs font-mono bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded border border-slate-300" title="Order Reference">
                                         {liveStatus.orderReference}
                                     </span>
+                                    <button 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setDebugInfo(liveStatus.debug);
+                                      }}
+                                      className="flex items-center gap-1 ml-2 px-2 py-1 bg-red-100 text-red-600 hover:bg-red-200 rounded text-xs font-bold transition-colors border border-red-200"
+                                      title="Click to see why data is missing"
+                                    >
+                                      <Info className="w-3 h-3" />
+                                      DEBUG
+                                    </button>
                                 </div>
                                 <div className="flex items-center gap-2 text-xs text-slate-500">
                                    {liveStatus.activeMachines.length > 0 && (
@@ -288,16 +370,33 @@ export const OrderSSPage: React.FC = () => {
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
                                   {liveStatus.plans.map((plan, pIdx) => (
-                                    <tr key={pIdx} className="hover:bg-slate-50/50">
-                                      <td className="px-4 py-2 font-medium text-slate-700">{plan.machineName}</td>
+                                    <tr key={pIdx} className={`hover:bg-slate-50/50 ${plan.isExternal ? 'bg-purple-50/40' : ''}`}>
+                                      <td className="px-4 py-2 font-medium text-slate-700">
+                                        {plan.isExternal ? (
+                                          <div className="flex flex-col">
+                                            <span className="text-purple-700 font-bold flex items-center gap-1">
+                                              <Factory className="w-3 h-3" /> {plan.factoryName}
+                                            </span>
+                                            <span className="text-[10px] text-purple-500">{plan.machineName}</span>
+                                          </div>
+                                        ) : (
+                                          plan.machineName
+                                        )}
+                                      </td>
                                       <td className="px-4 py-2">
-                                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${plan.status === 'Active' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}>
-                                          {plan.status}
+                                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                          plan.isExternal 
+                                            ? (plan.status === 'Active' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600')
+                                            : (plan.status === 'Active' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700')
+                                        }`}>
+                                          {plan.status} {plan.isExternal && '(Ext)'}
                                         </span>
                                       </td>
                                       <td className="px-4 py-2 text-slate-500">{plan.startDate}</td>
                                       <td className="px-4 py-2 text-right font-mono text-slate-600">{plan.quantity}</td>
-                                      <td className="px-4 py-2 text-right font-mono font-bold text-slate-700">{plan.remaining}</td>
+                                      <td className={`px-4 py-2 text-right font-mono font-bold ${plan.isExternal ? 'text-purple-700' : 'text-slate-700'}`}>
+                                        {plan.remaining}
+                                      </td>
                                     </tr>
                                   ))}
                                 </tbody>
@@ -349,6 +448,105 @@ export const OrderSSPage: React.FC = () => {
             fetchData();
           }}
         />
+      )}
+
+      {/* Debug Modal */}
+      {debugInfo && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+            <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+              <h3 className="font-bold text-lg text-slate-800 flex items-center gap-2">
+                <Info className="w-5 h-5 text-indigo-600" />
+                Debug Matching Info
+              </h3>
+              <button onClick={() => setDebugInfo(null)} className="text-slate-400 hover:text-slate-600">
+                ✕
+              </button>
+            </div>
+            <div className="p-6 space-y-6">
+              <div>
+                <h4 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2">Search Criteria</h4>
+                <div className="bg-slate-100 p-3 rounded-md font-mono text-sm text-slate-700 space-y-1">
+                  <div>Client: <span className="font-bold text-indigo-600">"{debugInfo.searchCriteria.client}"</span></div>
+                  <div>Fabric: <span className="font-bold text-indigo-600">"{debugInfo.searchCriteria.fabric}"</span></div>
+                  <div>Ref: <span className="text-slate-500">{debugInfo.searchCriteria.ref}</span></div>
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Internal Schedule Matches ({debugInfo.internalMatches.length})
+                </h4>
+                {debugInfo.internalMatches.length > 0 ? (
+                  <div className="bg-emerald-50 border border-emerald-100 rounded-md overflow-hidden">
+                    <table className="w-full text-sm text-left">
+                      <thead className="bg-emerald-100/50 text-emerald-800 font-medium text-xs">
+                        <tr>
+                          <th className="p-2">Type</th>
+                          <th className="p-2">Machine</th>
+                          <th className="p-2">Client Found</th>
+                          <th className="p-2">Fabric Found</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-emerald-100">
+                        {debugInfo.internalMatches.map((m: any, i: number) => (
+                          <tr key={i}>
+                            <td className="p-2">{m.type}</td>
+                            <td className="p-2 font-mono">{m.machine}</td>
+                            <td className="p-2">"{m.client}"</td>
+                            <td className="p-2">"{m.fabric}"</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="text-slate-400 italic text-sm bg-slate-50 p-3 rounded">No matches found in internal schedule.</div>
+                )}
+              </div>
+
+              <div>
+                <h4 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  External Schedule Matches ({debugInfo.externalMatches.length})
+                </h4>
+                {debugInfo.externalMatches.length > 0 ? (
+                  <div className="bg-purple-50 border border-purple-100 rounded-md overflow-hidden">
+                    <table className="w-full text-sm text-left">
+                      <thead className="bg-purple-100/50 text-purple-800 font-medium text-xs">
+                        <tr>
+                          <th className="p-2">Factory</th>
+                          <th className="p-2">Status</th>
+                          <th className="p-2">Client Found</th>
+                          <th className="p-2">Fabric Found</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-purple-100">
+                        {debugInfo.externalMatches.map((m: any, i: number) => (
+                          <tr key={i}>
+                            <td className="p-2">{m.factory}</td>
+                            <td className="p-2">{m.status}</td>
+                            <td className="p-2">"{m.client}"</td>
+                            <td className="p-2">"{m.fabric}"</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="text-slate-400 italic text-sm bg-slate-50 p-3 rounded">No matches found in external schedule.</div>
+                )}
+              </div>
+            </div>
+            <div className="p-4 border-t border-slate-200 bg-slate-50 text-right">
+              <button 
+                onClick={() => setDebugInfo(null)}
+                className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded hover:bg-slate-50 font-medium text-sm"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

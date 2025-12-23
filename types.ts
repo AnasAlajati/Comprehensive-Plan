@@ -54,6 +54,26 @@ export interface OrderFabric {
   allocations?: YarnAllocation[]; // NEW: Track allocated yarn lots
 }
 
+export interface FabricYarn {
+  name: string;
+  percentage: number;
+  scrapPercentage: number;
+}
+
+export interface FabricVariant {
+  id: string;
+  yarns: FabricYarn[];
+}
+
+export interface FabricDefinition {
+  id?: string;
+  name: string;
+  code?: string; // Extracted from [CODE]
+  shortName?: string; // Name without code and keywords
+  workCenters: string[];
+  variants: FabricVariant[];
+}
+
 export interface CustomerOrder {
   id?: string;
   customerName: string;
@@ -86,6 +106,16 @@ export interface MachineRow {
   machineName: string;
   status: MachineStatus;
   customStatusNote?: string; // Stores text if status is OTHER
+  
+  // Machine Details
+  dia?: string;
+  gauge?: string;
+  feeders?: number;
+  needles?: number;
+  origin?: string;
+  tubularOpen?: 'Tubular' | 'Open';
+  tracks?: string | number;
+
   avgProduction: number;
   dayProduction: number;
   remainingMfg: number;
@@ -154,6 +184,7 @@ export interface OrderRow {
   fabricColor?: string; // NEW: Fabric Color
   dyeingPlan?: DyeingBatch[]; // NEW: Detailed Dyeing Plan
   customerId?: string; // NEW: Link to parent customer for collectionGroup queries
+  variantId?: string; // NEW: Selected Fabric Variant ID
 }
 
 export interface CustomerSheet {

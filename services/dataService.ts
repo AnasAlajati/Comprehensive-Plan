@@ -19,7 +19,8 @@ import {
   OrderFabric,
   DailyLog,
   PlanItem,
-  MachineRow
+  MachineRow,
+  FabricDefinition
 } from '../types';
 
 export const DataService = {
@@ -47,9 +48,9 @@ export const DataService = {
     return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Client));
   },
 
-  async getFabrics(): Promise<Fabric[]> {
-    const snapshot = await getDocs(collection(db, 'fabrics'));
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Fabric));
+  async getFabrics(): Promise<FabricDefinition[]> {
+    const snapshot = await getDocs(collection(db, 'FabricSS'));
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as FabricDefinition));
   },
 
   async getYarns(): Promise<Yarn[]> {
