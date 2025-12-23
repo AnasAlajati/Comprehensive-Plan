@@ -364,5 +364,35 @@ export const DataService = {
 
   async updateGlobalSettings(settings: any): Promise<void> {
     await setDoc(doc(db, 'settings', 'global'), settings, { merge: true });
+  },
+
+  async getWorkCenterMappings(): Promise<Record<string, string>> {
+    try {
+      const snapshot = await getDocs(collection(db, 'work_center_mappings'));
+      const mappings: Record<string, string> = {};
+      snapshot.docs.forEach(doc => {
+        mappings[doc.id] = doc.data().machineId;
+      });
+      return mappings;
+    } catch (error) {
+      console.error("Error fetching work center mappings:", error);
+      return {};
+    }
+  },
+
+  async saveWorkCenterMapping(odooName: string, machineId: string): Promise<void> {
+    try {
+      // Sanitize ID (remove slashes etc if any, though ODOO names are usually safe-ish)
+      // But doc ID cannot contain /
+      const safeId = odooName.replace(/\//g, '_'); 
+      await setDoc(doc(db, 'work_center_mappings', safeId), {
+        machineId,
+        originalName: odooName,
+        updatedAt: Timestamp.now()
+      });
+    } catch (error) {
+      console.error("Error saving work center mapping:", error);
+    }
   }
 };
+

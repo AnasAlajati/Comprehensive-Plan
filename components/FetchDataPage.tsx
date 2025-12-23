@@ -2,12 +2,14 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { writeBatch, doc, getDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
+import { parseFabricName } from '../services/data';
 import { TelegramService } from '../services/telegramService';
 import { PlanItem, MachineStatus, CustomerOrder, MachineRow } from '../types';
 import { LinkOrderModal } from './LinkOrderModal';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import { CheckCircle, Send, Link, Truck, Layout, Factory } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { CheckCircle, Send, Link, Truck, Layout, Factory, FileSpreadsheet, Upload, X, Check, Sparkles, Edit } from 'lucide-react';
 import { ExternalProductionSheet } from './ExternalProductionSheet'; // New Component - Force Refresh
 
 // Navigable fields across the whole row (including read-only) for smooth Excel-like movement
@@ -402,6 +404,22 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [draggedRowIndex, setDraggedRowIndex] = useState<number | null>(null);
   const [externalProduction, setExternalProduction] = useState<number>(0);
   const [showExternalSheet, setShowExternalSheet] = useState(false); // Toggle for External Sheet
+  
+  // Import ODOO State
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importPreview, setImportPreview] = useState<any[]>([]);
+  
+  // Mapping State
+  const [showMappingModal, setShowMappingModal] = useState(false);
+  const [unknownWorkCenters, setUnknownWorkCenters] = useState<{ name: string; fabrics: string[] }[]>([]);
+  const [workCenterMappings, setWorkCenterMappings] = useState<Record<string, string>>({});
+  const [pendingImportRows, setPendingImportRows] = useState<any[]>([]);
+  const [mappingMachines, setMappingMachines] = useState<any[]>([]); // Machines list for mapping modal
+
+  // Fabric Import State
+  const [showFabricImportModal, setShowFabricImportModal] = useState(false);
+  const [unknownFabrics, setUnknownFabrics] = useState<string[]>([]);
+  const [fabricsToCreate, setFabricsToCreate] = useState<Record<string, boolean>>({});
 
   // Sync with propSelectedDate if it changes (e.g. from global app state)
   useEffect(() => {
@@ -494,44 +512,35 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       for (const machine of machines) {
         const prevLog = (machine.dailyLogs || []).find((l: any) => l.date === previousDate);
         
-        // Only update if we have previous data to carry over
         if (prevLog) {
-           const currentLogs = machine.dailyLogs || [];
-           const existingLogIndex = currentLogs.findIndex((l: any) => l.date === selectedDate);
-           
-           // Calculate new remaining: Yesterday's Remaining (Opening Balance for Today)
-           const prevRemaining = Number(prevLog.remainingMfg) || 0;
-           // We don't subtract prevProd here because prevRemaining is already the closing balance of yesterday (which is opening of today)
-           // OR if prevRemaining was opening of yesterday, then we should subtract.
-           // Based on user request "yesterdays remaining - daily production = todays remaining", 
-           // it implies Yesterday's Remaining is the BASE.
-           // Let's assume Fetch Yesterday just carries over the remaining quantity as the starting point.
+           const prevRemaining = Number(prevLog.remainingMfg) || Number(prevLog.remaining) || 0;
            const newRemaining = prevRemaining; 
 
            const newLogEntry = {
              id: selectedDate,
              date: selectedDate,
-             dayProduction: 0, // Reset
-             scrap: 0, // Reset
-             reason: '', // Reset
-             status: prevLog.status, // Copy
-             fabric: prevLog.fabric, // Copy
-             client: prevLog.client, // Copy
-             avgProduction: prevLog.avgProduction || machine.avgProduction || 0, // Copy
-             remainingMfg: newRemaining, // Calculated
-             customStatusNote: prevLog.customStatusNote || '', // Copy
+             dayProduction: 0,
+             scrap: 0,
+             reason: '',
+             status: prevLog.status,
+             fabric: prevLog.fabric,
+             client: prevLog.client,
+             avgProduction: prevLog.avgProduction || machine.avgProduction || 0,
+             remainingMfg: newRemaining,
+             customStatusNote: prevLog.customStatusNote || '',
              timestamp: new Date().toISOString()
            };
 
-           const updatedLogs = [...currentLogs];
+           const currentLogs = machine.dailyLogs || [];
+           const existingLogIndex = currentLogs.findIndex((l: any) => l.date === selectedDate);
+           
+           let updatedLogs = [...currentLogs];
            if (existingLogIndex >= 0) {
-             // Merge with existing, but overwrite the fetched fields
              updatedLogs[existingLogIndex] = { ...updatedLogs[existingLogIndex], ...newLogEntry };
            } else {
              updatedLogs.push(newLogEntry);
            }
 
-           // Update the machine
            updatePromises.push(DataService.updateMachineInMachineSS(String(machine.id), {
              dailyLogs: updatedLogs,
              lastLogDate: selectedDate,
@@ -563,6 +572,302 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     }
     setLoading(false);
   };
+
+  // ODOO Import Logic
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      const bstr = evt.target?.result;
+      const wb = XLSX.read(bstr, { type: 'binary' });
+      const wsname = wb.SheetNames[0];
+      const ws = wb.Sheets[wsname];
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
+      
+      // Skip header (row 0), start from row 1
+      const rows = data.slice(1);
+      setPendingImportRows(rows);
+      
+      // Fetch current machines and saved mappings
+      const [currentMachines, savedMappings] = await Promise.all([
+        DataService.getMachinesFromMachineSS(),
+        DataService.getWorkCenterMappings()
+      ]);
+      
+      setMappingMachines(currentMachines);
+      
+      const unknowns: Map<string, Set<string>> = new Map();
+      const autoMappings: Record<string, string> = { ...savedMappings };
+
+      // First Pass: Identify Unknowns and Try Auto-Mapping
+      rows.forEach((row: any) => {
+        const fabricName = row[0];
+        const workCenter = row[3];
+        if (!workCenter) return;
+        const wcStr = String(workCenter).trim();
+
+        // 0. Check Saved Mappings
+        if (savedMappings[wcStr]) {
+          return; // Already known
+        }
+
+        // 1. Direct Match
+        const machine = currentMachines.find((m: any) => 
+          (m.name && m.name.toLowerCase() === wcStr.toLowerCase()) || 
+          (m.machineid && m.machineid.toString() === wcStr) ||
+          (m.id && m.id.toString() === wcStr)
+        );
+
+        if (!machine) {
+          // 2. Try Auto-Map via Fabric Database
+          const fabricDef = fabrics.find(f => f.name === fabricName);
+          let foundMachineId: string | null = null;
+
+          if (fabricDef && fabricDef.workCenters && fabricDef.workCenters.length === 1) {
+             // If fabric is only made on ONE machine, assume this WC is that machine
+             const candidateName = fabricDef.workCenters[0];
+             const candidateMachine = currentMachines.find((m: any) => m.name === candidateName);
+             if (candidateMachine) {
+                foundMachineId = String(candidateMachine.id);
+             }
+          }
+
+          if (foundMachineId) {
+            autoMappings[wcStr] = foundMachineId;
+          } else {
+            if (!unknowns.has(wcStr)) {
+              unknowns.set(wcStr, new Set());
+            }
+            if (fabricName) unknowns.get(wcStr)?.add(fabricName);
+          }
+        }
+      });
+
+      if (unknowns.size > 0) {
+        const unknownList = Array.from(unknowns.entries()).map(([name, fabricSet]) => ({
+          name,
+          fabrics: Array.from(fabricSet)
+        }));
+        setUnknownWorkCenters(unknownList);
+        setWorkCenterMappings(autoMappings);
+        setShowMappingModal(true);
+      } else {
+        checkFabricsAndProceed(rows, currentMachines, autoMappings);
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const checkFabricsAndProceed = async (rows: any[], machines: any[], mappings: Record<string, string>) => {
+    // Ensure mappings state is synced for any future steps (like Fabric Modal)
+    setWorkCenterMappings(mappings);
+    
+    const unknownFabricsSet = new Set<string>();
+    
+    // Refresh fabrics list to be sure
+    const currentFabrics = await DataService.getFabrics();
+    setFabrics(currentFabrics);
+
+    rows.forEach((row: any) => {
+      const fabricName = row[0];
+      if (fabricName && !currentFabrics.find(f => f.name === fabricName)) {
+        unknownFabricsSet.add(fabricName);
+      }
+    });
+
+    if (unknownFabricsSet.size > 0) {
+      const unknowns = Array.from(unknownFabricsSet);
+      setUnknownFabrics(unknowns);
+      // Default all to true
+      const initialCreateState: Record<string, boolean> = {};
+      unknowns.forEach(f => initialCreateState[f] = true);
+      setFabricsToCreate(initialCreateState);
+      
+      // We need to persist machines/mappings for the next step
+      // Since we can't easily pass them through the modal state without prop drilling or complex state,
+      // we'll just rely on refetching machines or using the 'machines' prop if needed, 
+      // but 'mappings' is already in state 'workCenterMappings'.
+      // 'pendingImportRows' is already set.
+      
+      setShowFabricImportModal(true);
+    } else {
+      processImportRows(rows, machines, mappings);
+    }
+  };
+
+  const handleRemap = (wcName: string, currentMachineId: string) => {
+      // Find fabrics for this WC from pending rows to show context
+      const fabrics = new Set<string>();
+      pendingImportRows.forEach((row: any) => {
+          if (String(row[3]).trim() === wcName) {
+              fabrics.add(row[0]);
+          }
+      });
+      
+      setUnknownWorkCenters([{ name: wcName, fabrics: Array.from(fabrics) }]);
+      setWorkCenterMappings(prev => ({ ...prev, [wcName]: currentMachineId }));
+      setShowMappingModal(true);
+  };
+
+  const processImportRows = async (rows: any[], machines: any[], mappings: Record<string, string>) => {
+      const previewData: any[] = [];
+      const today = selectedDate;
+      const yesterdayDate = new Date(selectedDate);
+      yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+      const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
+
+      // Refresh fabrics to get latest shortNames (especially if we just added some)
+      const currentFabrics = await DataService.getFabrics();
+
+      rows.forEach((row: any) => {
+        const rawFabricName = row[0];
+        
+        // Lookup fabric short name
+        const fabricDef = currentFabrics.find(f => f.name === rawFabricName);
+        const fabric = fabricDef ? (fabricDef.shortName || fabricDef.name) : rawFabricName;
+
+        const dailyProduction = parseFloat(row[1]) || 0;
+        
+        // Parse Customer: Take first part before space or dash
+        const rawCustomer = String(row[2] || '');
+        const customer = rawCustomer.split(/[\s-]/)[0].trim();
+        
+        const workCenter = row[3];
+
+        if (!workCenter) return;
+        const wcStr = String(workCenter).trim();
+
+        let machine: any = null;
+
+        // 1. Check mappings first (User override)
+        if (mappings[wcStr]) {
+           machine = machines.find((m: any) => String(m.id) === mappings[wcStr]);
+        }
+
+        // 2. If not mapped, try direct match
+        if (!machine) {
+          machine = machines.find((m: any) => 
+            (m.name && m.name.toLowerCase() === wcStr.toLowerCase()) || 
+            (m.machineid && m.machineid.toString() === wcStr) ||
+            (m.id && m.id.toString() === wcStr)
+          );
+        }
+
+        if (machine) {
+          // Find yesterday's log or latest log
+          const sortedLogs = [...(machine.dailyLogs || [])].sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          
+          const previousLog = sortedLogs.find((l: any) => l.date === yesterdayStr) || sortedLogs[0];
+          
+          const previousRemaining = previousLog?.remaining || previousLog?.remainingMfg || 0;
+          const previousStatus = previousLog?.status || 'Stopped';
+          
+          const newRemaining = Math.max(0, previousRemaining - dailyProduction);
+          
+          let newStatus = previousStatus;
+          if (dailyProduction > 0) {
+            newStatus = 'Working';
+          } else if (dailyProduction === 0 && previousStatus === 'Working') {
+            newStatus = 'Stopped';
+          }
+
+          previewData.push({
+            machineId: machine.id,
+            machineName: machine.name,
+            originalWorkCenter: wcStr,
+            fabric,
+            customer,
+            dailyProduction,
+            previousRemaining,
+            newRemaining,
+            previousStatus,
+            newStatus,
+            date: today
+          });
+        }
+      });
+
+      setImportPreview(previewData);
+      setShowImportModal(true);
+  };
+
+  const applyImport = async () => {
+    if (importPreview.length === 0) return;
+    
+    setLoading(true);
+    try {
+      const batch = writeBatch(db);
+      const machines = await DataService.getMachinesFromMachineSS();
+      
+      for (const item of importPreview) {
+        const machine = machines.find((m: any) => String(m.id) === String(item.machineId));
+        if (!machine) continue;
+
+        const newLog = {
+          date: item.date,
+          dayProduction: item.dailyProduction,
+          scrap: 0,
+          fabric: item.fabric || '',
+          client: item.customer || '',
+          status: item.newStatus,
+          remaining: item.newRemaining, // For legacy structure
+          remainingMfg: item.newRemaining // For new structure
+        };
+
+        // Update dailyLogs array (Legacy)
+        const existingLogIndex = (machine.dailyLogs || []).findIndex((l: any) => l.date === item.date);
+        let updatedLogs = [...(machine.dailyLogs || [])];
+
+        if (existingLogIndex >= 0) {
+          updatedLogs[existingLogIndex] = { ...updatedLogs[existingLogIndex], ...newLog };
+        } else {
+          updatedLogs.push(newLog);
+        }
+
+        const docRef = doc(db, 'MachineSS', String(machine.id));
+        
+        // Update parent doc
+        batch.update(docRef, { 
+          dailyLogs: updatedLogs,
+          // Also update top-level fields if this is the latest log
+          ...(item.date >= (machine.lastLogDate || '') ? {
+            status: item.newStatus,
+            lastLogDate: item.date,
+            lastLogData: newLog
+          } : {})
+        });
+
+        // Also update sub-collection if used (DataService usually handles this but we are using batch here for speed)
+        // Since DataService.updateMachineInMachineSS does both, maybe we should use that?
+        // But doing it in a loop might be slow.
+        // Let's stick to batch for parent doc, and maybe individual writes for sub-collection if needed.
+        // For now, let's just update the parent doc as that seems to be the source of truth for this view.
+        // Wait, App.tsx reads from sub-collection 'dailyLogs'.
+        // So we MUST update the sub-collection too.
+        
+        const subLogRef = doc(db, 'MachineSS', String(machine.id), 'dailyLogs', item.date);
+        batch.set(subLogRef, {
+          ...newLog,
+          machineId: Number(machine.id),
+          timestamp: new Date().toISOString()
+        }, { merge: true });
+      }
+
+      await batch.commit();
+      setImportPreview([]);
+      setShowImportModal(false);
+      showMessage('✅ Import successful!');
+      handleFetchLogs(selectedDate); // Refresh
+    } catch (error) {
+      console.error('Error applying import:', error);
+      showMessage('❌ Error applying import', true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
     const target = e.target as HTMLElement;
@@ -1723,6 +2028,14 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
               title="Copy status and fabric from yesterday, and calculate new remaining quantity"
             >
               <span>↺</span> Fetch Yesterday
+            </button>
+            <button
+              onClick={() => setShowImportModal(true)}
+              className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded-md text-xs font-bold shadow-sm transition-colors flex items-center gap-1"
+              title="Import machine plan from ODOO Excel file"
+            >
+              <FileSpreadsheet size={14} />
+              Import ODOO
             </button>
           </div>
           <div className="flex gap-3">
@@ -2897,6 +3210,355 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           }}
           isEmbedded={true}
         />
+      )}
+
+      {/* Mapping Modal */}
+      {showMappingModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[80] p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="p-6 border-b border-slate-200 flex justify-between items-center bg-amber-50">
+              <div>
+                <h2 className="text-xl font-bold text-amber-800 flex items-center gap-2">
+                  <Link className="text-amber-600" />
+                  Map Unknown Work Centers
+                </h2>
+                <p className="text-sm text-amber-700 mt-1">
+                  Some Work Centers in the Excel file could not be matched to machines. Please map them manually.
+                </p>
+              </div>
+              <button 
+                onClick={() => setShowMappingModal(false)}
+                className="text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1">
+              <div className="space-y-4">
+                {unknownWorkCenters.map((wc, idx) => (
+                  <div key={idx} className="p-4 border border-slate-200 rounded-lg bg-slate-50">
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <h3 className="font-bold text-slate-800 text-lg">{wc.name}</h3>
+                        <div className="text-xs text-slate-500 mt-1">
+                          Fabrics produced here: {wc.fabrics.join(', ') || 'None'}
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm font-medium text-slate-700">Map to Machine:</span>
+                      <div className="flex-1">
+                        <SearchDropdown
+                          id={`mapping-${idx}`}
+                          options={mappingMachines.map((m: any) => ({ 
+                            id: m.id, 
+                            name: `${m.machineName || m.name} (${m.machineType || '?'})` 
+                          }))}
+                          value={(() => {
+                            const mappedId = workCenterMappings[wc.name];
+                            if (!mappedId) return '';
+                            const m = mappingMachines.find((m: any) => String(m.id) === String(mappedId));
+                            return m ? `${m.machineName || m.name} (${m.machineType || '?'})` : '';
+                          })()}
+                          onChange={(val) => {
+                            // Reverse lookup name to ID
+                            const selected = mappingMachines.find((m: any) => `${m.machineName || m.name} (${m.machineType || '?'})` === val);
+                            if (selected) {
+                              setWorkCenterMappings(prev => ({
+                                ...prev,
+                                [wc.name]: String(selected.id)
+                              }));
+                            }
+                          }}
+                          onCreateNew={() => {}}
+                          placeholder="Type to search machine..."
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-slate-200 bg-slate-50 flex justify-end gap-3">
+              <button
+                onClick={() => setShowMappingModal(false)}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setShowMappingModal(false);
+                  
+                  // Save mappings for unknown work centers
+                  const savePromises = unknownWorkCenters.map(wc => {
+                    const machineId = workCenterMappings[wc.name];
+                    if (machineId) {
+                      return DataService.saveWorkCenterMapping(wc.name, machineId);
+                    }
+                    return Promise.resolve();
+                  });
+                  
+                  await Promise.all(savePromises);
+
+                  const freshMachines = await DataService.getMachinesFromMachineSS();
+                  checkFabricsAndProceed(pendingImportRows, freshMachines, workCenterMappings);
+                }}
+                disabled={unknownWorkCenters.some(wc => !workCenterMappings[wc.name])}
+                className={`px-6 py-2 rounded-lg font-bold text-white transition-colors flex items-center gap-2 ${
+                  unknownWorkCenters.some(wc => !workCenterMappings[wc.name])
+                    ? 'bg-slate-400 cursor-not-allowed'
+                    : 'bg-blue-600 hover:bg-blue-700 shadow-lg shadow-blue-200'
+                }`}
+              >
+                <Check size={18} />
+                Continue Import
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fabric Import Modal */}
+      {showFabricImportModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[80] p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="p-6 border-b border-slate-200 flex justify-between items-center bg-indigo-50">
+              <div>
+                <h2 className="text-xl font-bold text-indigo-800 flex items-center gap-2">
+                  <Sparkles className="text-indigo-600" />
+                  New Fabrics Found
+                </h2>
+                <p className="text-sm text-indigo-700 mt-1">
+                  The following fabrics are not in the database. Select which ones to add.
+                </p>
+              </div>
+              <button 
+                onClick={() => setShowFabricImportModal(false)}
+                className="text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1">
+              <div className="space-y-2">
+                {unknownFabrics.map((fabricName, idx) => {
+                  const { shortName } = parseFabricName(fabricName);
+                  const isSelected = fabricsToCreate[fabricName];
+                  
+                  return (
+                    <div key={idx} className={`p-3 border rounded-lg flex items-center gap-3 transition-colors ${isSelected ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-200'}`}>
+                      <input 
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={(e) => {
+                          setFabricsToCreate(prev => ({
+                            ...prev,
+                            [fabricName]: e.target.checked
+                          }));
+                        }}
+                        className="w-5 h-5 text-indigo-600 rounded focus:ring-indigo-500"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-bold text-slate-800">{fabricName}</div>
+                        {isSelected && (
+                          <div className="text-xs text-indigo-600 mt-1 flex items-center gap-1">
+                            <span className="font-medium">Will be added as:</span> {shortName}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-slate-200 bg-slate-50 flex justify-end gap-3">
+              <button
+                onClick={() => setShowFabricImportModal(false)}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setShowFabricImportModal(false);
+                  
+                  // Create selected fabrics
+                  const createPromises = unknownFabrics
+                    .filter(f => fabricsToCreate[f])
+                    .map(async (name) => {
+                       const { code, shortName } = parseFabricName(name);
+                       // Generate ID
+                       const docId = name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+                       await DataService.addFabric({ 
+                         name, 
+                         code, 
+                         shortName,
+                         workCenters: [], 
+                         variants: []
+                       });
+                    });
+                  
+                  if (createPromises.length > 0) {
+                    await Promise.all(createPromises);
+                    showMessage(`✅ Added ${createPromises.length} new fabrics`);
+                  }
+
+                  // Refetch machines to be safe
+                  const freshMachines = await DataService.getMachinesFromMachineSS();
+                  
+                  // Proceed
+                  processImportRows(pendingImportRows, freshMachines, workCenterMappings);
+                }}
+                className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-lg shadow-indigo-200 transition-colors flex items-center gap-2"
+              >
+                <Check size={18} />
+                Continue Import
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Modal */}
+      {showImportModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[70] p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="p-6 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                  <FileSpreadsheet className="text-green-600" />
+                  Import from ODOO
+                </h2>
+                <p className="text-sm text-slate-500 mt-1">Upload Excel file to update machine plans</p>
+              </div>
+              <button 
+                onClick={() => {
+                  setShowImportModal(false);
+                  setImportPreview([]);
+                }}
+                className="text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1">
+              {importPreview.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 border-2 border-dashed border-slate-300 rounded-xl bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer relative">
+                  <input 
+                    type="file" 
+                    accept=".xlsx, .xls" 
+                    onChange={handleFileUpload}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  />
+                  <Upload size={48} className="text-slate-400 mb-4" />
+                  <p className="text-lg font-medium text-slate-700">Click to upload Excel file</p>
+                  <p className="text-sm text-slate-500 mt-2">Supported formats: .xlsx, .xls</p>
+                  <div className="mt-6 text-left text-sm text-slate-500 bg-white p-4 rounded border border-slate-200">
+                    <p className="font-bold mb-2">Expected Format:</p>
+                    <ul className="list-disc pl-5 space-y-1">
+                      <li>Column A: Fabric</li>
+                      <li>Column B: Daily Production</li>
+                      <li>Column C: Customer</li>
+                      <li>Column D: Work Center (Machine Name)</li>
+                      <li>Row 1: Header (skipped)</li>
+                    </ul>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-bold text-slate-800">Preview Changes ({importPreview.length} items)</h3>
+                    <div className="text-sm text-slate-500">
+                      Review the changes below before applying
+                    </div>
+                  </div>
+                  
+                  <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                    <table className="w-full text-sm text-left">
+                      <thead className="bg-slate-50 text-slate-700 font-bold">
+                        <tr>
+                          <th className="p-3 border-b">Machine</th>
+                          <th className="p-3 border-b">Mapped From</th>
+                          <th className="p-3 border-b">Fabric</th>
+                          <th className="p-3 border-b">Customer</th>
+                          <th className="p-3 border-b text-center">Production</th>
+                          <th className="p-3 border-b text-center">Remaining</th>
+                          <th className="p-3 border-b text-center">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {importPreview.map((item, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50">
+                            <td className="p-3 font-medium text-slate-800">{item.machineName}</td>
+                            <td className="p-3 border-b text-slate-500 text-xs">
+                                <div className="flex items-center gap-2">
+                                    {item.originalWorkCenter}
+                                    <button 
+                                      onClick={() => handleRemap(item.originalWorkCenter, item.machineId)}
+                                      className="p-1 hover:bg-slate-200 rounded text-blue-600"
+                                      title="Change Mapping"
+                                    >
+                                        <Edit size={14} />
+                                    </button>
+                                </div>
+                            </td>
+                            <td className="p-3 text-slate-600">{item.fabric}</td>
+                            <td className="p-3 text-slate-600">{item.customer}</td>
+                            <td className="p-3 text-center font-mono">
+                              {item.dailyProduction}
+                            </td>
+                            <td className="p-3 text-center">
+                              <div className="flex flex-col items-center">
+                                <span className="text-xs text-slate-400 line-through">{item.previousRemaining}</span>
+                                <span className="font-bold text-blue-600">{item.newRemaining}</span>
+                              </div>
+                            </td>
+                            <td className="p-3 text-center">
+                              <div className="flex flex-col items-center">
+                                <span className="text-xs text-slate-400">{item.previousStatus}</span>
+                                <span className={`font-bold ${item.newStatus === 'Working' ? 'text-green-600' : 'text-red-600'}`}>
+                                  ↓ {item.newStatus}
+                                </span>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            <div className="p-6 border-t border-slate-200 bg-slate-50 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowImportModal(false);
+                  setImportPreview([]);
+                }}
+                className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              {importPreview.length > 0 && (
+                <button
+                  onClick={applyImport}
+                  className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-sm transition-colors flex items-center gap-2"
+                >
+                  <Check size={18} />
+                  Apply Changes
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
     </div>

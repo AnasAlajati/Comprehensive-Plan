@@ -35,6 +35,7 @@ import { YarnInventoryPage } from './components/YarnInventoryPage';
 import { DyehouseInventoryPage } from './components/DyehouseInventoryPage';
 import { FabricsPage } from './components/FabricsPage';
 import { MachinesPage } from './components/MachinesPage';
+import { InstallPWA } from './components/InstallPWA';
 import { 
   Send, 
   CheckCircle, 
@@ -421,6 +422,7 @@ const App: React.FC = () => {
              <div className="hidden sm:block">
                <StatusBadge isConnected={isConnected} error={connectionError} />
              </div>
+             <InstallPWA />
           </div>
         </div>
       </div>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Factory, Layout } from 'lucide-react';
+import { Factory, Layout, Upload, FileSpreadsheet, AlertCircle, Check, X } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import ExternalProductionSheet from './ExternalProductionSheet';
 import {
   collection,
@@ -19,6 +20,7 @@ interface DailyLog {
   fabric: string;
   client: string;
   status: string;
+  remaining?: number;
 }
 
 interface MachineSSD {
@@ -33,6 +35,8 @@ const MachineSS: React.FC = () => {
   const [machines, setMachines] = useState<(MachineSSD & { id: string })[]>([]);
   const [loading, setLoading] = useState(false);
   const [showAddMachine, setShowAddMachine] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importPreview, setImportPreview] = useState<any[]>([]);
   const [newMachine, setNewMachine] = useState({
     name: '',
     brand: '',
@@ -114,7 +118,7 @@ const MachineSS: React.FC = () => {
       const updatedLogs = [...machine.dailyLogs];
       updatedLogs[logIndex] = {
         ...updatedLogs[logIndex],
-        [field]: field === 'dayProduction' || field === 'scrap' ? parseInt(value) || 0 : value,
+        [field]: field === 'dayProduction' || field === 'scrap' || field === 'remaining' ? parseFloat(value) || 0 : value,
       };
 
       await updateDoc(doc(db, 'MachineSS', machineId), {
@@ -148,6 +152,132 @@ const MachineSS: React.FC = () => {
       await refreshMachines();
     } catch (error) {
       console.error('Error deleting machine:', error);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const bstr = evt.target?.result;
+      const wb = XLSX.read(bstr, { type: 'binary' });
+      const wsname = wb.SheetNames[0];
+      const ws = wb.Sheets[wsname];
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
+      
+      // Skip header (row 0), start from row 1
+      const rows = data.slice(1);
+      
+      const previewData: any[] = [];
+      const today = new Date().toISOString().split('T')[0];
+      const yesterdayDate = new Date();
+      yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+      const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
+
+      rows.forEach((row: any) => {
+        // Column mapping based on user request:
+        // A: Fabric (index 0)
+        // B: Daily production (index 1)
+        // C: Customer (index 2)
+        // D: Work center (index 3)
+        
+        const fabric = row[0];
+        const dailyProduction = parseFloat(row[1]) || 0;
+        const customer = row[2];
+        const workCenter = row[3];
+
+        if (!workCenter) return;
+
+        // Find machine
+        const machine = machines.find(m => 
+          m.name.toLowerCase() === String(workCenter).toLowerCase() || 
+          m.machineid.toString() === String(workCenter)
+        );
+
+        if (machine) {
+          // Find yesterday's log or latest log
+          // Sort logs by date descending
+          const sortedLogs = [...machine.dailyLogs].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          
+          // Try to find yesterday's log specifically, or fallback to latest
+          const previousLog = sortedLogs.find(l => l.date === yesterdayStr) || sortedLogs[0];
+          
+          const previousRemaining = previousLog?.remaining || 0;
+          const previousStatus = previousLog?.status || 'Stopped';
+          
+          const newRemaining = Math.max(0, previousRemaining - dailyProduction);
+          
+          let newStatus = previousStatus;
+          if (dailyProduction > 0) {
+            newStatus = 'Working'; // 'عمل'
+          } else if (dailyProduction === 0 && previousStatus === 'Working') {
+            newStatus = 'Stopped'; // 'توقف'
+          }
+
+          previewData.push({
+            machineId: machine.id,
+            machineName: machine.name,
+            fabric,
+            customer,
+            dailyProduction,
+            previousRemaining,
+            newRemaining,
+            previousStatus,
+            newStatus,
+            date: today
+          });
+        }
+      });
+
+      setImportPreview(previewData);
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const applyImport = async () => {
+    if (importPreview.length === 0) return;
+    
+    try {
+      const batch = writeBatch(db);
+      
+      for (const item of importPreview) {
+        const machine = machines.find(m => m.id === item.machineId);
+        if (!machine) continue;
+
+        const newLog: DailyLog = {
+          date: item.date,
+          dayProduction: item.dailyProduction,
+          scrap: 0, // Default
+          fabric: item.fabric || '',
+          client: item.customer || '',
+          status: item.newStatus,
+          remaining: item.newRemaining
+        };
+
+        // Check if log for today already exists
+        const existingLogIndex = machine.dailyLogs.findIndex(l => l.date === item.date);
+        let updatedLogs = [...machine.dailyLogs];
+
+        if (existingLogIndex >= 0) {
+          updatedLogs[existingLogIndex] = { ...updatedLogs[existingLogIndex], ...newLog };
+        } else {
+          updatedLogs.push(newLog);
+        }
+
+        const docRef = doc(db, 'MachineSS', machine.id);
+        batch.update(docRef, { dailyLogs: updatedLogs });
+      }
+
+      await batch.commit();
+      setImportPreview([]);
+      setShowImportModal(false);
+      await refreshMachines();
+      alert('Import successful!');
+    } catch (error) {
+      console.error('Error applying import:', error);
+      alert('Error applying import');
     }
   };
 
@@ -211,6 +341,13 @@ const MachineSS: React.FC = () => {
           <div className="flex gap-3">
             {viewMode === 'INTERNAL' && (
               <>
+                <button
+                  onClick={() => setShowImportModal(true)}
+                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+                >
+                  <FileSpreadsheet size={18} />
+                  Import from ODOO
+                </button>
                 <button
                   onClick={refreshMachines}
                   className="bg-slate-600 hover:bg-slate-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
@@ -303,6 +440,7 @@ const MachineSS: React.FC = () => {
                       <th className="p-2 border border-slate-200 w-16">السقط</th>
                       <th className="p-2 border border-slate-200 w-24">الخامة</th>
                       <th className="p-2 border border-slate-200 w-24">العميل</th>
+                      <th className="p-2 border border-slate-200 w-20">المتبقي</th>
                       <th className="p-2 border border-slate-200 w-20">الحالة</th>
                       <th className="p-2 border border-slate-200 w-16">إجراءات</th>
                     </tr>
@@ -367,6 +505,14 @@ const MachineSS: React.FC = () => {
                                 value={row.log.client}
                                 onChange={(e) => updateLog(row.machineId, row.logIndex, 'client', e.target.value)}
                                 className="w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none"
+                              />
+                            </td>
+                            <td className="border border-slate-200 p-0">
+                              <input
+                                type="number"
+                                value={row.log.remaining || 0}
+                                onChange={(e) => updateLog(row.machineId, row.logIndex, 'remaining', e.target.value)}
+                                className="w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none font-semibold text-blue-600"
                               />
                             </td>
                             <td className="border border-slate-200 p-0">
@@ -443,6 +589,129 @@ const MachineSS: React.FC = () => {
           </>
         ) : (
           <ExternalProductionSheet />
+        )}
+
+        {/* Import Modal */}
+        {showImportModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+              <div className="p-6 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    <FileSpreadsheet className="text-green-600" />
+                    Import from ODOO
+                  </h2>
+                  <p className="text-sm text-slate-500 mt-1">Upload Excel file to update machine plans</p>
+                </div>
+                <button 
+                  onClick={() => {
+                    setShowImportModal(false);
+                    setImportPreview([]);
+                  }}
+                  className="text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+              
+              <div className="p-6 overflow-y-auto flex-1">
+                {importPreview.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 border-2 border-dashed border-slate-300 rounded-xl bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer relative">
+                    <input 
+                      type="file" 
+                      accept=".xlsx, .xls" 
+                      onChange={handleFileUpload}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    />
+                    <Upload size={48} className="text-slate-400 mb-4" />
+                    <p className="text-lg font-medium text-slate-700">Click to upload Excel file</p>
+                    <p className="text-sm text-slate-500 mt-2">Supported formats: .xlsx, .xls</p>
+                    <div className="mt-6 text-left text-sm text-slate-500 bg-white p-4 rounded border border-slate-200">
+                      <p className="font-bold mb-2">Expected Format:</p>
+                      <ul className="list-disc pl-5 space-y-1">
+                        <li>Column A: Fabric</li>
+                        <li>Column B: Daily Production</li>
+                        <li>Column C: Customer</li>
+                        <li>Column D: Work Center (Machine Name)</li>
+                        <li>Row 1: Header (skipped)</li>
+                      </ul>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="font-bold text-slate-800">Preview Changes ({importPreview.length} items)</h3>
+                      <div className="text-sm text-slate-500">
+                        Review the changes below before applying
+                      </div>
+                    </div>
+                    
+                    <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                      <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-50 text-slate-700 font-bold">
+                          <tr>
+                            <th className="p-3 border-b">Machine</th>
+                            <th className="p-3 border-b">Fabric</th>
+                            <th className="p-3 border-b">Customer</th>
+                            <th className="p-3 border-b text-center">Production</th>
+                            <th className="p-3 border-b text-center">Remaining</th>
+                            <th className="p-3 border-b text-center">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {importPreview.map((item, idx) => (
+                            <tr key={idx} className="hover:bg-slate-50">
+                              <td className="p-3 font-medium text-slate-800">{item.machineName}</td>
+                              <td className="p-3 text-slate-600">{item.fabric}</td>
+                              <td className="p-3 text-slate-600">{item.customer}</td>
+                              <td className="p-3 text-center font-mono">
+                                {item.dailyProduction}
+                              </td>
+                              <td className="p-3 text-center">
+                                <div className="flex flex-col items-center">
+                                  <span className="text-xs text-slate-400 line-through">{item.previousRemaining}</span>
+                                  <span className="font-bold text-blue-600">{item.newRemaining}</span>
+                                </div>
+                              </td>
+                              <td className="p-3 text-center">
+                                <div className="flex flex-col items-center">
+                                  <span className="text-xs text-slate-400">{item.previousStatus}</span>
+                                  <span className={`font-bold ${item.newStatus === 'Working' ? 'text-green-600' : 'text-red-600'}`}>
+                                    ↓ {item.newStatus}
+                                  </span>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              <div className="p-6 border-t border-slate-200 bg-slate-50 flex justify-end gap-3">
+                <button
+                  onClick={() => {
+                    setShowImportModal(false);
+                    setImportPreview([]);
+                  }}
+                  className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+                {importPreview.length > 0 && (
+                  <button
+                    onClick={applyImport}
+                    className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-sm transition-colors flex items-center gap-2"
+                  >
+                    <Check size={18} />
+                    Apply Changes
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

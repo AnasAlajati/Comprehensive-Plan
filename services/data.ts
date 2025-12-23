@@ -16,7 +16,8 @@ export const parseFabricName = (fullName: string): { code: string, shortName: st
 
   // Remove keywords
   // "جاكار " (with space) and "خام"
-  const keywordsToRemove = ["جاكار ", "خام"]; 
+  // Also "ليكرا " and "بدون " as requested
+  const keywordsToRemove = ["جاكار ", "خام", "ليكرا ", "بدون "]; 
   keywordsToRemove.forEach(keyword => {
     // Use global flag to remove all occurrences
     shortName = shortName.replace(new RegExp(keyword, 'g'), '').trim();

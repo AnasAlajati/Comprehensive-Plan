@@ -4,7 +4,7 @@ import { collection, getDocs, writeBatch, doc, query, where, setDoc } from 'fire
 import { db } from '../services/firebase';
 import { parseFabricName } from '../services/data';
 import { FabricDefinition, FabricYarn, FabricVariant } from '../types';
-import { Upload, Save, CheckCircle, AlertCircle, Loader2, FileSpreadsheet, Database, Plus, Edit, X, Copy, Link as LinkIcon, Trash2 } from 'lucide-react';
+import { Upload, Save, CheckCircle, AlertCircle, Loader2, FileSpreadsheet, Database, Plus, Edit, X, Copy, Link as LinkIcon, Trash2, Sparkles } from 'lucide-react';
 
 export const FabricsPage: React.FC = () => {
   const [parsedFabrics, setParsedFabrics] = useState<FabricDefinition[]>([]);
@@ -144,6 +144,40 @@ export const FabricsPage: React.FC = () => {
           shortName
         }));
       }
+    }
+  };
+
+  const handleCleanAllShortNames = async () => {
+    if (!confirm('Are you sure you want to re-process ALL fabric short names using the latest cleaning rules? This cannot be undone.')) return;
+    
+    setSaving(true);
+    try {
+      const batch = writeBatch(db);
+      let count = 0;
+      
+      existingFabrics.forEach(fabric => {
+        if (fabric.name) {
+          const { shortName } = parseFabricName(fabric.name);
+          if (shortName !== fabric.shortName) {
+            const docRef = doc(db, 'FabricSS', fabric.id!);
+            batch.update(docRef, { shortName });
+            count++;
+          }
+        }
+      });
+
+      if (count > 0) {
+        await batch.commit();
+        setSuccess(`Updated ${count} fabrics with cleaner short names.`);
+        fetchExistingFabrics();
+      } else {
+        setSuccess('All fabrics are already clean.');
+      }
+    } catch (err) {
+      console.error("Error cleaning names:", err);
+      setError("Failed to clean names.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -600,8 +634,15 @@ export const FabricsPage: React.FC = () => {
 
         {activeTab === 'database' && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-4 border-b border-slate-200 bg-slate-50/50">
+            <div className="p-4 border-b border-slate-200 bg-slate-50/50 flex justify-between items-center">
               <h3 className="font-bold text-slate-700">Existing Fabrics ({existingFabrics.length})</h3>
+              <button
+                onClick={handleCleanAllShortNames}
+                className="text-xs px-3 py-1.5 bg-white border border-slate-300 text-slate-600 rounded hover:bg-slate-50 transition-colors flex items-center gap-2"
+              >
+                <Sparkles size={14} className="text-amber-500" />
+                Clean Short Names
+              </button>
             </div>
             <div className="overflow-x-auto">
                 <table className="w-full text-sm text-left">
