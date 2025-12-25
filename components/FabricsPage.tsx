@@ -6,6 +6,14 @@ import { parseFabricName } from '../services/data';
 import { FabricDefinition, FabricYarn, FabricVariant } from '../types';
 import { Upload, Save, CheckCircle, AlertCircle, Loader2, FileSpreadsheet, Database, Plus, Edit, X, Copy, Link as LinkIcon, Trash2, Sparkles } from 'lucide-react';
 
+// Helper to normalize machine type
+const getMachineCategory = (type: string = '') => {
+  const t = type.toLowerCase();
+  if (t.includes('single') || t.includes('jersey') || t.includes('fleece')) return 'Single Jersey';
+  if (t.includes('double') || t.includes('rib') || t.includes('interlock')) return 'Double Jersey';
+  return 'Other';
+};
+
 export const FabricsPage: React.FC = () => {
   const [parsedFabrics, setParsedFabrics] = useState<FabricDefinition[]>([]);
   const [existingFabrics, setExistingFabrics] = useState<FabricDefinition[]>([]);
@@ -32,11 +40,11 @@ export const FabricsPage: React.FC = () => {
 
   useEffect(() => {
     fetchExistingFabrics();
+    fetchMachines();
   }, []);
 
   useEffect(() => {
     if (activeTab === 'mapping') {
-      fetchMachines();
       extractWorkCenters();
     }
   }, [activeTab, existingFabrics]);
@@ -148,31 +156,39 @@ export const FabricsPage: React.FC = () => {
   };
 
   const handleCleanAllShortNames = async () => {
-    if (!confirm('Are you sure you want to re-process ALL fabric short names using the latest cleaning rules? This cannot be undone.')) return;
-    
     setSaving(true);
     try {
-      const batch = writeBatch(db);
+      const batchSize = 500;
+      let batch = writeBatch(db);
       let count = 0;
+      let totalUpdated = 0;
       
-      existingFabrics.forEach(fabric => {
+      for (const fabric of existingFabrics) {
         if (fabric.name) {
           const { shortName } = parseFabricName(fabric.name);
+          
+          // Update if changed
           if (shortName !== fabric.shortName) {
             const docRef = doc(db, 'FabricSS', fabric.id!);
             batch.update(docRef, { shortName });
             count++;
+            totalUpdated++;
+          }
+
+          if (count >= batchSize) {
+            await batch.commit();
+            batch = writeBatch(db);
+            count = 0;
           }
         }
-      });
+      }
 
       if (count > 0) {
         await batch.commit();
-        setSuccess(`Updated ${count} fabrics with cleaner short names.`);
-        fetchExistingFabrics();
-      } else {
-        setSuccess('All fabrics are already clean.');
       }
+
+      setSuccess(`Updated ${totalUpdated} fabrics.`);
+      fetchExistingFabrics();
     } catch (err) {
       console.error("Error cleaning names:", err);
       setError("Failed to clean names.");
@@ -187,13 +203,39 @@ export const FabricsPage: React.FC = () => {
     setSaving(true);
     try {
       const docId = editingFabric?.id || modalForm.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+      
+      // Auto-calculate specs based on work centers
+      const workCenterList = modalForm.workCenters.split(',').map(s => s.trim()).filter(Boolean);
+      let specs = undefined;
+      
+      if (workCenterList.length > 0) {
+        // Find all machines linked to these work centers
+        const linkedMachines = machines.filter(m => workCenterList.includes(m.machineName || m.name));
+        
+        if (linkedMachines.length > 0) {
+          // Check if they are all in the same group (Type + Gauge)
+          // And ideally same SubGroup (Dia + Needles) for "Tier 1" DNA
+          // For now, we take the first machine as the "DNA Source" if they are compatible
+          // Or we can store the "Group DNA"
+          
+          const firstM = linkedMachines[0];
+          specs = {
+            gauge: firstM.gauge || 'Unknown',
+            diameter: firstM.dia || 'Unknown',
+            needles: Number(firstM.needles) || 0,
+            type: firstM.type || 'Unknown'
+          };
+        }
+      }
+
       const fabricData: FabricDefinition = {
         id: docId,
         name: modalForm.name,
         code: modalForm.code,
         shortName: modalForm.shortName,
-        workCenters: modalForm.workCenters.split(',').map(s => s.trim()).filter(Boolean),
-        variants: modalForm.variants
+        workCenters: workCenterList,
+        variants: modalForm.variants,
+        specs: specs
       };
 
       await setDoc(doc(db, 'FabricSS', docId), fabricData, { merge: true });
@@ -223,12 +265,24 @@ export const FabricsPage: React.FC = () => {
     }
   };
 
-  const formatPercentage = (val: any): number => {
+  const formatCompositionValue = (val: any): number => {
     if (!val) return 0;
     if (typeof val === 'number') {
-      // If it's a decimal like 0.75, convert to 75. If it's 75, keep it.
-      // Heuristic: if <= 1, assume decimal.
+      // Heuristic for Composition: if <= 1, assume decimal fraction (0.75 = 75%).
       return val <= 1 ? parseFloat((val * 100).toFixed(2)) : parseFloat(val.toFixed(2));
+    }
+    if (typeof val === 'string') {
+      return parseFloat(val.replace('%', '').trim());
+    }
+    return 0;
+  };
+
+  const formatScrapValue = (val: any): number => {
+    if (!val) return 0;
+    if (typeof val === 'number') {
+      // For Scrap, assume the value IS the percentage (0.3 = 0.3%, 1.3 = 1.3%).
+      // Do NOT multiply by 100 even if small.
+      return parseFloat(val.toFixed(2));
     }
     if (typeof val === 'string') {
       return parseFloat(val.replace('%', '').trim());
@@ -258,7 +312,6 @@ export const FabricsPage: React.FC = () => {
         const fabricMap = new Map<string, FabricDefinition>();
         
         let currentFabricName = '';
-        let currentWorkCenter = '';
         let currentYarns: FabricYarn[] = [];
 
         // Helper to finalize a variant
@@ -305,7 +358,6 @@ export const FabricsPage: React.FC = () => {
 
             // 2. Start New Context
             currentFabricName = productName;
-            currentWorkCenter = workCenter;
             currentYarns = [];
 
             // 3. Ensure Fabric Entry Exists
@@ -330,8 +382,8 @@ export const FabricsPage: React.FC = () => {
             if (yarnName) {
               currentYarns.push({
                 name: yarnName,
-                percentage: formatPercentage(yarnPercentage),
-                scrapPercentage: formatPercentage(yarnScrap)
+                percentage: formatCompositionValue(yarnPercentage),
+                scrapPercentage: formatScrapValue(yarnScrap)
               });
             }
 
@@ -341,8 +393,8 @@ export const FabricsPage: React.FC = () => {
             if (yarnName) {
               currentYarns.push({
                 name: yarnName,
-                percentage: formatPercentage(yarnPercentage),
-                scrapPercentage: formatPercentage(yarnScrap)
+                percentage: formatCompositionValue(yarnPercentage),
+                scrapPercentage: formatScrapValue(yarnScrap)
               });
             }
           }
@@ -423,48 +475,78 @@ export const FabricsPage: React.FC = () => {
     }
   };
 
-  const handleMigration = async () => {
-    if (existingFabrics.length === 0) return;
-    setSaving(true);
-    setSuccess('');
-    setError('');
+
+
+  const getFabricDNA = (workCenters: string[]) => {
+    if (!workCenters || workCenters.length === 0) return { status: 'No Machines', groups: [] };
     
-    try {
-      const batchSize = 500;
-      let batch = writeBatch(db);
-      let count = 0;
-      let totalUpdated = 0;
+    const linkedMachines = machines.filter(m => workCenters.includes(m.machineName || m.name));
+    if (linkedMachines.length === 0) return { status: 'No Machines', groups: [] };
 
-      for (const fabric of existingFabrics) {
-        const { code, shortName } = parseFabricName(fabric.name);
-        
-        // Only update if changes are needed
-        if (fabric.code !== code || fabric.shortName !== shortName) {
-            const docRef = doc(db, 'FabricSS', fabric.id!);
-            batch.update(docRef, { code, shortName });
-            count++;
-            totalUpdated++;
-        }
+    // Group by Type + Gauge
+    const groupsMap = new Map<string, {
+      id: string;
+      type: string;
+      gauge: string;
+      brands: Set<string>;
+      machines: any[];
+    }>();
 
-        if (count >= batchSize) {
-          await batch.commit();
-          batch = writeBatch(db);
-          count = 0;
-        }
+    linkedMachines.forEach(m => {
+      const key = `${m.type}-${m.gauge}`;
+      if (!groupsMap.has(key)) {
+        groupsMap.set(key, {
+          id: key,
+          type: m.type,
+          gauge: m.gauge,
+          brands: new Set(),
+          machines: []
+        });
       }
+      const group = groupsMap.get(key)!;
+      group.machines.push(m);
+      if (m.brand) group.brands.add(m.brand);
+    });
 
-      if (count > 0) {
-        await batch.commit();
-      }
+    const groups = Array.from(groupsMap.values()).map(g => {
+      const brandList = Array.from(g.brands);
+      const brandName = brandList.length > 0 ? brandList.join(' & ') : 'Unknown Brand';
+      const name = `${brandName} Group`;
+      return {
+        ...g,
+        name,
+        brandList
+      };
+    });
 
-      setSuccess(`Successfully updated ${totalUpdated} fabrics with codes and short names.`);
-      fetchExistingFabrics();
-    } catch (err) {
-      console.error("Migration error:", err);
-      setError("Failed to update fabrics.");
-    } finally {
-      setSaving(false);
+    // Check for conflicting types (Single vs Double)
+    const categories = new Set(linkedMachines.map(m => getMachineCategory(m.type)));
+    if (categories.has('Single Jersey') && categories.has('Double Jersey')) {
+      return { status: 'Conflicting Types', groups };
     }
+
+    if (groups.length > 1) {
+      return { status: 'Multiple Groups', groups };
+    }
+
+    // Single Group Logic
+    const group = groups[0];
+    const subGroups = new Set(group.machines.map(m => `${m.dia}-${m.needles}`));
+    
+    const firstM = group.machines[0];
+    const dna = {
+      gauge: firstM.gauge,
+      dia: firstM.dia,
+      needles: firstM.needles,
+      type: firstM.type
+    };
+
+    return { 
+      status: subGroups.size === 1 ? 'Tier 1' : 'Tier 2', 
+      groups: [group],
+      dna,
+      variants: subGroups.size
+    };
   };
 
   return (
@@ -489,11 +571,11 @@ export const FabricsPage: React.FC = () => {
               Add Fabric
             </button>
             <button
-              onClick={handleMigration}
+              onClick={handleCleanAllShortNames}
               disabled={saving}
               className="px-4 py-2 rounded-lg text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-colors"
             >
-              {saving ? 'Updating...' : 'Update Short Names'}
+              {saving ? 'Updating...' : 'Update Names'}
             </button>
             <button
               onClick={() => setActiveTab('preview')}
@@ -636,13 +718,6 @@ export const FabricsPage: React.FC = () => {
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="p-4 border-b border-slate-200 bg-slate-50/50 flex justify-between items-center">
               <h3 className="font-bold text-slate-700">Existing Fabrics ({existingFabrics.length})</h3>
-              <button
-                onClick={handleCleanAllShortNames}
-                className="text-xs px-3 py-1.5 bg-white border border-slate-300 text-slate-600 rounded hover:bg-slate-50 transition-colors flex items-center gap-2"
-              >
-                <Sparkles size={14} className="text-amber-500" />
-                Clean Short Names
-              </button>
             </div>
             <div className="overflow-x-auto">
                 <table className="w-full text-sm text-left">
@@ -650,6 +725,7 @@ export const FabricsPage: React.FC = () => {
                     <tr>
                       <th className="p-4 border-b border-slate-200">Code</th>
                       <th className="p-4 border-b border-slate-200">Short Name</th>
+                      <th className="p-4 border-b border-slate-200">Compatibility</th>
                       <th className="p-4 border-b border-slate-200">Work Centers</th>
                       <th className="p-4 border-b border-slate-200">Yarn Composition</th>
                       <th className="p-4 border-b border-slate-200 w-10"></th>
@@ -661,6 +737,64 @@ export const FabricsPage: React.FC = () => {
                         <td className="p-4 font-medium text-slate-600 align-top text-xs whitespace-nowrap">{fabric.code}</td>
                         <td className="p-4 font-medium text-slate-800 align-top" title={fabric.name}>
                           {fabric.shortName || fabric.name}
+                        </td>
+                        <td className="p-4 align-top">
+                          {(() => {
+                            const { status, groups, dna, variants } = getFabricDNA(fabric.workCenters || []);
+                            
+                            if (status === 'No Machines') return <span className="text-slate-400 text-xs italic">No Linked Machines</span>;
+                            
+                            if (status === 'Multiple Groups') {
+                              return (
+                                <div className="space-y-2">
+                                  {groups.map(g => (
+                                    <div key={g.id} className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                                      <div className="text-[10px] font-bold text-slate-700">{g.name}</div>
+                                      <div className="text-[10px] text-slate-500">{g.gauge}G {g.type}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              );
+                            }
+
+                            if (status === 'Conflicting Types') {
+                              return (
+                                <div className="space-y-2">
+                                  <div className="px-2 py-1 bg-red-100 text-red-700 rounded text-xs font-bold border border-red-200 flex items-center gap-1">
+                                    <AlertCircle size={12} />
+                                    Conflicting Types
+                                  </div>
+                                  {groups.map(g => (
+                                    <div key={g.id} className="bg-red-50 p-1.5 rounded border border-red-100 opacity-75">
+                                      <div className="text-[10px] font-bold text-red-800">{g.name}</div>
+                                      <div className="text-[10px] text-red-600">{g.gauge}G {g.type}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <div className="space-y-1">
+                                <div className="text-xs font-medium text-slate-700">
+                                  {dna?.gauge}G / {dna?.dia}" / {dna?.needles}N
+                                </div>
+                                <div className="flex gap-1">
+                                  {status === 'Tier 1' && (
+                                    <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[10px] font-bold border border-green-200">
+                                      Tier 1 (Exact)
+                                    </span>
+                                  )}
+                                  {status === 'Tier 2' && (
+                                    <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-bold border border-amber-200">
+                                      Tier 2 ({variants} Versions)
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-slate-400">{groups[0].name}</div>
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td className="p-4 align-top">
                           <div className="flex flex-wrap gap-1">
@@ -787,8 +921,8 @@ export const FabricsPage: React.FC = () => {
       {/* Add/Edit Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
               <h3 className="font-bold text-slate-800">
                 {editingFabric ? 'Edit Fabric' : 'Add New Fabric'}
               </h3>
@@ -797,7 +931,7 @@ export const FabricsPage: React.FC = () => {
               </button>
             </div>
             
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-4 overflow-y-auto">
               {/* ODOO Copy Button */}
               <div className="flex justify-end">
                 <button
@@ -823,7 +957,7 @@ export const FabricsPage: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-500 uppercase">Code</label>
                   <input
@@ -854,6 +988,67 @@ export const FabricsPage: React.FC = () => {
                   placeholder="e.g. WC1, WC2"
                 />
                 <p className="text-[10px] text-slate-400">Comma separated values</p>
+                
+                {/* Live DNA Analysis */}
+                {(() => {
+                   const wcs = modalForm.workCenters.split(',').map(s => s.trim()).filter(Boolean);
+                   if (wcs.length === 0) return null;
+                   
+                   const { status, groups, dna, variants } = getFabricDNA(wcs);
+                   
+                   return (
+                     <div className="mt-2 p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs space-y-2">
+                       <div className="flex items-center gap-2 font-medium text-slate-700">
+                         <Sparkles size={14} className="text-blue-500" />
+                         <span>DNA Analysis</span>
+                       </div>
+                       
+                       {status === 'No Machines' && (
+                         <div className="text-slate-500 italic">No matching machines found in database.</div>
+                       )}
+                       
+                       {groups.map((g, idx) => (
+                         <div key={g.id} className="bg-white p-2 rounded border border-slate-200 shadow-sm">
+                           <div className="flex justify-between items-start mb-1">
+                             <div className="font-bold text-slate-800">{g.name}</div>
+                             <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-medium">
+                               {g.gauge}G {g.type}
+                             </span>
+                           </div>
+                           <div className="text-[10px] text-slate-500 mb-2">
+                             Possible Machines:
+                           </div>
+                           <div className="flex flex-wrap gap-1">
+                             {g.machines.map(m => (
+                               <span key={m.id} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-100 text-[10px]">
+                                 {m.machineName}
+                               </span>
+                             ))}
+                           </div>
+                         </div>
+                       ))}
+                       
+                       {status === 'Multiple Groups' && (
+                         <div className="text-amber-600 font-medium flex items-center gap-2 mt-2">
+                           <AlertCircle size={12} />
+                           Fabric has multiple production versions.
+                         </div>
+                       )}
+
+                       {status === 'Conflicting Types' && (
+                         <div className="text-red-600 font-bold flex items-center gap-2 mt-2 p-2 bg-red-50 rounded border border-red-100">
+                           <AlertCircle size={16} />
+                           <div>
+                             <div>Logical Error Detected!</div>
+                             <div className="text-[10px] font-normal">
+                               Fabric is linked to both Single Jersey and Double Jersey machines. This is physically impossible. Please check your data.
+                             </div>
+                           </div>
+                         </div>
+                       )}
+                     </div>
+                   );
+                })()}
               </div>
 
               {/* Variants Section */}
@@ -958,7 +1153,7 @@ export const FabricsPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2 shrink-0">
               <button
                 onClick={handleCloseModal}
                 className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition-colors"

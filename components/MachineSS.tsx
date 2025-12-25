@@ -21,6 +21,7 @@ interface DailyLog {
   client: string;
   status: string;
   remaining?: number;
+  note?: string; // Added for split runs or extra info
 }
 
 interface MachineSSD {
@@ -31,12 +32,54 @@ interface MachineSSD {
   dailyLogs: DailyLog[];
 }
 
+interface StagedLog {
+  id: string; // Unique ID for the staging row (machineId)
+  machineId: string;
+  machineName: string;
+  
+  // Context (Yesterday/Previous)
+  previousDate: string;
+  previousClient: string;
+  previousFabric: string;
+  previousRemaining: number;
+  previousStatus: string;
+  isStale: boolean; // If previous log is older than 1 day
+
+  // Imported Data (The Change)
+  hasImportData: boolean; // True if found in Excel
+  importDate: string;
+  importProduction: number;
+  importScrap: number;
+  importClient: string;
+  importFabric: string;
+  
+  // Split Run Handling
+  isSplit: boolean; // If multiple rows for this machine in Excel
+  splitDetails?: { client: string; fabric: string; production: number }[]; // Details of the split
+
+  // Resulting State (Calculated/User Edited)
+  newRemaining: number;
+  newStatus: string;
+  note: string;
+
+  // Validation
+  validationStatus: 'SAFE' | 'WARNING' | 'ERROR';
+  validationMessage: string;
+  
+  // User Control
+  selected: boolean; // If checked, will be imported
+}
+
+type FilterType = 'ALL' | 'WARNINGS' | 'ERRORS' | 'SAFE' | 'MISSING';
+
 const MachineSS: React.FC = () => {
   const [machines, setMachines] = useState<(MachineSSD & { id: string })[]>([]);
   const [loading, setLoading] = useState(false);
   const [showAddMachine, setShowAddMachine] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
-  const [importPreview, setImportPreview] = useState<any[]>([]);
+  const [importDate, setImportDate] = useState(new Date().toISOString().split('T')[0]); // Default to today
+  const [importPreview, setImportPreview] = useState<StagedLog[]>([]);
+  const [filter, setFilter] = useState<FilterType>('ALL');
   const [newMachine, setNewMachine] = useState({
     name: '',
     brand: '',
@@ -167,68 +210,188 @@ const MachineSS: React.FC = () => {
       const ws = wb.Sheets[wsname];
       const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
       
-      // Skip header (row 0), start from row 1
-      const rows = data.slice(1);
+      // Skip header (row 0, 1), start from row 2 (index 2)
+      const rows = data.slice(2);
       
-      const previewData: any[] = [];
-      const today = new Date().toISOString().split('T')[0];
-      const yesterdayDate = new Date();
+      const previewData: StagedLog[] = [];
+      // Use selected importDate
+      const targetDate = importDate;
+      const targetDateObj = new Date(targetDate);
+      const yesterdayDate = new Date(targetDateObj);
       yesterdayDate.setDate(yesterdayDate.getDate() - 1);
       const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
 
+      // 1. Group Excel rows by Machine Name/ID
+      const excelMap = new Map<string, any[]>();
+
       rows.forEach((row: any) => {
-        // Column mapping based on user request:
-        // A: Fabric (index 0)
-        // B: Daily production (index 1)
-        // C: Customer (index 2)
-        // D: Work center (index 3)
-        
-        const fabric = row[0];
-        const dailyProduction = parseFloat(row[1]) || 0;
-        const customer = row[2];
-        const workCenter = row[3];
-
+        const workCenter = row[3]; // Column D: Work Center
         if (!workCenter) return;
+        
+        // Normalize key
+        const key = String(workCenter).trim().toLowerCase();
+        if (!excelMap.has(key)) {
+          excelMap.set(key, []);
+        }
+        excelMap.get(key)?.push(row);
+      });
 
-        // Find machine
-        const machine = machines.find(m => 
-          m.name.toLowerCase() === String(workCenter).toLowerCase() || 
-          m.machineid.toString() === String(workCenter)
-        );
+      // 2. Iterate through ALL Machines in Firestore (Machine-First Approach)
+      machines.forEach(machine => {
+        // Try to find matching Excel data
+        const machineKeyName = machine.name.toLowerCase();
+        const machineKeyId = machine.machineid.toString();
+        
+        const groupRows = excelMap.get(machineKeyName) || excelMap.get(machineKeyId);
+        const hasImportData = !!groupRows && groupRows.length > 0;
 
-        if (machine) {
-          // Find yesterday's log or latest log
-          // Sort logs by date descending
-          const sortedLogs = [...machine.dailyLogs].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        // --- Context (Yesterday) ---
+        const sortedLogs = [...machine.dailyLogs].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        const previousLog = sortedLogs.find(l => l.date < targetDate);
+        
+        const previousRemaining = previousLog?.remaining || 0;
+        const previousStatus = previousLog?.status || 'Stopped';
+        const previousDate = previousLog?.date || 'No Data';
+        const previousClient = previousLog?.client || '';
+        const previousFabric = previousLog?.fabric || '';
+        const isStale = previousDate !== yesterdayStr && previousDate !== 'No Data';
+
+        // --- Import Data (Today) ---
+        let totalProduction = 0;
+        let totalScrap = 0;
+        let primaryClient = '';
+        let primaryFabric = '';
+        let note = '';
+        let isSplit = false;
+        let splitDetails: { client: string; fabric: string; production: number }[] = [];
+
+        if (hasImportData && groupRows) {
+          isSplit = groupRows.length > 1;
+          const clients: string[] = [];
+          const fabrics: string[] = [];
+          const details: string[] = [];
+
+          groupRows.forEach((row: any) => {
+            const prod = parseFloat(row[1]) || 0;
+            const scrap = parseFloat(row[4]) || 0; 
+            const client = row[2] ? String(row[2]).trim() : '';
+            const fabric = row[0] ? String(row[0]).trim() : '';
+
+            totalProduction += prod;
+            totalScrap += scrap;
+            
+            if (client && !clients.includes(client)) clients.push(client);
+            if (fabric && !fabrics.includes(fabric)) fabrics.push(fabric);
+            
+            if (prod > 0) {
+               details.push(`${client}: ${prod}kg`);
+               splitDetails.push({ client, fabric, production: prod });
+            }
+          });
+
+          // Default to first client/fabric found
+          primaryClient = clients[0] || ''; 
+          primaryFabric = fabrics[0] || '';
           
-          // Try to find yesterday's log specifically, or fallback to latest
-          const previousLog = sortedLogs.find(l => l.date === yesterdayStr) || sortedLogs[0];
-          
-          const previousRemaining = previousLog?.remaining || 0;
-          const previousStatus = previousLog?.status || 'Stopped';
-          
-          const newRemaining = Math.max(0, previousRemaining - dailyProduction);
-          
-          let newStatus = previousStatus;
-          if (dailyProduction > 0) {
-            newStatus = 'Working'; // 'عمل'
-          } else if (dailyProduction === 0 && previousStatus === 'Working') {
-            newStatus = 'Stopped'; // 'توقف'
+          if (isSplit) {
+            note = `Split Run: ${details.join(', ')}. Total Scrap: ${totalScrap}`;
+          }
+        } else {
+          // No Data in Excel -> Assume Stopped or Maintenance?
+          // For now, we leave it blank, but user can set it.
+          // If machine was working yesterday, this is a "Missing Data" warning.
+        }
+
+        // --- Result (Forecast) ---
+        const netProduction = Math.max(0, totalProduction - totalScrap);
+        let newRemaining = Math.max(0, previousRemaining - netProduction);
+        
+        let newStatus = previousStatus;
+        if (hasImportData) {
+          if (totalProduction > 0) {
+            newStatus = 'Working'; 
+          } else if (totalProduction === 0 && previousStatus === 'Working') {
+            newStatus = 'Stopped'; 
+          }
+        } else {
+           // If no data, keep previous status? Or default to Stopped?
+           // Let's keep previous status but flag it.
+        }
+
+        // --- Validation Logic ---
+        let validationStatus: 'SAFE' | 'WARNING' | 'ERROR' = 'SAFE';
+        let validationMessage = '';
+
+        if (!hasImportData) {
+          if (previousStatus === 'Working') {
+            validationStatus = 'WARNING';
+            validationMessage = 'Missing in Excel (Was Working).';
+          }
+        } else {
+          // Rule 1: Unexpected Changeover
+          if (previousRemaining > 0 && previousClient && primaryClient && previousClient !== primaryClient) {
+            validationStatus = 'WARNING';
+            validationMessage = `Client changed (${previousClient} -> ${primaryClient}) but ${previousRemaining}kg remained.`;
           }
 
-          previewData.push({
-            machineId: machine.id,
-            machineName: machine.name,
-            fabric,
-            customer,
-            dailyProduction,
-            previousRemaining,
-            newRemaining,
-            previousStatus,
-            newStatus,
-            date: today
-          });
+          // Rule 2: Stale History
+          if (isStale) {
+             if (validationStatus === 'SAFE') validationStatus = 'WARNING';
+             validationMessage += ` Previous data is from ${previousDate}.`;
+          }
+
+          // Rule 3: Overwrite Check
+          const exists = machine.dailyLogs.some(l => l.date === targetDate);
+          if (exists) {
+             validationStatus = 'WARNING';
+             validationMessage += ` Data already exists for ${targetDate}.`;
+          }
+
+          // Rule 4: Negative Remaining
+          if (netProduction > previousRemaining + 50 && previousRemaining > 0) { 
+             validationStatus = 'WARNING';
+             validationMessage += ` Production (${netProduction}) > Remaining (${previousRemaining}).`;
+          }
+          
+          // Rule 5: Split Run
+          if (isSplit) {
+             validationStatus = 'WARNING';
+             validationMessage += ` Split Run detected (${groupRows?.length} entries).`;
+          }
         }
+
+        previewData.push({
+          id: machine.id,
+          machineId: machine.id,
+          machineName: machine.name,
+          previousDate,
+          previousClient,
+          previousFabric,
+          previousRemaining,
+          previousStatus,
+          isStale,
+          hasImportData,
+          importDate: targetDate,
+          importProduction: totalProduction,
+          importScrap: totalScrap,
+          importClient: primaryClient,
+          importFabric: primaryFabric,
+          isSplit,
+          splitDetails,
+          newRemaining,
+          newStatus,
+          note,
+          validationStatus,
+          validationMessage,
+          selected: hasImportData // Only select if data exists by default
+        });
+      });
+
+      // Sort: Issues first, then by Name
+      previewData.sort((a, b) => {
+        if (a.validationStatus !== 'SAFE' && b.validationStatus === 'SAFE') return -1;
+        if (a.validationStatus === 'SAFE' && b.validationStatus !== 'SAFE') return 1;
+        return a.machineName.localeCompare(b.machineName);
       });
 
       setImportPreview(previewData);
@@ -237,27 +400,29 @@ const MachineSS: React.FC = () => {
   };
 
   const applyImport = async () => {
-    if (importPreview.length === 0) return;
+    const selectedItems = importPreview.filter(i => i.selected);
+    if (selectedItems.length === 0) return;
     
     try {
       const batch = writeBatch(db);
       
-      for (const item of importPreview) {
+      for (const item of selectedItems) {
         const machine = machines.find(m => m.id === item.machineId);
         if (!machine) continue;
 
         const newLog: DailyLog = {
-          date: item.date,
-          dayProduction: item.dailyProduction,
-          scrap: 0, // Default
-          fabric: item.fabric || '',
-          client: item.customer || '',
+          date: item.importDate,
+          dayProduction: item.importProduction,
+          scrap: item.importScrap || 0,
+          fabric: item.importFabric || '',
+          client: item.importClient || '',
           status: item.newStatus,
-          remaining: item.newRemaining
+          remaining: item.newRemaining,
+          note: item.note || ''
         };
 
-        // Check if log for today already exists
-        const existingLogIndex = machine.dailyLogs.findIndex(l => l.date === item.date);
+        // Check if log for target date already exists
+        const existingLogIndex = machine.dailyLogs.findIndex(l => l.date === item.importDate);
         let updatedLogs = [...machine.dailyLogs];
 
         if (existingLogIndex >= 0) {
@@ -343,7 +508,7 @@ const MachineSS: React.FC = () => {
               <>
                 <button
                   onClick={() => setShowImportModal(true)}
-                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+                  className="bg-[#714B67] hover:bg-[#5d3d54] text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
                 >
                   <FileSpreadsheet size={18} />
                   Import from ODOO
@@ -499,13 +664,17 @@ const MachineSS: React.FC = () => {
                                 className="w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none"
                               />
                             </td>
-                            <td className="border border-slate-200 p-0">
+                            <td className="border border-slate-200 p-0 relative">
                               <input
                                 type="text"
                                 value={row.log.client}
                                 onChange={(e) => updateLog(row.machineId, row.logIndex, 'client', e.target.value)}
-                                className="w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none"
+                                className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none ${row.log.note ? 'text-blue-700 font-medium' : ''}`}
+                                title={row.log.note || ''}
                               />
+                              {row.log.note && (
+                                <div className="absolute top-1 right-1 w-1.5 h-1.5 bg-blue-500 rounded-full pointer-events-none"></div>
+                              )}
                             </td>
                             <td className="border border-slate-200 p-0">
                               <input
@@ -594,14 +763,14 @@ const MachineSS: React.FC = () => {
         {/* Import Modal */}
         {showImportModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-              <div className="p-6 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-[95vw] h-[90vh] flex flex-col">
+              <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
                 <div>
                   <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                    <FileSpreadsheet className="text-green-600" />
-                    Import from ODOO
+                    <FileSpreadsheet className="text-[#714B67]" />
+                    Data Staging & Validation Wizard
                   </h2>
-                  <p className="text-sm text-slate-500 mt-1">Upload Excel file to update machine plans</p>
+                  <p className="text-sm text-slate-500 mt-1">Review, correct, and validate Odoo data before importing.</p>
                 </div>
                 <button 
                   onClick={() => {
@@ -614,9 +783,58 @@ const MachineSS: React.FC = () => {
                 </button>
               </div>
               
-              <div className="p-6 overflow-y-auto flex-1">
+              <div className="p-4 overflow-hidden flex-1 flex flex-col">
+                {/* Date Selection & Summary */}
+                <div className="mb-4 flex items-center justify-between bg-blue-50 p-3 rounded-lg border border-blue-100">
+                  <div className="flex items-center gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Target Date</label>
+                      <input 
+                        type="date" 
+                        value={importDate}
+                        onChange={(e) => setImportDate(e.target.value)}
+                        className="border border-slate-300 rounded px-2 py-1 text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div className="h-8 w-px bg-blue-200 mx-2"></div>
+                    <div>
+                      <div className="text-xs text-slate-500">Total Machines</div>
+                      <div className="font-bold text-slate-800">{importPreview.length}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">Matched</div>
+                      <div className="font-bold text-green-600">{importPreview.filter(i => i.hasImportData).length}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">Missing</div>
+                      <div className="font-bold text-slate-400">{importPreview.filter(i => !i.hasImportData).length}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">Warnings</div>
+                      <div className="font-bold text-amber-600">{importPreview.filter(i => i.validationStatus === 'WARNING').length}</div>
+                    </div>
+                  </div>
+
+                  {/* Filters */}
+                  <div className="flex bg-white rounded-md border border-slate-200 p-1">
+                    {(['ALL', 'SAFE', 'WARNINGS', 'ERRORS', 'MISSING'] as FilterType[]).map(f => (
+                      <button
+                        key={f}
+                        onClick={() => setFilter(f)}
+                        className={`px-3 py-1 text-xs font-bold rounded ${
+                          filter === f 
+                            ? 'bg-slate-800 text-white' 
+                            : 'text-slate-500 hover:bg-slate-100'
+                        }`}
+                      >
+                        {f}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 {importPreview.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-12 border-2 border-dashed border-slate-300 rounded-xl bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer relative">
+                  <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer relative">
                     <input 
                       type="file" 
                       accept=".xlsx, .xls" 
@@ -626,89 +844,210 @@ const MachineSS: React.FC = () => {
                     <Upload size={48} className="text-slate-400 mb-4" />
                     <p className="text-lg font-medium text-slate-700">Click to upload Excel file</p>
                     <p className="text-sm text-slate-500 mt-2">Supported formats: .xlsx, .xls</p>
-                    <div className="mt-6 text-left text-sm text-slate-500 bg-white p-4 rounded border border-slate-200">
-                      <p className="font-bold mb-2">Expected Format:</p>
-                      <ul className="list-disc pl-5 space-y-1">
-                        <li>Column A: Fabric</li>
-                        <li>Column B: Daily Production</li>
-                        <li>Column C: Customer</li>
-                        <li>Column D: Work Center (Machine Name)</li>
-                        <li>Row 1: Header (skipped)</li>
-                      </ul>
-                    </div>
                   </div>
                 ) : (
-                  <div>
-                    <div className="flex justify-between items-center mb-4">
-                      <h3 className="font-bold text-slate-800">Preview Changes ({importPreview.length} items)</h3>
-                      <div className="text-sm text-slate-500">
-                        Review the changes below before applying
-                      </div>
-                    </div>
-                    
-                    <div className="overflow-x-auto border border-slate-200 rounded-lg">
-                      <table className="w-full text-sm text-left">
-                        <thead className="bg-slate-50 text-slate-700 font-bold">
-                          <tr>
-                            <th className="p-3 border-b">Machine</th>
-                            <th className="p-3 border-b">Fabric</th>
-                            <th className="p-3 border-b">Customer</th>
-                            <th className="p-3 border-b text-center">Production</th>
-                            <th className="p-3 border-b text-center">Remaining</th>
-                            <th className="p-3 border-b text-center">Status</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200">
-                          {importPreview.map((item, idx) => (
-                            <tr key={idx} className="hover:bg-slate-50">
-                              <td className="p-3 font-medium text-slate-800">{item.machineName}</td>
-                              <td className="p-3 text-slate-600">{item.fabric}</td>
-                              <td className="p-3 text-slate-600">{item.customer}</td>
-                              <td className="p-3 text-center font-mono">
-                                {item.dailyProduction}
+                  <div className="flex-1 overflow-auto border border-slate-300 rounded-lg shadow-inner bg-slate-100">
+                    <table className="w-full text-xs border-collapse">
+                      <thead className="bg-slate-200 text-slate-700 font-bold sticky top-0 z-20 shadow-sm">
+                        <tr>
+                          <th className="p-2 border border-slate-300 w-8 text-center bg-slate-200">
+                            <input 
+                              type="checkbox" 
+                              checked={importPreview.every(p => p.selected)}
+                              onChange={(e) => setImportPreview(prev => prev.map(p => ({...p, selected: e.target.checked})))}
+                            />
+                          </th>
+                          <th className="p-2 border border-slate-300 text-left w-32 bg-slate-200">Machine</th>
+                          
+                          {/* Yesterday Header */}
+                          <th colSpan={3} className="p-2 border border-slate-300 text-center bg-slate-300/50 text-slate-600">
+                            Yesterday (Context)
+                          </th>
+                          
+                          {/* Today Header */}
+                          <th colSpan={4} className="p-2 border border-slate-300 text-center bg-blue-100 text-blue-800 border-l-2 border-l-blue-400">
+                            Today (Imported Data)
+                          </th>
+                          
+                          {/* Result Header */}
+                          <th colSpan={2} className="p-2 border border-slate-300 text-center bg-green-100 text-green-800 border-l-2 border-l-green-400">
+                            Forecast (Result)
+                          </th>
+                          
+                          <th className="p-2 border border-slate-300 text-left bg-slate-200">Validation</th>
+                        </tr>
+                        <tr>
+                          {/* Sub-headers */}
+                          <th className="p-1 border border-slate-300 bg-slate-100"></th>
+                          <th className="p-1 border border-slate-300 bg-slate-100">Name/ID</th>
+                          
+                          <th className="p-1 border border-slate-300 bg-slate-50 text-slate-500 font-normal">Date</th>
+                          <th className="p-1 border border-slate-300 bg-slate-50 text-slate-500 font-normal">Client/Fabric</th>
+                          <th className="p-1 border border-slate-300 bg-slate-50 text-slate-500 font-normal">Rem.</th>
+
+                          <th className="p-1 border border-slate-300 bg-white text-blue-600 border-l-2 border-l-blue-400">Client</th>
+                          <th className="p-1 border border-slate-300 bg-white text-blue-600">Fabric</th>
+                          <th className="p-1 border border-slate-300 bg-white text-blue-600">Prod.</th>
+                          <th className="p-1 border border-slate-300 bg-white text-blue-600">Scrap</th>
+
+                          <th className="p-1 border border-slate-300 bg-green-50 text-green-700 border-l-2 border-l-green-400">New Rem.</th>
+                          <th className="p-1 border border-slate-300 bg-green-50 text-green-700">Status</th>
+                          
+                          <th className="p-1 border border-slate-300 bg-slate-100">Message</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-slate-200">
+                        {importPreview
+                          .filter(item => {
+                            if (filter === 'ALL') return true;
+                            if (filter === 'SAFE') return item.validationStatus === 'SAFE';
+                            if (filter === 'WARNINGS') return item.validationStatus === 'WARNING';
+                            if (filter === 'ERRORS') return item.validationStatus === 'ERROR';
+                            if (filter === 'MISSING') return !item.hasImportData;
+                            return true;
+                          })
+                          .map((item, idx) => {
+                            // Find original index for updates
+                            const realIndex = importPreview.findIndex(p => p.id === item.id);
+                            
+                            return (
+                            <tr key={item.id} className={`hover:bg-blue-50 transition-colors ${!item.selected ? 'opacity-40 bg-slate-50 grayscale' : ''}`}>
+                              <td className="p-2 border border-slate-200 text-center bg-slate-50">
+                                <input 
+                                  type="checkbox" 
+                                  checked={item.selected}
+                                  onChange={(e) => {
+                                    const newPreview = [...importPreview];
+                                    newPreview[realIndex].selected = e.target.checked;
+                                    setImportPreview(newPreview);
+                                  }}
+                                />
                               </td>
-                              <td className="p-3 text-center">
-                                <div className="flex flex-col items-center">
-                                  <span className="text-xs text-slate-400 line-through">{item.previousRemaining}</span>
-                                  <span className="font-bold text-blue-600">{item.newRemaining}</span>
-                                </div>
+                              <td className="p-2 border border-slate-200 font-bold text-slate-700">
+                                {item.machineName}
+                                {item.isSplit && <span className="ml-2 px-1 bg-amber-100 text-amber-700 text-[10px] rounded border border-amber-200">SPLIT</span>}
                               </td>
-                              <td className="p-3 text-center">
-                                <div className="flex flex-col items-center">
-                                  <span className="text-xs text-slate-400">{item.previousStatus}</span>
-                                  <span className={`font-bold ${item.newStatus === 'Working' ? 'text-green-600' : 'text-red-600'}`}>
-                                    ↓ {item.newStatus}
-                                  </span>
-                                </div>
+                              
+                              {/* Yesterday */}
+                              <td className="p-2 border border-slate-200 text-slate-500 bg-slate-50/50">
+                                {item.isStale ? <span className="text-red-500 font-bold">⚠ {item.previousDate}</span> : item.previousDate}
+                              </td>
+                              <td className="p-2 border border-slate-200 text-slate-500 bg-slate-50/50 truncate max-w-[100px]" title={`${item.previousClient} / ${item.previousFabric}`}>
+                                {item.previousClient}
+                              </td>
+                              <td className="p-2 border border-slate-200 text-slate-500 bg-slate-50/50 font-mono text-right">
+                                {item.previousRemaining}
+                              </td>
+
+                              {/* Today (Editable) */}
+                              {item.hasImportData ? (
+                                <>
+                                  <td className={`p-1 border border-slate-200 border-l-2 border-l-blue-400 ${item.previousClient && item.importClient !== item.previousClient ? 'bg-amber-50' : ''}`}>
+                                    <input 
+                                      type="text" 
+                                      value={item.importClient}
+                                      onChange={(e) => {
+                                        const newPreview = [...importPreview];
+                                        newPreview[realIndex].importClient = e.target.value;
+                                        setImportPreview(newPreview);
+                                      }}
+                                      className="w-full bg-transparent p-1 focus:bg-white focus:ring-1 focus:ring-blue-500 outline-none rounded"
+                                    />
+                                    {item.isSplit && (
+                                      <div className="text-[9px] text-slate-400 mt-1">
+                                        {item.splitDetails?.map((d, i) => (
+                                          <div key={i}>{d.client}: {d.production}kg</div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="p-1 border border-slate-200">
+                                    <input 
+                                      type="text" 
+                                      value={item.importFabric}
+                                      onChange={(e) => {
+                                        const newPreview = [...importPreview];
+                                        newPreview[realIndex].importFabric = e.target.value;
+                                        setImportPreview(newPreview);
+                                      }}
+                                      className="w-full bg-transparent p-1 focus:bg-white focus:ring-1 focus:ring-blue-500 outline-none rounded"
+                                    />
+                                  </td>
+                                  <td className="p-1 border border-slate-200 font-mono font-bold text-right text-blue-700">
+                                    {item.importProduction}
+                                  </td>
+                                  <td className="p-1 border border-slate-200 font-mono text-right text-red-500">
+                                    {item.importScrap > 0 ? item.importScrap : '-'}
+                                  </td>
+                                </>
+                              ) : (
+                                <td colSpan={4} className="p-2 border border-slate-200 text-center text-slate-400 italic bg-slate-50 border-l-2 border-l-slate-300">
+                                  No Data in Excel
+                                </td>
+                              )}
+
+                              {/* Result */}
+                              <td className="p-1 border border-slate-200 border-l-2 border-l-green-400 bg-green-50/30">
+                                <input 
+                                  type="number" 
+                                  value={item.newRemaining}
+                                  onChange={(e) => {
+                                    const newPreview = [...importPreview];
+                                    newPreview[realIndex].newRemaining = parseFloat(e.target.value) || 0;
+                                    setImportPreview(newPreview);
+                                  }}
+                                  className="w-full text-right font-bold text-green-700 bg-transparent p-1 focus:bg-white focus:ring-1 focus:ring-green-500 outline-none rounded"
+                                />
+                              </td>
+                              <td className="p-2 border border-slate-200 text-center">
+                                <span className={`text-[10px] px-1 rounded font-bold ${item.newStatus === 'Working' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
+                                  {item.newStatus}
+                                </span>
+                              </td>
+
+                              {/* Validation */}
+                              <td className="p-2 border border-slate-200">
+                                {item.validationStatus !== 'SAFE' && (
+                                  <div className={`flex items-center gap-1 text-[10px] font-bold p-1 rounded border ${
+                                    item.validationStatus === 'WARNING' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-red-50 text-red-700 border-red-200'
+                                  }`}>
+                                    {item.validationStatus === 'WARNING' ? <AlertCircle size={10} /> : <X size={10} />}
+                                    {item.validationMessage}
+                                  </div>
+                                )}
                               </td>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                          )})}
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </div>
               
-              <div className="p-6 border-t border-slate-200 bg-slate-50 flex justify-end gap-3">
-                <button
-                  onClick={() => {
-                    setShowImportModal(false);
-                    setImportPreview([]);
-                  }}
-                  className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium transition-colors"
-                >
-                  Cancel
-                </button>
-                {importPreview.length > 0 && (
+              <div className="p-4 border-t border-slate-200 bg-slate-50 flex justify-between items-center">
+                <div className="text-xs text-slate-500">
+                  {importPreview.filter(i => i.selected).length} rows selected for import.
+                </div>
+                <div className="flex gap-3">
                   <button
-                    onClick={applyImport}
-                    className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-sm transition-colors flex items-center gap-2"
+                    onClick={() => {
+                      setShowImportModal(false);
+                      setImportPreview([]);
+                    }}
+                    className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium transition-colors"
                   >
-                    <Check size={18} />
-                    Apply Changes
+                    Cancel
                   </button>
-                )}
+                  {importPreview.length > 0 && (
+                    <button
+                      onClick={applyImport}
+                      className="px-6 py-2 bg-[#714B67] hover:bg-[#5d3d54] text-white font-bold rounded-lg shadow-sm transition-colors flex items-center gap-2"
+                    >
+                      <Check size={18} />
+                      Confirm & Import Data
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>

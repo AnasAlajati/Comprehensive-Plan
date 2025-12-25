@@ -72,6 +72,14 @@ export interface FabricDefinition {
   shortName?: string; // Name without code and keywords
   workCenters: string[];
   variants: FabricVariant[];
+  // New fields for "DNA"
+  specs?: {
+    gauge: string; // Changed to string to match machine.gauge
+    diameter: string; // Changed to string to match machine.dia
+    needles: number;
+    type: string; // 'Single Jersey' | 'Double Jersey'
+  };
+  originalMachineId?: string; // The machine ID this was created on
 }
 
 export interface CustomerOrder {
@@ -96,10 +104,12 @@ export interface DailyLogEntry {
   orderId?: string;        // NEW: Linked Order ID
   customStatusNote?: string;
   lowStockAlertSent?: boolean; // NEW: Track if alert was sent
+  note?: string; // Added for split runs or extra info
 }
 
 export interface MachineRow {
   id: number;
+  firestoreId?: string; // NEW: Actual Firestore Document ID for updates
   orderIndex?: number; // For custom drag-and-drop ordering
   brand: string;
   type: string;

@@ -393,6 +393,17 @@ export const DataService = {
     } catch (error) {
       console.error("Error saving work center mapping:", error);
     }
+  },
+
+  async saveWorkCenterMappings(mappings: Record<string, string>): Promise<void> {
+    try {
+      const promises = Object.entries(mappings).map(([odooName, machineId]) => 
+        this.saveWorkCenterMapping(odooName, machineId)
+      );
+      await Promise.all(promises);
+    } catch (error) {
+      console.error("Error saving work center mappings:", error);
+    }
   }
 };
 

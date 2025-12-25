@@ -144,7 +144,8 @@ const App: React.FC = () => {
     const unsubscribeMachines = onSnapshot(qMachines, (snapshot) => {
       const fetchedRawMachines = snapshot.docs.map(doc => ({
         ...doc.data(),
-        id: Number(doc.id) || 0
+        id: Number(doc.id) || 0,
+        firestoreId: doc.id // Store the real ID
       }));
       setRawMachines(fetchedRawMachines);
       setMachineLoading(false);
