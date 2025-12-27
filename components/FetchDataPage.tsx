@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { writeBatch, doc, getDoc } from 'firebase/firestore';
+import { writeBatch, doc, getDoc, onSnapshot, collection } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
 import { parseFabricName } from '../services/data';
@@ -397,6 +397,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [filterFabric, setFilterFabric] = useState('');
   const [filterType, setFilterType] = useState('ALL');
 
+  const [rawMachines, setRawMachines] = useState<any[]>([]);
   const [allLogs, setAllLogs] = useState<any[]>([]);
   const [filteredLogs, setFilteredLogs] = useState<any[]>([]);
 
@@ -548,7 +549,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
     setLoading(true);
     try {
-      const machines = await DataService.getMachinesFromMachineSS();
+      // Use local state instead of fetching to ensure we have the latest offline edits
+      const machines = rawMachines.length > 0 ? rawMachines : await DataService.getMachinesFromMachineSS();
       const updatePromises: Promise<void>[] = [];
       let updatedCount = 0;
 
@@ -606,7 +608,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       }
 
       await Promise.all(updatePromises);
-      await handleFetchLogs(selectedDate);
+      // Subscription handles update
       showMessage(`✅ Fetched data for ${updatedCount} machines from ${previousDate}`);
 
     } catch (error: any) {
@@ -1236,6 +1238,114 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     }
   };
 
+  // Real-time Subscription
+  useEffect(() => {
+    setLoading(true);
+    const unsubscribe = onSnapshot(collection(db, 'MachineSS'), (snapshot) => {
+      const machines = snapshot.docs.map(doc => ({
+        ...doc.data(),
+        id: doc.id,
+        firestoreId: doc.id
+      }));
+      setRawMachines(machines);
+      setLoading(false);
+    }, (error) => {
+      console.error("Error fetching machines:", error);
+      showMessage('❌ Error connecting to database', true);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Process logs whenever machines or date changes
+  useEffect(() => {
+    if (rawMachines.length === 0) return;
+    processLogs(rawMachines, selectedDate);
+  }, [rawMachines, selectedDate]);
+
+  const processLogs = useCallback(async (machines: any[], date: string) => {
+    const startTime = performance.now();
+    
+    // Check if any machine is missing a log for this date and create it
+    const updatedMachines = machines.map((machine) => {
+      const logsForDate = (machine.dailyLogs || []).filter((log: any) => log.date === date);
+      
+      if (logsForDate.length === 0) {
+        // Machine doesn't have a log for this date, create a virtual one
+        const sortedLogs = (machine.dailyLogs || []).sort((a: any, b: any) => b.date.localeCompare(a.date));
+        const lastLog = sortedLogs.find((l: any) => l.date < date);
+        
+        const defaultClient = lastLog ? lastLog.client : (machine.client || '');
+        const defaultFabric = lastLog ? lastLog.fabric : (machine.material || machine.fabric || '');
+        const defaultStatus = lastLog ? lastLog.status : (machine.status || '');
+
+        const newLog = {
+          id: date,
+          date: date,
+          dayProduction: 0,
+          scrap: 0,
+          status: defaultStatus,
+          fabric: defaultFabric,
+          client: defaultClient,
+          avgProduction: machine.avgProduction || 0,
+          remainingMfg: lastLog ? (Number(lastLog.remainingMfg) || 0) : 0,
+          reason: '',
+          timestamp: new Date().toISOString()
+        };
+        
+        return { ...machine, dailyLogs: [...(machine.dailyLogs || []), newLog] };
+      }
+      return machine;
+    });
+
+    updatedMachines.sort((a: any, b: any) => {
+        const orderA = a.orderIndex !== undefined ? a.orderIndex : 9999;
+        const orderB = b.orderIndex !== undefined ? b.orderIndex : 9999;
+        return orderA - orderB;
+    });
+    
+    const flattenedLogs: any[] = [];
+    updatedMachines.forEach(machine => {
+      const logsForDate = (machine.dailyLogs || []).filter((log: any) => log.date === date);
+      
+      logsForDate.forEach((log: any) => {
+        flattenedLogs.push({
+          machineId: machine.id,
+          machineName: machine.name,
+          machineType: machine.type,
+          machineBrand: machine.brand,
+          ...log,
+          id: log.date || log.id
+        });
+      });
+    });
+
+    // Fetch daily summary (external production)
+    // Note: This is still async/fetch based. Ideally should be subscribed too.
+    try {
+      const dailySummary = await DataService.getDailySummary(date);
+      setExternalProduction(dailySummary?.externalProduction || 0);
+    } catch (e) {
+      console.warn("Failed to fetch daily summary", e);
+    }
+    
+    setAllLogs(flattenedLogs);
+    setFilteredLogs(flattenedLogs);
+    
+    const endTime = performance.now();
+    const timeTaken = (endTime - startTime).toFixed(2);
+    setFetchTime(parseFloat(timeTaken));
+  }, []);
+
+  const handleFetchLogs = useCallback(async (date: string) => {
+    // Legacy function kept for compatibility, but now just triggers processLogs if we have data
+    if (rawMachines.length > 0) {
+      processLogs(rawMachines, date);
+    }
+  }, [rawMachines, processLogs]);
+
+  /* 
   const handleFetchLogs = useCallback(async (date: string) => {
     setLoading(true);
     const startTime = performance.now();
@@ -1317,6 +1427,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     }
     setLoading(false);
   }, []);
+  */
 
   const showMessage = useCallback((msg: string, isError = false) => {
     setMessage(msg);

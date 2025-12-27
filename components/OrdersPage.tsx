@@ -9,7 +9,7 @@ import {
   updateDoc
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { CustomerSheet, OrderRow } from '../types';
+import { CustomerSheet, OrderRow, YarnInventoryItem, FabricDefinition } from '../types';
 import { 
   Plus, 
   Trash2, 
@@ -17,7 +17,12 @@ import {
   Search,
   FileSpreadsheet,
   X,
-  CalendarPlus
+  CalendarPlus,
+  Package,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+  Upload
 } from 'lucide-react';
 import { CreatePlanModal } from './CreatePlanModal';
 
@@ -35,6 +40,13 @@ export const OrdersPage: React.FC = () => {
   const [newCustomerName, setNewCustomerName] = useState('');
   const [isAddingCustomer, setIsAddingCustomer] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Inventory & Fabric Data
+  const [yarnInventory, setYarnInventory] = useState<YarnInventoryItem[]>([]);
+  const [fabrics, setFabrics] = useState<FabricDefinition[]>([]);
+
   const [createPlanModal, setCreatePlanModal] = useState<{
     isOpen: boolean;
     order: OrderRow | null;
@@ -59,6 +71,24 @@ export const OrdersPage: React.FC = () => {
       }
     });
     return () => unsub();
+  }, []);
+
+  // 2. Fetch Inventory & Fabrics
+  useEffect(() => {
+      const unsubInventory = onSnapshot(collection(db, 'yarn_inventory'), (snapshot) => {
+          const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as YarnInventoryItem));
+          setYarnInventory(data);
+      });
+
+      const unsubFabrics = onSnapshot(collection(db, 'fabrics'), (snapshot) => {
+          const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as FabricDefinition));
+          setFabrics(data);
+      });
+
+      return () => {
+          unsubInventory();
+          unsubFabrics();
+      };
   }, []);
 
   // 1.5 Fetch Machines
@@ -297,6 +327,136 @@ export const OrdersPage: React.FC = () => {
                 <Plus className="w-4 h-4" />
                 Add Order Row
               </button>
+            </div>
+
+            {/* Yarn Requirements Summary Panel */}
+            <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <Package size={14} />
+                    Yarn Requirements & Inventory Status
+                </h3>
+                
+                <div className="bg-white rounded-lg border border-slate-200 overflow-hidden shadow-sm">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+                            <tr>
+                                <th className="px-4 py-2 w-1/3">Yarn Name</th>
+                                <th className="px-4 py-2 text-right">Total Requirement</th>
+                                <th className="px-4 py-2 text-right">Inventory (Total)</th>
+                                <th className="px-4 py-2 text-right">Net Available</th>
+                                <th className="px-4 py-2 text-center">Status</th>
+                                <th className="px-4 py-2 text-center">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {(() => {
+                                // 1. Calculate Requirements
+                                const requirements: Record<string, number> = {};
+                                
+                                selectedCustomer.orders.forEach(order => {
+                                    if (!order.requiredQty) return;
+                                    
+                                    // Try to find fabric definition
+                                    const fabricDef = fabrics.find(f => 
+                                        f.name.toLowerCase().trim() === (order.material || '').toLowerCase().trim()
+                                    );
+                                    
+                                    if (fabricDef && fabricDef.variants && fabricDef.variants.length > 0) {
+                                        // Use first variant for now (or match variantId if available)
+                                        const variant = fabricDef.variants[0];
+                                        variant.yarns.forEach(yarn => {
+                                            const yarnQty = order.requiredQty * (yarn.percentage / 100);
+                                            const yarnName = yarn.name.trim();
+                                            requirements[yarnName] = (requirements[yarnName] || 0) + yarnQty;
+                                        });
+                                    } else {
+                                        // Fallback: Assume Material Name IS the Yarn Name
+                                        const materialName = (order.material || 'Unknown').trim();
+                                        if (materialName) {
+                                            requirements[materialName] = (requirements[materialName] || 0) + order.requiredQty;
+                                        }
+                                    }
+                                });
+
+                                if (Object.keys(requirements).length === 0) {
+                                    return (
+                                        <tr>
+                                            <td colSpan={6} className="px-4 py-8 text-center text-slate-400 italic">
+                                                No yarn requirements calculated yet. Add orders with quantities to see requirements.
+                                            </td>
+                                        </tr>
+                                    );
+                                }
+
+                                // 2. Match with Inventory & Render
+                                return Object.entries(requirements).map(([yarnName, requiredQty]) => {
+                                    // Find inventory items for this yarn
+                                    const inventoryItems = yarnInventory.filter(item => 
+                                        item.yarnName.toLowerCase().trim() === yarnName.toLowerCase().trim()
+                                    );
+                                    
+                                    const totalStock = inventoryItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
+                                    
+                                    // Calculate Allocations
+                                    let totalAllocated = 0;
+                                    let allocatedToThisCustomer = 0;
+                                    
+                                    inventoryItems.forEach(item => {
+                                        if (item.allocations) {
+                                            item.allocations.forEach(alloc => {
+                                                totalAllocated += (alloc.quantity || 0);
+                                                if (alloc.customerId === selectedCustomerId) {
+                                                    allocatedToThisCustomer += (alloc.quantity || 0);
+                                                }
+                                            });
+                                        }
+                                    });
+                                    
+                                    const netAvailable = totalStock - totalAllocated;
+                                    const availableForThisCustomer = netAvailable + allocatedToThisCustomer;
+                                    
+                                    const isEnough = availableForThisCustomer >= requiredQty;
+                                    const deficit = requiredQty - availableForThisCustomer;
+
+                                    return (
+                                        <tr key={yarnName} className="hover:bg-slate-50 transition-colors">
+                                            <td className="px-4 py-2 font-medium text-slate-700">
+                                                {yarnName}
+                                            </td>
+                                            <td className="px-4 py-2 text-right font-mono font-bold text-slate-800">
+                                                {requiredQty.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} kg
+                                            </td>
+                                            <td className="px-4 py-2 text-right font-mono text-slate-600">
+                                                {totalStock.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} kg
+                                            </td>
+                                            <td className={`px-4 py-2 text-right font-mono font-bold ${availableForThisCustomer < requiredQty ? 'text-red-600' : 'text-emerald-600'}`}>
+                                                {availableForThisCustomer.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} kg
+                                            </td>
+                                            <td className="px-4 py-2 text-center">
+                                                {isEnough ? (
+                                                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-bold">
+                                                        <CheckCircle2 size={12} />
+                                                        Available
+                                                    </span>
+                                                ) : (
+                                                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-bold" title={`Shortage: ${deficit.toFixed(1)} kg`}>
+                                                        <AlertCircle size={12} />
+                                                        Shortage
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-2 text-center">
+                                                <button className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors">
+                                                    <Search size={16} />
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                });
+                            })()}
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
             {/* Excel Table */}

@@ -9,7 +9,8 @@ import {
   updateDoc,
   deleteDoc,
   doc,
-  writeBatch
+  writeBatch,
+  onSnapshot
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 
@@ -89,23 +90,26 @@ const MachineSS: React.FC = () => {
 
   // Load machines on mount
   useEffect(() => {
-    refreshMachines();
-  }, []);
-
-  const refreshMachines = async () => {
-    try {
-      setLoading(true);
-      const snapshot = await getDocs(collection(db, 'MachineSS'));
+    setLoading(true);
+    const unsubscribe = onSnapshot(collection(db, 'MachineSS'), (snapshot) => {
       const data = snapshot.docs.map(doc => ({
         id: doc.id,
         ...(doc.data() as MachineSSD),
       }));
+      // Sort by machineid (numeric) if possible, or name
+      data.sort((a, b) => Number(a.machineid) - Number(b.machineid));
       setMachines(data);
-    } catch (error) {
-      console.error('Error loading machines:', error);
-    } finally {
       setLoading(false);
-    }
+    }, (error) => {
+      console.error('Error loading machines:', error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const refreshMachines = async () => {
+    // Legacy function kept for compatibility
   };
 
   const addMachine = async () => {

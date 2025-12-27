@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import { 
   collection, 
   getDocs, 
+  getDoc,
   query, 
   where, 
   addDoc, 
@@ -26,7 +27,8 @@ import {
   X,
   LayoutGrid,
   List,
-  ChevronDown
+  ChevronDown,
+  Trash2
 } from 'lucide-react';
 
 import { YarnService } from '../services/yarnService';
@@ -174,6 +176,13 @@ export const YarnInventoryPage: React.FC = () => {
       // Sort by Favorite first
       if (a.isFavorite && !b.isFavorite) return -1;
       if (!a.isFavorite && b.isFavorite) return 1;
+      
+      // Sort by Has Allocations (desc)
+      const aHasAlloc = a.totalAllocated > 0;
+      const bHasAlloc = b.totalAllocated > 0;
+      if (aHasAlloc && !bHasAlloc) return -1;
+      if (!aHasAlloc && bHasAlloc) return 1;
+
       // Then by Name
       return a.name.localeCompare(b.name);
     });
@@ -197,6 +206,108 @@ export const YarnInventoryPage: React.FC = () => {
       console.error("Error fetching inventory:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteAllocation = async (inventoryItem: YarnInventoryItem, allocationIndex: number) => {
+    if (!confirm("Are you sure you want to remove this allocation? This will also update the order.")) return;
+
+    const allocation = inventoryItem.allocations![allocationIndex];
+    const { customerId, orderId } = allocation;
+
+    try {
+        // 1. Update Inventory (Remove from array)
+        const newAllocations = [...(inventoryItem.allocations || [])];
+        newAllocations.splice(allocationIndex, 1);
+        
+        await updateDoc(doc(db, 'yarn_inventory', inventoryItem.id), {
+            allocations: newAllocations
+        });
+
+        // 2. Update Order
+        const customerRef = doc(db, 'CustomerSheets', customerId);
+        const customerSnap = await getDoc(customerRef);
+        
+        if (customerSnap.exists()) {
+            const customerData = customerSnap.data();
+            let orders = customerData.orders || [];
+            let orderIndex = orders.findIndex((o: any) => o.id === orderId);
+            
+            // Helper to clean allocations
+            const cleanAllocations = (currentAllocations: any) => {
+                const newYarnAllocations = { ...currentAllocations };
+                let changed = false;
+                Object.keys(newYarnAllocations).forEach(yarnKey => {
+                    const allocs = newYarnAllocations[yarnKey] as any[];
+                    // Filter out the allocation that matches this lotId
+                    const filtered = allocs.filter(a => a.lotId !== inventoryItem.id);
+                    if (filtered.length !== allocs.length) {
+                        newYarnAllocations[yarnKey] = filtered;
+                        changed = true;
+                    }
+                });
+                return changed ? newYarnAllocations : null;
+            };
+
+            if (orderIndex !== -1) {
+                // Found in main array
+                const order = orders[orderIndex];
+                if (order.yarnAllocations) {
+                    const newAllocations = cleanAllocations(order.yarnAllocations);
+                    if (newAllocations) {
+                        orders[orderIndex] = { ...order, yarnAllocations: newAllocations };
+                        await updateDoc(customerRef, { orders });
+                    }
+                }
+            } else {
+                // Check subcollection
+                const orderRef = doc(db, 'CustomerSheets', customerId, 'orders', orderId);
+                const orderSnap = await getDoc(orderRef);
+                if (orderSnap.exists()) {
+                    const order = orderSnap.data();
+                    if (order.yarnAllocations) {
+                        const newAllocations = cleanAllocations(order.yarnAllocations);
+                        if (newAllocations) {
+                            await updateDoc(orderRef, { yarnAllocations: newAllocations });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Refresh Inventory
+        fetchInventory();
+        // Update selected yarn view if open
+        if (selectedYarn) {
+            // We need to update the selectedYarn state manually or re-fetch
+            // Since fetchInventory updates 'inventory', and 'groupedInventory' depends on it,
+            // we just need to make sure 'selectedYarn' is refreshed.
+            // Actually, selectedYarn is a separate state object. We should update it or close it.
+            // Let's try to update it by finding the new group from the new inventory.
+            // But fetchInventory is async.
+            // For now, let's just close it or let the user reopen, OR better:
+            // We can update the local state of selectedYarn to reflect the change immediately.
+            
+            const updatedLots = selectedYarn.lots.map(l => {
+                if (l.id === inventoryItem.id) {
+                    return { ...l, allocations: newAllocations };
+                }
+                return l;
+            });
+            
+            const totalAllocated = updatedLots.reduce((sum, l) => sum + (l.allocations?.reduce((s, a) => s + a.quantity, 0) || 0), 0);
+            
+            setSelectedYarn({
+                ...selectedYarn,
+                lots: updatedLots,
+                totalAllocated,
+                netAvailable: selectedYarn.totalQuantity - totalAllocated
+            });
+        }
+
+    } catch (e) {
+        console.error("Error deleting allocation:", e);
+        alert("Failed to remove allocation.");
     }
   };
 
@@ -615,16 +726,25 @@ export const YarnInventoryPage: React.FC = () => {
                                                 {group.totalQuantity.toLocaleString()} kg
                                             </p>
                                         </div>
-                                        <div>
-                                            <p className="text-xs text-emerald-600 uppercase font-bold tracking-wider">Net Available</p>
-                                            <p className="text-2xl font-bold text-emerald-600 font-mono">
-                                                {group.netAvailable.toLocaleString()} <span className="text-sm text-emerald-400 font-normal">kg</span>
-                                            </p>
-                                        </div>
+                                        {group.totalAllocated > 0 && (
+                                            <div>
+                                                <p className="text-xs text-emerald-600 uppercase font-bold tracking-wider">Net Available</p>
+                                                <p className={`text-2xl font-bold font-mono ${group.netAvailable <= 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                                                    {group.netAvailable.toLocaleString()} <span className={`text-sm font-normal ${group.netAvailable <= 0 ? 'text-red-400' : 'text-emerald-400'}`}>kg</span>
+                                                </p>
+                                            </div>
+                                        )}
                                     </div>
-                                    <div className="text-right">
-                                        <p className="text-xs text-slate-500 uppercase font-semibold tracking-wider">Lots</p>
-                                        <p className="text-lg font-bold text-slate-700">{group.lots.length}</p>
+                                    <div className="text-right flex flex-col items-end">
+                                        {group.netAvailable <= 0 && group.totalAllocated > 0 && (
+                                            <div className="mb-2 inline-block px-2 py-1 bg-red-100 text-red-700 text-[10px] font-bold rounded-full uppercase tracking-wide">
+                                                Fully Allocated
+                                            </div>
+                                        )}
+                                        <div>
+                                            <p className="text-xs text-slate-500 uppercase font-semibold tracking-wider">Lots</p>
+                                            <p className="text-lg font-bold text-slate-700">{group.lots.length}</p>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -857,18 +977,27 @@ export const YarnInventoryPage: React.FC = () => {
                                         {lot.allocations && lot.allocations.length > 0 ? (
                                             <div className="space-y-1">
                                                 {lot.allocations.map((alloc, i) => (
-                                                    <div key={i} className="text-xs bg-slate-50 text-slate-700 px-2 py-1 rounded border border-slate-200">
-                                                        <div className="font-bold truncate text-indigo-700">
-                                                            {alloc.clientName || 'Unknown'} - {alloc.fabricName}
+                                                    <div key={i} className="text-xs bg-slate-50 text-slate-700 px-2 py-1 rounded border border-slate-200 flex justify-between items-start group/alloc">
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="font-bold truncate text-indigo-700" title={`${alloc.clientName || 'Unknown'} - ${alloc.fabricName}`}>
+                                                                {alloc.clientName || 'Unknown'} - {alloc.fabricName}
+                                                            </div>
+                                                            <div className="flex items-center justify-between mt-0.5">
+                                                                <span className="font-mono font-medium text-slate-600">
+                                                                    Use: {(alloc.quantity || 0).toFixed(1)} kg
+                                                                </span>
+                                                                <span className="text-[10px] text-slate-400">
+                                                                    {new Date(alloc.timestamp).toLocaleDateString()}
+                                                                </span>
+                                                            </div>
                                                         </div>
-                                                        <div className="flex items-center justify-between mt-0.5">
-                                                            <span className="font-mono font-medium text-slate-600">
-                                                                Use: {(alloc.quantity || 0).toFixed(1)} kg
-                                                            </span>
-                                                            <span className="text-[10px] text-slate-400">
-                                                                {new Date(alloc.timestamp).toLocaleDateString()}
-                                                            </span>
-                                                        </div>
+                                                        <button 
+                                                            onClick={() => handleDeleteAllocation(lot, i)}
+                                                            className="ml-2 p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded opacity-0 group-hover/alloc:opacity-100 transition-all"
+                                                            title="Remove Allocation"
+                                                        >
+                                                            <Trash2 className="w-3 h-3" />
+                                                        </button>
                                                     </div>
                                                 ))}
                                             </div>

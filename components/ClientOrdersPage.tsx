@@ -256,9 +256,12 @@ const MemoizedOrderRow = React.memo(({
   // Determine active composition based on variantId or fallback to legacy
   let activeComposition: any[] = [];
   if (fabricDetails) {
-      if (row.variantId && fabricDetails.variants) {
-          const variant = fabricDetails.variants.find(v => v.id === row.variantId);
-          if (variant) activeComposition = variant.yarns;
+      if (row.variantId) {
+          // Strict variant matching
+          if (fabricDetails.variants) {
+              const variant = fabricDetails.variants.find(v => v.id === row.variantId);
+              if (variant) activeComposition = variant.yarns;
+          }
       } else if (fabricDetails.yarnComposition) {
           // Legacy fallback
           activeComposition = fabricDetails.yarnComposition;
@@ -1015,6 +1018,13 @@ export const ClientOrdersPage: React.FC = () => {
     fabrics: { name: string; weight: number }[];
   }>({ isOpen: false, yarnName: '', totalWeight: 0, fabrics: [] });
 
+  // Lot Details Modal State (New)
+  const [lotDetailsModal, setLotDetailsModal] = useState<{
+    isOpen: boolean;
+    yarnName: string;
+    lots: YarnInventoryItem[];
+  }>({ isOpen: false, yarnName: '', lots: [] });
+
   // Fetch Data
   useEffect(() => {
     // 1. Customers (Shells)
@@ -1243,9 +1253,11 @@ export const ClientOrdersPage: React.FC = () => {
 
         // Determine active composition
         let composition: any[] = [];
-        if (order.variantId && fabric.variants) {
-            const variant = fabric.variants.find(v => v.id === order.variantId);
-            if (variant) composition = variant.yarns;
+        if (order.variantId) {
+            if (fabric.variants) {
+                const variant = fabric.variants.find(v => v.id === order.variantId);
+                if (variant) composition = variant.yarns;
+            }
         } else if (fabric.yarnComposition) {
             composition = fabric.yarnComposition;
         } else if (fabric.variants && fabric.variants.length === 1) {
@@ -1747,9 +1759,11 @@ export const ClientOrdersPage: React.FC = () => {
 
       // Determine active composition
       let composition: any[] = [];
-      if (order.variantId && fabric.variants) {
-          const variant = fabric.variants.find(v => v.id === order.variantId);
-          if (variant) composition = variant.yarns;
+      if (order.variantId) {
+          if (fabric.variants) {
+              const variant = fabric.variants.find(v => v.id === order.variantId);
+              if (variant) composition = variant.yarns;
+          }
       } else if (fabric.yarnComposition) {
           composition = fabric.yarnComposition;
       } else if (fabric.variants && fabric.variants.length === 1) {
@@ -2204,36 +2218,97 @@ export const ClientOrdersPage: React.FC = () => {
                       <table className="w-full text-sm text-left">
                         <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
                           <tr>
-                            <th className="px-4 py-3">Yarn Name</th>
-                            <th className="px-4 py-3 text-right">Total Requirement (kg)</th>
+                            <th className="px-4 py-3 w-1/3">Yarn Name</th>
+                            <th className="px-4 py-3 text-right">Total Requirement</th>
+                            <th className="px-4 py-3 text-right">Inventory (Total)</th>
+                            <th className="px-4 py-3 text-right">Net Available</th>
+                            <th className="px-4 py-3 text-center">Status</th>
                             <th className="px-4 py-3 w-20 text-center">Action</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 bg-white">
-                          {totalYarnRequirements.map((yarn, idx) => (
-                            <tr 
-                              key={idx}
-                              onClick={() => setYarnBreakdownModal({ 
-                                isOpen: true, 
-                                yarnName: yarn.name, 
-                                totalWeight: yarn.weight,
-                                fabrics: yarn.fabrics
-                              })}
-                              className="hover:bg-blue-50 cursor-pointer transition-colors group"
-                            >
-                              <td className="px-4 py-3 font-medium text-slate-700 group-hover:text-blue-700">
-                                {yarn.name}
-                              </td>
-                              <td className="px-4 py-3 text-right font-mono font-bold text-slate-700 group-hover:text-blue-700">
-                                {yarn.weight.toLocaleString(undefined, { maximumFractionDigits: 1 })}
-                              </td>
-                              <td className="px-4 py-3 text-center">
-                                <button className="p-1 rounded-full bg-slate-100 text-slate-500 group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors">
-                                  <Search className="w-4 h-4" />
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
+                          {totalYarnRequirements.map((yarn, idx) => {
+                            // Inventory Logic
+                            const inventoryItems = inventory.filter(item => 
+                                item.yarnName.toLowerCase().trim() === yarn.name.toLowerCase().trim()
+                            );
+                            
+                            const totalStock = inventoryItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
+                            
+                            let totalAllocated = 0;
+                            let allocatedToThisCustomer = 0;
+                            
+                            inventoryItems.forEach(item => {
+                                if (item.allocations) {
+                                    item.allocations.forEach(alloc => {
+                                        totalAllocated += (alloc.quantity || 0);
+                                        if (alloc.customerId === selectedCustomerId) {
+                                            allocatedToThisCustomer += (alloc.quantity || 0);
+                                        }
+                                    });
+                                }
+                            });
+                            
+                            const netAvailable = totalStock - totalAllocated;
+                            const availableForThisCustomer = netAvailable + allocatedToThisCustomer;
+                            const isEnough = availableForThisCustomer >= yarn.weight;
+                            const deficit = yarn.weight - availableForThisCustomer;
+
+                            return (
+                                <tr 
+                                key={idx}
+                                onClick={() => setYarnBreakdownModal({ 
+                                    isOpen: true, 
+                                    yarnName: yarn.name, 
+                                    totalWeight: yarn.weight,
+                                    fabrics: yarn.fabrics
+                                })}
+                                className="hover:bg-blue-50 cursor-pointer transition-colors group"
+                                >
+                                <td className="px-4 py-3 font-medium text-slate-700 group-hover:text-blue-700">
+                                    {yarn.name}
+                                </td>
+                                <td className="px-4 py-3 text-right font-mono font-bold text-slate-700 group-hover:text-blue-700">
+                                    {yarn.weight.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+                                </td>
+                                <td className="px-4 py-3 text-right font-mono text-slate-600">
+                                    {totalStock.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+                                </td>
+                                <td 
+                                    onClick={(e) => {
+                                        e.stopPropagation(); // Prevent row click
+                                        setLotDetailsModal({
+                                            isOpen: true,
+                                            yarnName: yarn.name,
+                                            lots: inventoryItems
+                                        });
+                                    }}
+                                    className={`px-4 py-3 text-right font-mono font-bold cursor-pointer hover:underline ${availableForThisCustomer < yarn.weight ? 'text-red-600' : 'text-emerald-600'}`}
+                                    title="Click to view available lots"
+                                >
+                                    {availableForThisCustomer.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                    {isEnough ? (
+                                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-bold">
+                                            <CheckCircle2 size={12} />
+                                            Available
+                                        </span>
+                                    ) : (
+                                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-bold" title={`Shortage: ${deficit.toFixed(1)} kg`}>
+                                            <AlertCircle size={12} />
+                                            Shortage
+                                        </span>
+                                    )}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                    <button className="p-1 rounded-full bg-slate-100 text-slate-500 group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors">
+                                    <Search className="w-4 h-4" />
+                                    </button>
+                                </td>
+                                </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -2317,6 +2392,16 @@ export const ClientOrdersPage: React.FC = () => {
             yarnName={yarnBreakdownModal.yarnName}
             totalWeight={yarnBreakdownModal.totalWeight}
             fabrics={yarnBreakdownModal.fabrics}
+          />
+        )}
+
+        {/* Lot Details Modal */}
+        {lotDetailsModal.isOpen && (
+          <LotDetailsModal
+            isOpen={lotDetailsModal.isOpen}
+            onClose={() => setLotDetailsModal(prev => ({ ...prev, isOpen: false }))}
+            yarnName={lotDetailsModal.yarnName}
+            lots={lotDetailsModal.lots}
           />
         )}
 
@@ -2576,6 +2661,92 @@ const YarnBreakdownModal: React.FC<{
                 ))}
               </tbody>
             </table>
+        </div>
+        
+        <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+          <button 
+            onClick={onClose}
+            className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const LotDetailsModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  yarnName: string;
+  lots: YarnInventoryItem[];
+}> = ({ isOpen, onClose, yarnName, lots }) => {
+  if (!isOpen) return null;
+
+  const totalQty = lots.reduce((sum, item) => sum + (item.quantity || 0), 0);
+
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[80vh]">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+          <div>
+            <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <Layers className="w-5 h-5 text-emerald-600" />
+              Available Lots: {yarnName}
+            </h2>
+            <p className="text-sm text-slate-500">
+              Total Stock: <span className="font-bold text-slate-700">{totalQty.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg</span>
+            </p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+            <X className="w-5 h-5 text-slate-400" />
+          </button>
+        </div>
+
+        <div className="p-0 overflow-y-auto flex-1">
+            {lots.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 italic">
+                    No lots found in inventory for this yarn.
+                </div>
+            ) : (
+                <table className="w-full text-sm text-left">
+                <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200 sticky top-0">
+                    <tr>
+                    <th className="px-6 py-3">Lot Number</th>
+                    <th className="px-6 py-3">Location</th>
+                    <th className="px-6 py-3 text-right">Quantity (kg)</th>
+                    <th className="px-6 py-3 text-right">Allocated</th>
+                    <th className="px-6 py-3 text-right">Net Available</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                    {lots.map((lot, idx) => {
+                        const allocated = (lot.allocations || []).reduce((sum, a) => sum + (a.quantity || 0), 0);
+                        const net = (lot.quantity || 0) - allocated;
+                        
+                        return (
+                            <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                <td className="px-6 py-3 font-medium text-slate-700 font-mono">{lot.lotNumber}</td>
+                                <td className="px-6 py-3 text-slate-600 flex items-center gap-1">
+                                    <MapPin size={14} className="text-slate-400" />
+                                    {lot.location || 'Unknown'}
+                                </td>
+                                <td className="px-6 py-3 text-right font-mono text-slate-600">
+                                    {(lot.quantity || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                                </td>
+                                <td className="px-6 py-3 text-right font-mono text-amber-600">
+                                    {allocated > 0 ? allocated.toLocaleString(undefined, { maximumFractionDigits: 1 }) : '-'}
+                                </td>
+                                <td className={`px-6 py-3 text-right font-mono font-bold ${net > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                    {net.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                                </td>
+                            </tr>
+                        );
+                    })}
+                </tbody>
+                </table>
+            )}
         </div>
         
         <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end">

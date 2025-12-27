@@ -36,6 +36,7 @@ import { DyehouseInventoryPage } from './components/DyehouseInventoryPage';
 import { FabricsPage } from './components/FabricsPage';
 import { MachinesPage } from './components/MachinesPage';
 import { InstallPWA } from './components/InstallPWA';
+import ConnectivityStatus from './components/ConnectivityStatus';
 import { 
   Send, 
   CheckCircle, 
@@ -390,6 +391,7 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20">
+      <ConnectivityStatus />
       {/* Header */}
       <div className="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div className="max-w-[98%] mx-auto px-4 min-h-[64px] py-2 flex flex-wrap items-center justify-between gap-4">
