@@ -802,12 +802,18 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
 
     if (filterClient.trim()) {
       const lowerClient = filterClient.toLowerCase();
-      result = result.filter(m => m.client && m.client.toLowerCase().includes(lowerClient));
+      result = result.filter(m => 
+        (m.client && m.client.toLowerCase().includes(lowerClient)) ||
+        (m.futurePlans && m.futurePlans.some(p => p.client && p.client.toLowerCase().includes(lowerClient)))
+      );
     }
 
     if (filterFabric.trim()) {
       const lowerFabric = filterFabric.toLowerCase();
-      result = result.filter(m => m.material && m.material.toLowerCase().includes(lowerFabric));
+      result = result.filter(m => 
+        (m.material && m.material.toLowerCase().includes(lowerFabric)) ||
+        (m.futurePlans && m.futurePlans.some(p => p.fabric && p.fabric.toLowerCase().includes(lowerFabric)))
+      );
     }
 
     if (searchTerm.trim()) {

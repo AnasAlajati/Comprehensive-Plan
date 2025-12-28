@@ -306,6 +306,9 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [isDownloading, setIsDownloading] = useState(false);
   const [isSendingReport, setIsSendingReport] = useState(false);
   const [isReportSent, setIsReportSent] = useState(false);
+  const [isNewDay, setIsNewDay] = useState(false);
+  const [reportStarted, setReportStarted] = useState(false);
+  const [sourceDate, setSourceDate] = useState<string>('');
   const printRef = useRef<HTMLDivElement>(null);
 
   const handleSendReport = async () => {
@@ -538,12 +541,18 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     }
   };
 
-  const handleFetchFromPreviousDay = async () => {
-    const dateObj = new Date(selectedDate);
-    dateObj.setDate(dateObj.getDate() - 1);
-    const previousDate = dateObj.toISOString().split('T')[0];
+  const handleFetchFromPreviousDay = async (customSourceDate?: string) => {
+    // Use custom source date if provided, otherwise calculate yesterday
+    let previousDate = '';
+    if (customSourceDate) {
+        previousDate = customSourceDate;
+    } else {
+        const dateObj = new Date(selectedDate);
+        dateObj.setDate(dateObj.getDate() - 1);
+        previousDate = dateObj.toISOString().split('T')[0];
+    }
 
-    if (!window.confirm(`Fetch data from ${previousDate}? This will update the Remaining Quantity based on yesterday's production.`)) {
+    if (!customSourceDate && !window.confirm(`Fetch data from ${previousDate}? This will update the Remaining Quantity based on yesterday's production.`)) {
       return;
     }
 
@@ -586,7 +595,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
              updatedLogs.push(newLogEntry);
            }
 
-           updatePromises.push(DataService.updateMachineInMachineSS(String(machine.id), {
+           // 1. Update Array (Legacy Support)
+           const updatePromise = DataService.updateMachineInMachineSS(String(machine.id), {
              dailyLogs: updatedLogs,
              lastLogDate: selectedDate,
              avgProduction: newLogEntry.avgProduction,
@@ -602,7 +612,13 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 customStatusNote: newLogEntry.customStatusNote
              },
              lastUpdated: new Date().toISOString()
-           }));
+           });
+
+           // 2. Update Sub-collection (New Architecture)
+           // This ensures App.tsx sees the data even if it prioritizes sub-collections
+           const subCollectionPromise = DataService.updateDailyLog(String(machine.id), selectedDate, newLogEntry);
+
+           updatePromises.push(Promise.all([updatePromise, subCollectionPromise]).then(() => {}));
            updatedCount++;
         }
       }
@@ -610,6 +626,9 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       await Promise.all(updatePromises);
       // Subscription handles update
       showMessage(`✅ Fetched data for ${updatedCount} machines from ${previousDate}`);
+      
+      // If we were in "New Day" mode, this will trigger a re-render with data, so we exit that mode
+      setReportStarted(true);
 
     } catch (error: any) {
       console.error("Error fetching previous data:", error);
@@ -1239,6 +1258,15 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   };
 
   // Real-time Subscription
+  // REPLACED: We now rely on the 'machines' prop passed from App.tsx which handles the complex merging of Sub-collections + Arrays.
+  // This fixes the "Disappearing Data" issue where local state was out of sync with the parent's view.
+  useEffect(() => {
+    if (machines && machines.length > 0) {
+      setRawMachines(machines);
+    }
+  }, [machines]);
+
+  /* REMOVED: Internal Listener (Legacy)
   useEffect(() => {
     setLoading(true);
     const unsubscribe = onSnapshot(collection(db, 'MachineSS'), (snapshot) => {
@@ -1257,16 +1285,38 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
     return () => unsubscribe();
   }, []);
+  */
 
   // Process logs whenever machines or date changes
   useEffect(() => {
+    // Reset report started state when date changes
+    setReportStarted(false);
+  }, [selectedDate]);
+
+  useEffect(() => {
     if (rawMachines.length === 0) return;
     processLogs(rawMachines, selectedDate);
-  }, [rawMachines, selectedDate]);
+  }, [rawMachines, selectedDate, reportStarted]);
 
   const processLogs = useCallback(async (machines: any[], date: string) => {
     const startTime = performance.now();
     
+    // Check if we have ANY real logs for this date
+    const hasRealLogs = machines.some(m => (m.dailyLogs || []).some((l: any) => l.date === date));
+    
+    if (!hasRealLogs && machines.length > 0 && !reportStarted) {
+       setIsNewDay(true);
+       setAllLogs([]); // Clear logs to hide table
+       
+       // Set default source date to yesterday
+       const d = new Date(date);
+       d.setDate(d.getDate() - 1);
+       setSourceDate(d.toISOString().split('T')[0]);
+       return; 
+    }
+    
+    setIsNewDay(false);
+
     // Check if any machine is missing a log for this date and create it
     const updatedMachines = machines.map((machine) => {
       const logsForDate = (machine.dailyLogs || []).filter((log: any) => log.date === date);
@@ -2239,6 +2289,77 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       {/* Inject global styles to hide number input spinners */}
       <style>{globalStyles}</style>
 
+      {/* Start New Report Modal */}
+      {isNewDay && !loading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-200">
+            <div className="bg-blue-600 px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="bg-white/20 p-2 rounded-lg">
+                  <FileSpreadsheet className="text-white" size={24} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Start New Report</h3>
+                  <p className="text-blue-100 text-xs">No data found for {selectedDate}</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setReportStarted(true)}
+                className="text-white/70 hover:text-white hover:bg-white/10 p-1 rounded-full transition-colors"
+                title="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-6">
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-700">
+                  Fetch previous data from:
+                </label>
+                <div className="relative">
+                  <input 
+                    type="date" 
+                    value={sourceDate}
+                    onChange={(e) => setSourceDate(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                  />
+                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                    <History size={18} />
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500">
+                  This will copy machine status, fabric, and client from the selected date and calculate the new remaining quantity.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={() => handleFetchFromPreviousDay(sourceDate)}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-lg shadow-blue-200 transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
+                >
+                  <span>Create & Fetch Data</span>
+                  <ArrowRight size={18} />
+                </button>
+                
+                <div className="relative flex items-center py-2">
+                  <div className="flex-grow border-t border-slate-200"></div>
+                  <span className="flex-shrink-0 mx-4 text-slate-400 text-xs uppercase font-bold">Or</span>
+                  <div className="flex-grow border-t border-slate-200"></div>
+                </div>
+
+                <button
+                  onClick={() => setReportStarted(true)}
+                  className="w-full bg-white hover:bg-slate-50 text-slate-600 font-semibold py-2.5 rounded-xl border border-slate-200 transition-all text-sm"
+                >
+                  Start with Empty Report
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-[1400px] mx-auto flex flex-col gap-4">
 
         {/* Header with Date and Export */}
@@ -2287,6 +2408,21 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                  onChange={(e) => setFilterFabric(e.target.value)}
                  className="w-24 sm:w-28 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none"
                />
+            </div>
+
+            {/* Save Status Indicator */}
+            <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-50 border border-slate-200 text-xs font-medium text-slate-500">
+               {navigator.onLine ? (
+                 <>
+                   <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                   <span>Synced</span>
+                 </>
+               ) : (
+                 <>
+                   <div className="w-2 h-2 rounded-full bg-amber-500"></div>
+                   <span>Local</span>
+                 </>
+               )}
             </div>
 
             {activeDay === selectedDate ? (

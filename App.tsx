@@ -100,23 +100,22 @@ const App: React.FC = () => {
     window.addEventListener('offline', handleOffline);
 
     // Initial Network Check
-    if (!navigator.onLine) {
-      handleOffline();
-    } else {
-      // If physically connected, verify Firestore access
-      const testConnection = async () => {
-        try {
-          const machinesRef = collection(db, 'MachineSS');
-          await getDocs(query(machinesRef, limit(1)));
-          setIsConnected(true);
-        } catch (error: any) {
-          console.error("Firebase Connection Error:", error);
-          setIsConnected(false);
-          setConnectionError(error.message || "Unknown error occurred");
-        }
-      };
-      testConnection();
-    }
+    // Always try to connect, don't rely solely on navigator.onLine
+    const testConnection = async () => {
+      try {
+        const machinesRef = collection(db, 'MachineSS');
+        await getDocs(query(machinesRef, limit(1)));
+        setIsConnected(true);
+        setConnectionError("");
+      } catch (error: any) {
+        console.error("Firebase Connection Error:", error);
+        // Only set offline if we really failed to connect
+        setIsConnected(false);
+        setConnectionError(error.message || "Unknown error occurred");
+      }
+    };
+    
+    testConnection();
 
     // Listen to Active Day from Settings
     const unsubSettings = onSnapshot(doc(db, 'settings', 'global'), (docSnap) => {
@@ -138,7 +137,8 @@ const App: React.FC = () => {
 
   // 2. Setup Real-time Listeners
   useEffect(() => {
-    if (isConnected === false) return;
+    // REMOVED: if (isConnected === false) return; 
+    // We want listeners to run even if offline so we get cached data.
 
     // Machines Listener (Now listening to MachineSS)
     const qMachines = query(collection(db, 'MachineSS'));
@@ -151,7 +151,7 @@ const App: React.FC = () => {
       setRawMachines(fetchedRawMachines);
       setMachineLoading(false);
       
-      if (snapshot.docs.length > 0) setIsConnected(true);
+      setIsConnected(true);
     }, (error) => {
       console.error("Snapshot Error (MachineSS):", error);
       setIsConnected(false);
@@ -391,7 +391,7 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20">
-      <ConnectivityStatus />
+      <ConnectivityStatus isDbConnected={isConnected} />
       {/* Header */}
       <div className="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div className="max-w-[98%] mx-auto px-4 min-h-[64px] py-2 flex flex-wrap items-center justify-between gap-4">

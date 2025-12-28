@@ -19,6 +19,7 @@ import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
 import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem, FabricDefinition } from '../types';
 import { FabricDetailsModal } from './FabricDetailsModal';
+import { FabricFormModal } from './FabricFormModal';
 import { CreatePlanModal } from './CreatePlanModal';
 import { 
   Plus, 
@@ -103,15 +104,6 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  // Close on scroll to prevent detached fixed element
-  useEffect(() => {
-    const handleScroll = () => {
-      if (isOpen) setIsOpen(false);
-    };
-    window.addEventListener('scroll', handleScroll, true);
-    return () => window.removeEventListener('scroll', handleScroll, true);
-  }, [isOpen]);
 
   const filteredOptions = options.filter(opt =>
     getLabel(opt).toLowerCase().includes(searchTerm.toLowerCase())
@@ -262,12 +254,13 @@ const MemoizedOrderRow = React.memo(({
               const variant = fabricDetails.variants.find(v => v.id === row.variantId);
               if (variant) activeComposition = variant.yarns;
           }
+      } else if (fabricDetails.variants && fabricDetails.variants.length > 0) {
+          // Auto-select first variant if no specific variant is selected
+          // This ensures we always show *some* composition if variants exist
+          activeComposition = fabricDetails.variants[0].yarns;
       } else if (fabricDetails.yarnComposition) {
           // Legacy fallback
           activeComposition = fabricDetails.yarnComposition;
-      } else if (fabricDetails.variants && fabricDetails.variants.length === 1) {
-          // Auto-select single variant if only one exists
-          activeComposition = fabricDetails.variants[0].yarns;
       }
   }
 
@@ -1025,6 +1018,15 @@ export const ClientOrdersPage: React.FC = () => {
     lots: YarnInventoryItem[];
   }>({ isOpen: false, yarnName: '', lots: [] });
 
+  // Fabric Dictionary Modal State
+  const [fabricDictionaryModal, setFabricDictionaryModal] = useState(false);
+
+  // Fabric Form Modal State
+  const [fabricFormModal, setFabricFormModal] = useState<{
+    isOpen: boolean;
+    initialName?: string;
+  }>({ isOpen: false });
+
   // Fetch Data
   useEffect(() => {
     // 1. Customers (Shells)
@@ -1637,12 +1639,21 @@ export const ClientOrdersPage: React.FC = () => {
   };
 
   const handleCreateFabric = async (name: string) => {
-    await DataService.addFabric({ 
-      name,
-      fabricId: crypto.randomUUID(),
-      type: 'General'
-    });
-    setFabrics(await DataService.getFabrics());
+    setFabricFormModal({ isOpen: true, initialName: name });
+  };
+
+  const handleSaveNewFabric = async (fabricData: Partial<FabricDefinition>) => {
+    try {
+      await DataService.addFabric({
+        ...fabricData,
+        fabricId: crypto.randomUUID(),
+        type: 'General'
+      } as FabricDefinition);
+      setFabrics(await DataService.getFabrics());
+      setFabricFormModal({ isOpen: false });
+    } catch (err) {
+      console.error("Failed to create fabric", err);
+    }
   };
 
   const handleCreateDyehouse = async (name: string) => {
@@ -1752,7 +1763,7 @@ export const ClientOrdersPage: React.FC = () => {
     const totals = new Map<string, { totalWeight: number, fabrics: Map<string, number> }>();
     
     selectedCustomer.orders.forEach(order => {
-      if (!order.material || !order.requiredQty) return;
+      if (!order.material) return;
       
       const fabric = fabrics.find(f => f.name === order.material);
       if (!fabric) return;
@@ -1761,18 +1772,21 @@ export const ClientOrdersPage: React.FC = () => {
       let composition: any[] = [];
       if (order.variantId) {
           if (fabric.variants) {
-              const variant = fabric.variants.find(v => v.id === order.variantId);
+              // Use loose comparison (String) to handle potential type mismatches (number vs string)
+              const variant = fabric.variants.find(v => String(v.id) === String(order.variantId));
               if (variant) composition = variant.yarns;
           }
-      } else if (fabric.yarnComposition) {
+      } else if (fabric.yarnComposition && fabric.yarnComposition.length > 0) {
           composition = fabric.yarnComposition;
-      } else if (fabric.variants && fabric.variants.length === 1) {
+      } else if (fabric.variants && fabric.variants.length > 0) {
+          // Fallback: If no variant selected but variants exist, use the first one (Default)
           composition = fabric.variants[0].yarns;
       }
 
       if (composition.length > 0) {
+        const qty = order.requiredQty || 0;
         composition.forEach(comp => {
-          const baseWeight = (order.requiredQty * (comp.percentage || 0)) / 100;
+          const baseWeight = (qty * (comp.percentage || 0)) / 100;
           const scrapFactor = 1 + ((comp.scrapPercentage || 0) / 100);
           const totalWeight = baseWeight * scrapFactor;
           
@@ -1808,6 +1822,63 @@ export const ClientOrdersPage: React.FC = () => {
       };
     }).sort((a, b) => b.weight - a.weight);
   }, [selectedCustomer, fabrics, yarns]);
+
+  // DEBUG HELPER
+  const getDebugInfo = () => {
+    const logs: string[] = [];
+    if (!selectedCustomer) return ["No customer selected"];
+    
+    logs.push(`Checking ${selectedCustomer.orders.length} orders...`);
+    
+    selectedCustomer.orders.forEach((order, i) => {
+       logs.push(`Order #${i+1}: Material="${order.material}", Qty=${order.requiredQty}, VariantID="${order.variantId}"`);
+       
+       if (!order.material) {
+           logs.push(`  -> SKIPPED: No material defined`);
+           return;
+       }
+       
+       const fabric = fabrics.find(f => f.name === order.material);
+       if (!fabric) {
+           logs.push(`  -> FAILED: Fabric "${order.material}" not found in database. Available: ${fabrics.slice(0,3).map(f=>f.name).join(', ')}...`);
+           return;
+       }
+       
+       logs.push(`  -> Found Fabric: ${fabric.name} (ID: ${fabric.id})`);
+       
+       let composition: any[] = [];
+       if (order.variantId) {
+           logs.push(`  -> Checking Variant ID: "${order.variantId}"`);
+           if (fabric.variants) {
+               const variant = fabric.variants.find(v => String(v.id) === String(order.variantId));
+               if (variant) {
+                   composition = variant.yarns;
+                   logs.push(`  -> Found Variant: ${variant.name} with ${variant.yarns.length} yarns`);
+               } else {
+                   logs.push(`  -> WARNING: Variant ID "${order.variantId}" not found in fabric variants. Available IDs: ${fabric.variants.map(v => v.id).join(', ')}`);
+               }
+           } else {
+               logs.push(`  -> WARNING: Order has Variant ID but fabric has no variants`);
+           }
+       } else if (fabric.yarnComposition && fabric.yarnComposition.length > 0) {
+           composition = fabric.yarnComposition;
+           logs.push(`  -> Using Standard Composition (${composition.length} yarns)`);
+       } else if (fabric.variants && fabric.variants.length > 0) {
+           composition = fabric.variants[0].yarns;
+           logs.push(`  -> Fallback to First Variant (${composition.length} yarns)`);
+       } else {
+           logs.push(`  -> NO DEFINITION: Fabric has no composition and no variants`);
+       }
+       
+       if (composition.length === 0) {
+           logs.push(`  -> NO YARNS: Composition is empty`);
+       } else {
+           logs.push(`  -> Yarns found: ${composition.length}`);
+       }
+    });
+    
+    return logs;
+  };
 
   return (
     <div className="flex flex-col h-[calc(100vh-100px)] bg-slate-50 rounded-xl overflow-hidden border border-slate-200 shadow-sm">
@@ -1868,6 +1939,15 @@ export const ClientOrdersPage: React.FC = () => {
           )}
 
           <div className="h-6 w-px bg-slate-200 hidden sm:block mx-2"></div>
+
+          <button 
+            onClick={() => setFabricDictionaryModal(true)}
+            className="flex items-center gap-2 px-3 py-2 border border-slate-300 bg-white text-slate-600 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 text-sm rounded-lg transition-colors font-medium"
+            title="View Fabric Compositions"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span className="hidden lg:inline">Fabric Dictionary</span>
+          </button>
 
           <button 
             onClick={() => setShowDyehouse(!showDyehouse)}
@@ -2196,36 +2276,36 @@ export const ClientOrdersPage: React.FC = () => {
                     </div>
                 </div>
 
-                {/* Yarn Requirements Toggle */}
-                <div className="flex justify-end">
-                    <button 
-                        onClick={() => setShowYarnRequirements(!showYarnRequirements)}
-                        className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-colors shadow-sm"
-                    >
-                        <Calculator className="w-4 h-4 text-blue-600" />
-                        {showYarnRequirements ? 'Hide Yarn Requirements' : 'View Yarn Requirements'}
-                    </button>
-                </div>
-
-                {/* Total Yarn Requirements Footer */}
-                {showYarnRequirements && totalYarnRequirements.length > 0 && (
-                    <div className="bg-white rounded-lg shadow border border-slate-200 p-4 animate-in slide-in-from-bottom-4">
-                    <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
-                        <Calculator className="w-4 h-4 text-blue-600" />
-                        Total Yarn Requirements for <span className="truncate max-w-[200px] inline-block align-bottom" title={selectedCustomer.name}>{selectedCustomer.name}</span>
-                    </h3>
-                    <div className="overflow-hidden rounded-lg border border-slate-200">
-                      <table className="w-full text-sm text-left">
-                        <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
-                          <tr>
-                            <th className="px-4 py-3 w-1/3">Yarn Name</th>
-                            <th className="px-4 py-3 text-right">Total Requirement</th>
-                            <th className="px-4 py-3 text-right">Inventory (Total)</th>
-                            <th className="px-4 py-3 text-right">Net Available</th>
-                            <th className="px-4 py-3 text-center">Status</th>
-                            <th className="px-4 py-3 w-20 text-center">Action</th>
-                          </tr>
-                        </thead>
+                {/* Yarn Requirements Section - Always Visible & Enhanced */}
+                {totalYarnRequirements.length > 0 && (
+                    <div className="mt-8 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden animate-in fade-in duration-500">
+                        <div className="bg-slate-50 px-6 py-4 border-b border-slate-200 flex justify-between items-center">
+                            <div>
+                                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                    <Package className="w-5 h-5 text-indigo-600" />
+                                    Yarn Requirements
+                                </h3>
+                                <p className="text-sm text-slate-500 mt-1">
+                                    Calculated based on current orders and fabric compositions
+                                </p>
+                            </div>
+                            <div className="text-sm font-medium text-slate-600 bg-white px-3 py-1 rounded-full border border-slate-200 shadow-sm">
+                                {totalYarnRequirements.length} Unique Yarns
+                            </div>
+                        </div>
+                        
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm text-left">
+                                <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+                                  <tr>
+                                    <th className="px-6 py-3 w-1/3">Yarn Name</th>
+                                    <th className="px-6 py-3 text-right">Total Requirement</th>
+                                    <th className="px-6 py-3 text-right">Inventory (Total)</th>
+                                    <th className="px-6 py-3 text-right">Net Available</th>
+                                    <th className="px-6 py-3 text-center">Status</th>
+                                    <th className="px-6 py-3 w-20 text-center">Action</th>
+                                  </tr>
+                                </thead>
                         <tbody className="divide-y divide-slate-100 bg-white">
                           {totalYarnRequirements.map((yarn, idx) => {
                             // Inventory Logic
@@ -2312,7 +2392,7 @@ export const ClientOrdersPage: React.FC = () => {
                         </tbody>
                       </table>
                     </div>
-                    </div>
+                </div>
                 )}
               </div>
             </div>
@@ -2421,6 +2501,11 @@ export const ClientOrdersPage: React.FC = () => {
             existingAllocations={fabricDetailsModal.allocations}
             onUpdateOrderAllocations={handleUpdateOrderAllocations}
             variantId={fabricDetailsModal.variantId}
+            onUpdateOrderVariant={async (variantId) => {
+                if (fabricDetailsModal.orderId && selectedCustomer) {
+                    await handleUpdateOrder(fabricDetailsModal.orderId, { variantId });
+                }
+            }}
           />
         )}
 
@@ -2433,6 +2518,22 @@ export const ClientOrdersPage: React.FC = () => {
             customerName={createPlanModal.customerName}
           />
         )}
+
+        {/* Fabric Dictionary Modal */}
+        <FabricDictionaryModal 
+            isOpen={fabricDictionaryModal}
+            onClose={() => setFabricDictionaryModal(false)}
+            fabrics={fabrics}
+        />
+
+        {/* Fabric Form Modal */}
+        <FabricFormModal
+          isOpen={fabricFormModal.isOpen}
+          onClose={() => setFabricFormModal({ isOpen: false })}
+          onSave={handleSaveNewFabric}
+          initialData={fabricFormModal.initialName ? { name: fabricFormModal.initialName } as any : null}
+          machines={machines}
+        />
 
         {/* Inventory View Modal */}
         {inventoryViewModal.isOpen && (
@@ -2866,6 +2967,117 @@ const InventoryViewModal: React.FC<{
               <p>No inventory records found for this yarn.</p>
             </div>
           )}
+        </div>
+        
+        <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+          <button 
+            onClick={onClose}
+            className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const FabricDictionaryModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  fabrics: FabricDefinition[];
+}> = ({ isOpen, onClose, fabrics }) => {
+  const [searchTerm, setSearchTerm] = useState('');
+
+  if (!isOpen) return null;
+
+  const filteredFabrics = fabrics.filter(f => 
+    f.name.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+          <div>
+            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+              <FileSpreadsheet className="w-6 h-6 text-indigo-600" />
+              Fabric Composition Dictionary
+            </h2>
+            <p className="text-sm text-slate-500">
+              Reference guide for all fabric yarn requirements
+            </p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+            <X className="w-5 h-5 text-slate-400" />
+          </button>
+        </div>
+
+        <div className="p-4 border-b border-slate-100 bg-white">
+            <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input 
+                    type="text" 
+                    placeholder="Search fabrics..." 
+                    className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                />
+            </div>
+        </div>
+
+        <div className="p-0 overflow-y-auto flex-1 bg-slate-50/50">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
+                {filteredFabrics.map(fabric => (
+                    <div key={fabric.id} className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden hover:shadow-md transition-shadow">
+                        <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                            <h3 className="font-bold text-slate-700">{fabric.name}</h3>
+                            <span className="text-xs font-mono text-slate-400 bg-white px-2 py-1 rounded border border-slate-100">
+                                {fabric.variants ? `${fabric.variants.length} Variants` : 'Standard'}
+                            </span>
+                        </div>
+                        <div className="p-4">
+                            {fabric.variants && fabric.variants.length > 0 ? (
+                                <div className="space-y-3">
+                                    {fabric.variants.map((variant, idx) => (
+                                        <div key={idx} className="text-sm">
+                                            <div className="font-medium text-slate-600 mb-1 flex items-center gap-2">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400"></span>
+                                                Variant {idx + 1}
+                                            </div>
+                                            <div className="pl-3.5 space-y-1">
+                                                {variant.yarns.map((y, yIdx) => (
+                                                    <div key={yIdx} className="flex justify-between text-slate-500 text-xs border-b border-slate-50 last:border-0 py-1">
+                                                        <span>{y.name}</span>
+                                                        <span className="font-mono">
+                                                            {y.percentage}% <span className="text-slate-300">|</span> Scrap: {y.scrapPercentage}%
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : fabric.yarnComposition && fabric.yarnComposition.length > 0 ? (
+                                <div className="space-y-1">
+                                    {fabric.yarnComposition.map((y: any, yIdx: number) => (
+                                        <div key={yIdx} className="flex justify-between text-sm text-slate-600 border-b border-slate-50 last:border-0 py-1">
+                                            <span>{y.name || y.yarnName}</span>
+                                            <span className="font-mono text-slate-500">
+                                                {y.percentage}% <span className="text-slate-300">|</span> Scrap: {y.scrapPercentage || 0}%
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-center py-2 text-slate-400 italic text-sm">
+                                    No composition data defined.
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                ))}
+            </div>
         </div>
         
         <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end">

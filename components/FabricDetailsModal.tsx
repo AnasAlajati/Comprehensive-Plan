@@ -19,6 +19,7 @@ interface FabricDetailsModalProps {
   customerName?: string;
   existingAllocations?: Record<string, YarnAllocationItem[]>;
   onUpdateOrderAllocations?: (orderId: string, allocations: Record<string, YarnAllocationItem[]>) => Promise<void>;
+  onUpdateOrderVariant?: (variantId: string) => Promise<void>;
   variantId?: string;
 }
 
@@ -56,6 +57,7 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
 }) => {
   const [composition, setComposition] = useState<any[]>([]);
   const [activeVariantId, setActiveVariantId] = useState<string | null>(null);
+  const [isEditingVariant, setIsEditingVariant] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -483,6 +485,38 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
     return allYarns.find(y => y.id === id)?.name || id;
   };
 
+  const handleSaveVariant = async () => {
+    if (!fabric.id || !onUpdateOrderVariant) return;
+    
+    setIsSaving(true);
+    try {
+      const newVariantId = crypto.randomUUID();
+      const newVariant = {
+        id: newVariantId,
+        yarns: composition
+      };
+      
+      // Update Fabric
+      const fabricRef = doc(db, 'Fabrics', fabric.id);
+      await updateDoc(fabricRef, {
+        variants: arrayUnion(newVariant)
+      });
+      
+      // Update Order
+      await onUpdateOrderVariant(newVariantId);
+      
+      setActiveVariantId(newVariantId);
+      setIsEditingVariant(false);
+    } catch (e) {
+       console.error(e);
+       setError('Failed to create variant');
+    } finally {
+       setIsSaving(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -498,10 +532,11 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
               Fabric: <span className="font-medium text-slate-700">{fabric.name}</span>
             </p>
             {/* Variant Selector */}
-            {fabric.variants && fabric.variants.length > 1 && (
-                <div className="mt-2">
+            <div className="mt-2 flex items-center gap-2">
+                {fabric.variants && fabric.variants.length > 0 ? (
                     <select 
                         value={activeVariantId || ''}
+                        disabled={isEditingVariant}
                         onChange={(e) => {
                             const vId = e.target.value;
                             setActiveVariantId(vId);
@@ -516,8 +551,48 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
                             </option>
                         ))}
                     </select>
-                </div>
-            )}
+                ) : (
+                    <span className="text-xs text-slate-400 italic">No variants defined</span>
+                )}
+                
+                {!isEditingVariant ? (
+                    <button
+                        onClick={() => {
+                            setIsEditingVariant(true);
+                            // If no composition, start fresh
+                            if (composition.length === 0) {
+                                setComposition([{ yarnId: '', percentage: 100, scrapPercentage: 0 }]);
+                            }
+                        }}
+                        className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded border border-blue-100 hover:bg-blue-100 font-medium flex items-center gap-1"
+                    >
+                        <Plus size={12} /> New Variant
+                    </button>
+                ) : (
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={handleSaveVariant}
+                            disabled={isSaving}
+                            className="text-xs bg-emerald-50 text-emerald-600 px-2 py-1 rounded border border-emerald-100 hover:bg-emerald-100 font-medium flex items-center gap-1"
+                        >
+                            <Save size={12} /> Save as New Variant
+                        </button>
+                        <button
+                            onClick={() => {
+                                setIsEditingVariant(false);
+                                // Reset to active variant
+                                if (activeVariantId) {
+                                    const v = fabric.variants.find(v => v.id === activeVariantId);
+                                    if (v) setComposition(v.yarns || []);
+                                }
+                            }}
+                            className="text-xs text-slate-500 hover:text-slate-700"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                )}
+            </div>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
             <X className="w-5 h-5 text-slate-400" />
@@ -565,6 +640,7 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
                     value={comp.yarnId || comp.name} 
                     yarns={allYarns}
                     inventoryYarnNames={inventoryYarnNames}
+                    disabled={!isEditingVariant}
                     onChange={(val) => {
                         // Update both yarnId and name to keep them in sync
                         const selectedYarn = allYarns.find(y => y.id === val);
@@ -587,9 +663,10 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
                     min="0"
                     max="100"
                     step="0.1"
+                    disabled={!isEditingVariant}
                     value={comp.percentage}
                     onChange={(e) => handleUpdateRow(index, 'percentage', e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-md text-right focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
+                    className={`w-full px-3 py-2 bg-white border border-slate-200 rounded-md text-right focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm ${!isEditingVariant ? 'bg-slate-100 text-slate-500' : ''}`}
                   />
                   <span className="absolute right-8 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">%</span>
                 </div>
@@ -601,9 +678,10 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
                     min="0"
                     max="100"
                     step="0.1"
+                    disabled={!isEditingVariant}
                     value={comp.scrapPercentage || 0}
                     onChange={(e) => handleUpdateRow(index, 'scrapPercentage', e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-md text-right focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono text-sm text-orange-600"
+                    className={`w-full px-3 py-2 bg-white border border-slate-200 rounded-md text-right focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono text-sm text-orange-600 ${!isEditingVariant ? 'bg-slate-100 text-slate-500' : ''}`}
                   />
                   <span className="absolute right-8 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">%</span>
                 </div>
@@ -615,12 +693,14 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
 
                 {/* Delete */}
                 <div className="col-span-1 text-center">
-                  <button 
-                    onClick={() => handleRemoveRow(index)}
-                    className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  {isEditingVariant && (
+                    <button 
+                        onClick={() => handleRemoveRow(index)}
+                        className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
+                    >
+                        <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               </div>
             )})}
@@ -631,13 +711,15 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
               </div>
             )}
 
-            <button
-              onClick={handleAddRow}
-              className="w-full py-3 border-2 border-dashed border-slate-300 rounded-lg text-slate-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-all flex items-center justify-center gap-2 font-medium"
-            >
-              <Plus className="w-4 h-4" />
-              Add Yarn Component
-            </button>
+            {isEditingVariant && (
+                <button
+                onClick={handleAddRow}
+                className="w-full py-3 border-2 border-dashed border-slate-300 rounded-lg text-slate-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-all flex items-center justify-center gap-2 font-medium"
+                >
+                <Plus className="w-4 h-4" />
+                Add Yarn Component
+                </button>
+            )}
           </div>
 
           {/* Yarn Allocation Section (Order Specific) */}
@@ -1023,7 +1105,8 @@ const YarnSelector: React.FC<{
   inventoryYarnNames: string[];
   onChange: (val: string) => void;
   onAddYarn: (name: string) => Promise<string>;
-}> = ({ value, yarns, inventoryYarnNames, onChange, onAddYarn }) => {
+  disabled?: boolean;
+}> = ({ value, yarns, inventoryYarnNames, onChange, onAddYarn, disabled }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
@@ -1119,13 +1202,13 @@ const YarnSelector: React.FC<{
   return (
     <div className="relative">
       <div 
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-md cursor-pointer hover:border-blue-400 transition-colors flex items-center justify-between"
+        onClick={() => !disabled && setIsOpen(!isOpen)}
+        className={`w-full px-3 py-2 bg-white border border-slate-200 rounded-md transition-colors flex items-center justify-between ${disabled ? 'opacity-50 cursor-not-allowed bg-slate-100' : 'cursor-pointer hover:border-blue-400'}`}
       >
         <span className={!value ? 'text-slate-400' : 'text-slate-700'}>{displayName}</span>
       </div>
 
-      {isOpen && (
+      {isOpen && !disabled && (
         <div className="absolute z-50 top-full left-0 w-full mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-60 overflow-hidden flex flex-col">
           <input
             autoFocus

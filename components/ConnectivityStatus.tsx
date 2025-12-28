@@ -3,22 +3,31 @@ import { Wifi, WifiOff, RefreshCw, Save } from 'lucide-react';
 import { db } from '../services/firebase';
 import { waitForPendingWrites, enableNetwork, disableNetwork } from 'firebase/firestore';
 
-const ConnectivityStatus: React.FC = () => {
+interface ConnectivityStatusProps {
+  isDbConnected?: boolean | null;
+}
+
+const ConnectivityStatus: React.FC<ConnectivityStatusProps> = ({ isDbConnected }) => {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [pendingWrites, setPendingWrites] = useState(false);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
 
+  // Sync with DB connection status
+  useEffect(() => {
+    if (isDbConnected === true) {
+      console.log("ConnectivityStatus: DB Connected, forcing Online state");
+      setIsOnline(true);
+    }
+  }, [isDbConnected]);
+
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      // Re-enable network to ensure sync resumes
       enableNetwork(db).catch(console.error);
     };
     
     const handleOffline = () => {
       setIsOnline(false);
-      // Disable network to prevent hanging requests
-      disableNetwork(db).catch(console.error);
     };
 
     window.addEventListener('online', handleOnline);
@@ -29,6 +38,17 @@ const ConnectivityStatus: React.FC = () => {
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  const handleRetry = async () => {
+    try {
+      await enableNetwork(db);
+      // Also try a simple fetch to wake up the network stack if needed
+      await fetch('https://www.google.com/favicon.ico', { mode: 'no-cors' }).catch(() => {});
+      setIsOnline(true);
+    } catch (error) {
+      console.error("Retry failed:", error);
+    }
+  };
 
   // Monitor pending writes (simulated for now, as Firestore doesn't expose a direct "pending count" observable easily)
   // We can use a periodic check or hook into the data service later.
@@ -47,6 +67,14 @@ const ConnectivityStatus: React.FC = () => {
         <>
           <WifiOff size={14} />
           <span>Offline Mode - Saving Locally</span>
+          <button 
+            onClick={handleRetry}
+            className="ml-2 flex items-center gap-1 bg-white/50 hover:bg-white/80 text-amber-900 px-2 py-0.5 rounded text-[10px] uppercase tracking-wider transition-colors"
+            title="Force Reconnect"
+          >
+            <RefreshCw size={10} />
+            Reconnect
+          </button>
         </>
       )}
     </div>

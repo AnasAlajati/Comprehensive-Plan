@@ -38,6 +38,11 @@ export const DataService = {
     await setDoc(doc(db, 'MachineSS', machineId), cleanUpdates, { merge: true });
   },
 
+  async updateDailyLog(machineId: string, date: string, logData: any): Promise<void> {
+    const logRef = doc(db, 'MachineSS', machineId, 'dailyLogs', date);
+    await setDoc(logRef, logData, { merge: true });
+  },
+
   async getMachines(): Promise<MachineRow[]> {
     const snapshot = await getDocs(collection(db, 'machines'));
     return snapshot.docs.map(doc => ({ ...(doc.data() as MachineRow), id: Number(doc.id) }));
