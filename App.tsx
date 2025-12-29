@@ -33,6 +33,7 @@ import { OrderFulfillmentPage } from './components/OrderFulfillmentPage';
 import { AnalyticsPage } from './components/AnalyticsPage';
 import { YarnInventoryPage } from './components/YarnInventoryPage';
 import { DyehouseInventoryPage } from './components/DyehouseInventoryPage';
+import { DyehouseDirectoryPage } from './components/DyehouseDirectoryPage';
 import { FabricsPage } from './components/FabricsPage';
 import { MachinesPage } from './components/MachinesPage';
 import { InstallPWA } from './components/InstallPWA';
@@ -55,7 +56,8 @@ import {
   Truck,
   Layers,
   FileSpreadsheet,
-  Settings
+  Settings,
+  Building
 } from 'lucide-react';
 import { MachineStatus } from './types';
 
@@ -76,7 +78,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'orders' | 'compare' | 'history' | 'fulfillment' | 'analytics' | 'yarn-inventory' | 'dyehouse-inventory' | 'fabrics' | 'machines'>('planning'); 
+  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'orders' | 'compare' | 'history' | 'fulfillment' | 'analytics' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'fabrics' | 'machines'>('planning'); 
   
   // External Production State
   const [externalProduction, setExternalProduction] = useState<number>(0);
@@ -145,7 +147,7 @@ const App: React.FC = () => {
     const unsubscribeMachines = onSnapshot(qMachines, (snapshot) => {
       const fetchedRawMachines = snapshot.docs.map(doc => ({
         ...doc.data(),
-        id: Number(doc.id) || 0,
+        id: doc.id, // Use string ID to support non-numeric IDs
         firestoreId: doc.id // Store the real ID
       }));
       setRawMachines(fetchedRawMachines);
@@ -570,6 +572,13 @@ const App: React.FC = () => {
                     <Settings size={20} />
                   </button>
                   <button 
+                    onClick={() => setViewMode('dyehouse-directory')}
+                    title="Dyehouse Directory"
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'dyehouse-directory' ? 'bg-slate-100 text-slate-800' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    <Building size={20} />
+                  </button>
+                  <button 
                     onClick={() => setViewMode('idle')}
                     title="Idle Machines"
                     className={`p-2.5 rounded-lg transition-all ${viewMode === 'idle' ? 'bg-red-50 text-red-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
@@ -614,6 +623,10 @@ const App: React.FC = () => {
 
             {viewMode === 'dyehouse-inventory' && (
               <DyehouseInventoryPage />
+            )}
+
+            {viewMode === 'dyehouse-directory' && (
+              <DyehouseDirectoryPage />
             )}
 
             {viewMode === 'idle' && (

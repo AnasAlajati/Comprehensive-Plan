@@ -204,10 +204,10 @@ interface PlanningScheduleProps {
 type PlanningMachine = MachineRow & { machineSSId: string; scheduleIndex?: number };
 
 export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) => {
-  const [smartAddMachineId, setSmartAddMachineId] = useState<number | null>(null);
+  const [smartAddMachineId, setSmartAddMachineId] = useState<string | null>(null);
   const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean; machine: any; plan?: any; isCurrent?: boolean; } | null>(null);
-  const [draggedPlan, setDraggedPlan] = useState<{machineId: number, index: number} | null>(null);
-  const [draggedMachineId, setDraggedMachineId] = useState<number | null>(null);
+  const [draggedPlan, setDraggedPlan] = useState<{machineId: string, index: number} | null>(null);
+  const [draggedMachineId, setDraggedMachineId] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [machines, setMachines] = useState<PlanningMachine[]>([]);
   const [loading, setLoading] = useState(true);
@@ -224,6 +224,12 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
   const [fabrics, setFabrics] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
   const [customerOrders, setCustomerOrders] = useState<CustomerOrder[]>([]);
+
+  const getFabricShortName = useCallback((fullName: string) => {
+    if (!fullName) return '';
+    const fabric = fabrics.find(f => f.name === fullName);
+    return fabric?.shortName || fullName;
+  }, [fabrics]);
 
   // External Schedule State
   const [viewMode, setViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
@@ -476,6 +482,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
         ? machine.machineId
         : typeof machine.id === 'number'
           ? machine.id
+          : !isNaN(Number(machine.id)) ? Number(machine.id)
           : index + 1;
 
     const futurePlans: PlanItem[] = Array.isArray(machine.futurePlans)
@@ -485,7 +492,12 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
     const resolvedStatus = normalizeStatus(effectiveLog?.status || machine.status);
 
     // machineSSId MUST be the Firestore doc ID (string), not the numeric ID!
-    const machineSSId = machine.id || machine.firestoreId || String(machineNumericId);
+    // Prefer firestoreId to ensure we get the document ID, not a field named 'id' from data
+    const machineSSId = machine.firestoreId || machine.id || String(machineNumericId);
+
+    if (!machine.firestoreId && !machine.id) {
+       console.warn('Machine missing Firestore ID (falling back to numeric):', machine.name, machineNumericId);
+    }
 
     return {
       id: machineNumericId,
@@ -549,9 +561,42 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
     const currentPlans = [...(machine.futurePlans || [])];
     const transformed = transform(currentPlans);
     const recalculated = recalculateSchedule(transformed, machine);
-    setMachines(prev => prev.map(m => m.id === machine.id ? { ...m, futurePlans: recalculated } : m));
+    
+    setMachines(prev => {
+        // Debug: Check for collisions
+        const targets = prev.filter(m => m.machineSSId === machine.machineSSId);
+        if (targets.length > 1) {
+            console.error('CRITICAL: Updating multiple machines with same ID:', machine.machineSSId, targets.map(t => t.machineName));
+        }
+        return prev.map(m => m.machineSSId === machine.machineSSId ? { ...m, futurePlans: recalculated } : m);
+    });
+    
     persistFuturePlans(machine, recalculated);
   }, [persistFuturePlans]);
+
+  // Debug: Check for duplicate IDs on load
+  useEffect(() => {
+    if (machines.length > 0) {
+      const ids = machines.map(m => m.machineSSId);
+      const duplicates = ids.filter((item, index) => ids.indexOf(item) !== index);
+      if (duplicates.length > 0) {
+        console.error('CRITICAL: DUPLICATE MACHINE SSIDs DETECTED:', duplicates);
+        const dupMachines = machines.filter(m => duplicates.includes(m.machineSSId));
+        console.error('Duplicate Machines:', dupMachines.map(m => ({ name: m.machineName, id: m.machineSSId })));
+      }
+    }
+  }, [machines]);
+
+  // Debug: Check for duplicate External IDs
+  useEffect(() => {
+    if (externalFactories.length > 0) {
+      const ids = externalFactories.map(f => f.id);
+      const duplicates = ids.filter((item, index) => ids.indexOf(item) !== index);
+      if (duplicates.length > 0) {
+        console.error('CRITICAL: DUPLICATE EXTERNAL FACTORY IDs:', duplicates);
+      }
+    }
+  }, [externalFactories]);
 
   useEffect(() => {
     let isMounted = true;
@@ -606,7 +651,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
       await DataService.updateMachineInMachineSS(machine.machineSSId, updates);
       
       setMachines(prev => prev.map(m => {
-        if (m.id === machine.id) {
+        if (m.machineSSId === machine.machineSSId) {
           return {
             ...m,
             status: MachineStatus.WORKING,
@@ -731,7 +776,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
     updateMachinePlans(machine, (plans) => plans.filter((_, i) => i !== planIndex));
   };
 
-  const handleDragStart = (e: React.DragEvent, machineId: number, index: number) => {
+  const handleDragStart = (e: React.DragEvent, machineId: string, index: number) => {
     const target = e.target as HTMLElement;
     if (['INPUT', 'SELECT', 'BUTTON', 'TEXTAREA'].includes(target.tagName) && !target.classList.contains('drag-handle')) {
       e.preventDefault();
@@ -745,11 +790,11 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
     e.preventDefault();
   };
 
-  const handleDrop = (e: React.DragEvent, targetMachineId: number, targetIndex: number) => {
+  const handleDrop = (e: React.DragEvent, targetMachineId: string, targetIndex: number) => {
     e.preventDefault();
     if (!draggedPlan || draggedPlan.machineId !== targetMachineId || draggedPlan.index === targetIndex) return;
 
-    const machine = machines.find(m => m.id === targetMachineId);
+    const machine = machines.find(m => m.machineSSId === targetMachineId);
     if (!machine) return;
 
     updateMachinePlans(machine, (plans) => {
@@ -763,7 +808,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
 
   const handleSmartPlanSave = (plan: PlanItem) => {
     if (smartAddMachineId === null) return;
-    const machine = machines.find(m => m.id === smartAddMachineId);
+    const machine = machines.find(m => m.machineSSId === smartAddMachineId);
     if (machine) {
       plan.type = 'PRODUCTION';
       updateMachinePlans(machine, (plans) => [...plans, plan]);
@@ -852,7 +897,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
     return result;
   }, [machines, filterType, filterClient, filterFabric, searchTerm]);
 
-  const handleMachineDragStart = (e: React.DragEvent, machineId: number) => {
+  const handleMachineDragStart = (e: React.DragEvent, machineId: string) => {
     setDraggedMachineId(machineId);
     e.dataTransfer.effectAllowed = 'move';
   };
@@ -862,12 +907,12 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
     e.dataTransfer.dropEffect = 'move';
   };
 
-  const handleMachineDrop = async (e: React.DragEvent, targetMachineId: number) => {
+  const handleMachineDrop = async (e: React.DragEvent, targetMachineId: string) => {
     e.preventDefault();
     if (draggedMachineId === null || draggedMachineId === targetMachineId) return;
 
-    const currentIndex = filteredMachines.findIndex(m => m.id === draggedMachineId);
-    const targetIndex = filteredMachines.findIndex(m => m.id === targetMachineId);
+    const currentIndex = filteredMachines.findIndex(m => m.machineSSId === draggedMachineId);
+    const targetIndex = filteredMachines.findIndex(m => m.machineSSId === targetMachineId);
 
     if (currentIndex === -1 || targetIndex === -1) return;
 
@@ -1156,7 +1201,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
              <td style="padding: 6px; text-align: right;">${machine.remainingMfg?.toLocaleString() || '-'}</td>
              <td style="padding: 6px; text-align: right;">-</td>
              <td style="padding: 6px; text-align: right;">${machine.avgProduction?.toLocaleString() || '-'}</td>
-             <td style="padding: 6px;">${machine.material || '-'}</td>
+             <td style="padding: 6px;">${getFabricShortName(machine.material) || '-'}</td>
            `;
            currentTbody.appendChild(statusRow);
 
@@ -1176,7 +1221,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                 <td style="padding: 6px; text-align: right;">${plan.remaining?.toLocaleString() || '-'}</td>
                 <td style="padding: 6px; text-align: right;">${plan.quantity?.toLocaleString() || '-'}</td>
                 <td style="padding: 6px; text-align: right;">${plan.productionPerDay?.toLocaleString() || '-'}</td>
-                <td style="padding: 6px;">${plan.fabric || plan.notes || '-'}</td>
+                <td style="padding: 6px;">${getFabricShortName(plan.fabric) || plan.notes || '-'}</td>
               `;
               currentTbody.appendChild(planRow);
            });
@@ -1361,14 +1406,14 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
 
           return (
             <div 
-              key={machine.id} 
-              id={`machine-schedule-card-${machine.id}`}
+              key={machine.machineSSId} 
+              id={`machine-schedule-card-${machine.machineSSId}`}
               data-machine-type={machine.type}
-              className={`bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden ring-1 ring-black/5 transition-opacity ${draggedMachineId === machine.id ? 'opacity-50' : ''}`}
+              className={`bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden ring-1 ring-black/5 transition-opacity ${draggedMachineId === machine.machineSSId ? 'opacity-50' : ''}`}
               draggable
-              onDragStart={(e) => handleMachineDragStart(e, machine.id)}
+              onDragStart={(e) => handleMachineDragStart(e, machine.machineSSId)}
               onDragOver={handleMachineDragOver}
-              onDrop={(e) => handleMachineDrop(e, machine.id)}
+              onDrop={(e) => handleMachineDrop(e, machine.machineSSId)}
             >
             <div className="bg-slate-800 px-4 sm:px-6 py-3 flex flex-col sm:flex-row justify-between sm:items-center text-white gap-2 sm:gap-0">
               <div className="flex items-center gap-3">
@@ -1424,7 +1469,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                       <td className="p-2 text-center text-xs font-bold text-emerald-700 align-middle hidden md:table-cell">{machine.remainingMfg}</td>
                       <td className="p-2 text-center text-xs text-slate-500 align-middle">-</td>
                       <td className="p-2 text-center text-xs text-slate-600 align-middle hidden md:table-cell">{machine.dayProduction}</td>
-                      <td className="p-2 text-right text-xs font-medium text-slate-800 align-middle dir-rtl"><div className="flex items-center justify-end gap-2"><span>{machine.material}</span><span className="px-2 py-0.5 bg-emerald-200 text-emerald-800 text-[9px] rounded-full uppercase font-bold tracking-wider">Active</span></div></td>
+                      <td className="p-2 text-right text-xs font-medium text-slate-800 align-middle dir-rtl"><div className="flex items-center justify-end gap-2"><span>{getFabricShortName(machine.material)}</span><span className="px-2 py-0.5 bg-emerald-200 text-emerald-800 text-[9px] rounded-full uppercase font-bold tracking-wider">Active</span></div></td>
                       <td className="p-2 text-center text-[10px] text-slate-400 align-middle hidden md:table-cell">0</td>
                       <td className="p-2 text-center text-[10px] text-slate-400 italic align-middle">
                         <span className="hidden md:inline">Live</span>
@@ -1459,11 +1504,11 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                     return (
                       <tr 
                         key={index} 
-                        className={`group transition-colors align-top ${isSettings ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-blue-50/50'} ${draggedPlan?.index === index && draggedPlan.machineId === machine.id ? 'opacity-50' : ''}`}
+                        className={`group transition-colors align-top ${isSettings ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-blue-50/50'} ${draggedPlan?.index === index && draggedPlan.machineId === machine.machineSSId ? 'opacity-50' : ''}`}
                         draggable
-                        onDragStart={(e) => handleDragStart(e, machine.id, index)}
+                        onDragStart={(e) => handleDragStart(e, machine.machineSSId, index)}
                         onDragOver={handleDragOver}
-                        onDrop={(e) => handleDrop(e, machine.id, index)}
+                        onDrop={(e) => handleDrop(e, machine.machineSSId, index)}
                       >
                         <td className="p-2 text-slate-300 cursor-move hover:text-slate-500 drag-handle align-middle hidden md:table-cell">⠿</td>
                         <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50 align-middle hidden md:table-cell">{plan.startDate || '-'}</td>
@@ -1488,7 +1533,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                         </td>
                         <td className="p-1 align-middle relative group">
                           {!isSettings && <SearchDropdown
-                            id={`client-${machine.id}-${index}`}
+                            id={`client-${machine.machineSSId}-${index}`}
                             options={clients}
                             value={plan.client || ''}
                             onChange={(val) => handlePlanChange(machine, index, 'client', val)}
@@ -1525,14 +1570,14 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                                 {nextContext && (
                                     <div className="text-[10px] text-amber-600/70 mt-1 flex items-center gap-1">
                                         <span>⮑ Next:</span>
-                                        <span className="font-bold truncate max-w-[120px]">{nextContext.fabric || 'Unknown'}</span>
+                                        <span className="font-bold truncate max-w-[120px]">{getFabricShortName(nextContext.fabric) || 'Unknown'}</span>
                                         {nextContext.orderName && <span className="opacity-75">({nextContext.orderName})</span>}
                                     </div>
                                 )}
                              </>
                           ) : (
                              <SearchDropdown
-                                id={`fabric-${machine.id}-${index}`}
+                                id={`fabric-${machine.machineSSId}-${index}`}
                                 options={fabrics}
                                 value={plan.fabric || ''}
                                 onChange={(val) => handlePlanChange(machine, index, 'fabric', val)}
@@ -1600,7 +1645,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                         <button onClick={() => addPlan(machine, 'SETTINGS')} className="px-4 py-2 border border-dashed border-amber-300 rounded-lg text-amber-600 hover:text-amber-700 hover:bg-amber-50 hover:border-amber-400 transition-all text-xs font-medium">
                           + Add Settings
                         </button>
-                        <button onClick={() => setSmartAddMachineId(machine.id)} className="flex items-center justify-center gap-2 px-4 py-2 border border-dashed border-indigo-200 rounded-lg text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 hover:border-indigo-300 transition-all text-xs font-medium bg-indigo-50/30">
+                        <button onClick={() => setSmartAddMachineId(machine.machineSSId)} className="flex items-center justify-center gap-2 px-4 py-2 border border-dashed border-indigo-200 rounded-lg text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 hover:border-indigo-300 transition-all text-xs font-medium bg-indigo-50/30">
                           Smart Add (AI)
                         </button>
                       </div>
@@ -1639,8 +1684,8 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                    setNewFactoryName(name);
                    // We need to call handleAddFactory but it relies on state which might not update immediately if we just set it.
                    // Better to refactor handleAddFactory to take a name or just call the logic directly here.
-                   // Let's just call the logic directly here to be safe and clean.
-                   const factoryId = `ext-factory-${Date.now()}`;
+                   // Use random suffix to prevent ID collisions if multiple added quickly
+                   const factoryId = `ext-factory-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
                    const newFactory: ExternalFactory = {
                      id: factoryId,
                      name: name.trim(),

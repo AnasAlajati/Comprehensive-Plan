@@ -465,7 +465,7 @@ export const OrdersPage: React.FC = () => {
                 <table className="w-full text-sm border-collapse" ref={tableRef}>
                   <thead className="bg-slate-100 text-slate-600 font-semibold sticky top-0 z-10 shadow-sm">
                     <tr>
-                      <th className="p-3 text-left border-b border-r border-slate-200 min-w-[150px]">الخامة (Material)</th>
+                      <th className="p-3 text-left border-b border-r border-slate-200 min-w-[500px]">الخامة (Material)</th>
                       <th className="p-3 text-left border-b border-r border-slate-200 min-w-[120px]">الماكينة (Machine)</th>
                       <th className="p-3 text-right border-b border-r border-slate-200 w-24">الكمية المطلوبة</th>
                       <th className="p-3 text-left border-b border-r border-slate-200 min-w-[120px]">الاكسسوار</th>

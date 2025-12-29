@@ -5,6 +5,7 @@ import {
   addDoc,
   getDocs,
   getDoc,
+  deleteDoc,
   query,
   where,
   Timestamp
@@ -41,6 +42,11 @@ export const DataService = {
   async updateDailyLog(machineId: string, date: string, logData: any): Promise<void> {
     const logRef = doc(db, 'MachineSS', machineId, 'dailyLogs', date);
     await setDoc(logRef, logData, { merge: true });
+  },
+
+  async deleteDailyLog(machineId: string, date: string): Promise<void> {
+    const logRef = doc(db, 'MachineSS', machineId, 'dailyLogs', date);
+    await deleteDoc(logRef);
   },
 
   async getMachines(): Promise<MachineRow[]> {

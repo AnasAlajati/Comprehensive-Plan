@@ -91,7 +91,7 @@ export interface CustomerOrder {
 
 export interface DailyLogEntry {
   id?: string; // Firestore Doc ID
-  machineId?: number; // Link to parent machine
+  machineId?: string | number; // Link to parent machine
   date: string;
   dayProduction: number;
   scrap: number;
@@ -108,7 +108,7 @@ export interface DailyLogEntry {
 }
 
 export interface MachineRow {
-  id: number;
+  id: string | number;
   firestoreId?: string; // NEW: Actual Firestore Document ID for updates
   orderIndex?: number; // For custom drag-and-drop ordering
   brand: string;
@@ -350,4 +350,15 @@ export interface YarnInventoryItem {
     quantity: number; // Amount allocated
     timestamp: string;
   }[];
+}
+
+export interface DyehouseMachine {
+  capacity: number;
+  count: number;
+}
+
+export interface Dyehouse {
+  id: string;
+  name: string;
+  machines: DyehouseMachine[];
 }

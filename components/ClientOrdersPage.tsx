@@ -17,7 +17,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
-import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem, FabricDefinition } from '../types';
+import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem, FabricDefinition, Dyehouse, DyehouseMachine } from '../types';
 import { FabricDetailsModal } from './FabricDetailsModal';
 import { FabricFormModal } from './FabricFormModal';
 import { CreatePlanModal } from './CreatePlanModal';
@@ -38,10 +38,13 @@ import {
   Square,
   Droplets,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
   Package,
   Users,
-  ArrowRight
+  ArrowRight,
+  Sparkles,
+  Factory
 } from 'lucide-react';
 
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
@@ -70,6 +73,231 @@ interface SearchDropdownProps {
   placeholder?: string;
   className?: string;
 }
+
+// --- Smart Allocation Logic ---
+
+interface DyehouseOption {
+  dyehouse: Dyehouse;
+  assignments: { quantity: number; machineCapacity: number }[];
+  score: number;
+  reasons: string[];
+}
+
+const findAllDyehouseOptions = (
+  plan: { quantity: number }[], 
+  dyehouses: Dyehouse[]
+): DyehouseOption[] => {
+  if (!plan.length || !dyehouses.length) return [];
+
+  const results: DyehouseOption[] = [];
+
+  for (const dh of dyehouses) {
+    if (!dh.machines || dh.machines.length === 0) continue;
+
+    let currentScore = 0;
+    let currentAssignments: { quantity: number; machineCapacity: number }[] = [];
+    let reasons: string[] = [];
+    
+    // Create a pool of available machines (expand counts)
+    let availableMachines: number[] = [];
+    dh.machines.forEach(m => {
+      for(let i=0; i<m.count; i++) availableMachines.push(m.capacity);
+    });
+    availableMachines.sort((a, b) => a - b); // Sort ascending
+
+    let totalWastedSpace = 0;
+    let underCapacityCount = 0;
+
+    for (const batch of plan) {
+      const qty = Number(batch.quantity) || 0;
+      if (qty <= 0) continue;
+      
+      // Find best fit: smallest machine >= quantity
+      let bestMachineIdx = -1;
+      
+      // 1. Try to find exact or larger
+      for (let i = 0; i < availableMachines.length; i++) {
+        if (availableMachines[i] >= qty) {
+          bestMachineIdx = i;
+          break;
+        }
+      }
+
+      // 2. If no larger machine, find largest available (and penalize heavily)
+      if (bestMachineIdx === -1) {
+         if (availableMachines.length > 0) {
+             bestMachineIdx = availableMachines.length - 1; // Largest available
+             currentScore += 10000; // Huge penalty for under-capacity
+             underCapacityCount++;
+         } else {
+             currentScore += 100000; 
+         }
+      }
+
+      if (bestMachineIdx !== -1) {
+        const capacity = availableMachines[bestMachineIdx];
+        const diff = capacity - qty;
+        if (diff >= 0) {
+            currentScore += diff; // Penalty is wasted space
+            totalWastedSpace += diff;
+        }
+        currentAssignments.push({ quantity: qty, machineCapacity: capacity });
+      }
+    }
+
+    // Generate Reasons
+    if (underCapacityCount > 0) {
+        reasons.push(`⚠️ ${underCapacityCount} batches exceed max vessel capacity`);
+    } else if (totalWastedSpace === 0) {
+        reasons.push("✨ Perfect Capacity Match");
+    } else {
+        reasons.push("✅ Closest Vessel Match");
+    }
+
+    results.push({
+        dyehouse: dh,
+        assignments: currentAssignments,
+        score: currentScore,
+        reasons
+    });
+  }
+
+  // Sort by score (lower is better)
+  return results.sort((a, b) => a.score - b.score);
+};
+
+const SmartAllocationPanel: React.FC<{
+  plan: any[];
+  dyehouses: Dyehouse[];
+  onApply: (dyehouseName: string) => void;
+}> = ({ plan, dyehouses, onApply }) => {
+  const [expanded, setExpanded] = useState(false);
+  
+  const options = useMemo(() => {
+    return findAllDyehouseOptions(plan, dyehouses);
+  }, [plan, dyehouses]);
+
+  // Helper to group assignments for cleaner display
+  const renderGroupedAssignments = (assignments: { quantity: number; machineCapacity: number }[]) => {
+      const groups: Record<string, { count: number, qty: number, cap: number }> = {};
+      
+      assignments.forEach(a => {
+          const key = `${a.quantity}-${a.machineCapacity}`;
+          if (!groups[key]) {
+              groups[key] = { count: 0, qty: a.quantity, cap: a.machineCapacity };
+          }
+          groups[key].count++;
+      });
+      
+      return Object.values(groups)
+        .sort((a, b) => b.cap - a.cap)
+        .map((group, i) => (
+          <span key={i} className="text-[10px] text-indigo-700 bg-white px-2 py-1 rounded border border-indigo-200 shadow-sm flex items-center gap-1.5">
+              {group.count > 1 && (
+                  <span className="font-bold bg-indigo-50 px-1.5 rounded text-indigo-800">
+                      {group.count}x
+                  </span>
+              )}
+              <span className="text-slate-600 font-medium">{group.qty}kg</span>
+              <ArrowRight size={10} className="text-slate-400" />
+              <b className="font-mono text-indigo-900">{group.cap}kg Vessel</b>
+          </span>
+      ));
+  };
+
+  if (options.length === 0) return null;
+
+  const bestOption = options[0];
+  const otherOptions = options.slice(1, 4); // Show top 3 alternatives
+
+  return (
+    <div className="mt-3 bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm animate-in fade-in slide-in-from-top-2">
+      {/* Best Option Header */}
+      <div className="bg-indigo-50/50 p-3 border-b border-indigo-100">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+                <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg mt-1">
+                <Sparkles size={18} />
+                </div>
+                <div>
+                <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-bold text-indigo-900">
+                        Recommended: {bestOption.dyehouse.name}
+                    </h4>
+                    <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium border border-emerald-200">
+                        Best Fit
+                    </span>
+                </div>
+                <p className="text-xs text-indigo-600/80 mt-0.5 font-medium">
+                    {bestOption.reasons.join(' • ')}
+                </p>
+                <div className="flex flex-wrap gap-2 mt-2">
+                    {renderGroupedAssignments(bestOption.assignments)}
+                </div>
+                </div>
+            </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+                <button
+                    onClick={() => setExpanded(!expanded)}
+                    className="flex-1 sm:flex-none px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-600 text-xs font-medium rounded-md border border-slate-200 transition-colors flex items-center justify-center gap-1"
+                >
+                    {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    {expanded ? 'Hide Options' : 'Other Options'}
+                </button>
+                <button
+                    onClick={() => onApply(bestOption.dyehouse.name)}
+                    className="flex-1 sm:flex-none px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-md shadow-sm transition-colors flex items-center justify-center gap-1"
+                >
+                    <Factory size={14} />
+                    Assign Best Fit
+                </button>
+            </div>
+        </div>
+      </div>
+
+      {/* Other Options List */}
+      {expanded && (
+        <div className="bg-slate-50 p-2 space-y-2">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2">Alternative Dyehouses</p>
+            {otherOptions.map((opt, idx) => (
+                <div key={idx} className="bg-white p-2 rounded border border-slate-200 flex flex-col gap-2 hover:border-slate-300 transition-colors">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-slate-700">{opt.dyehouse.name}</span>
+                            {opt.score > 10000 && (
+                                <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200">
+                                    Under Capacity
+                                </span>
+                            )}
+                        </div>
+                        <button
+                            onClick={() => onApply(opt.dyehouse.name)}
+                            className="text-xs text-slate-500 hover:text-indigo-600 font-medium px-2 py-1 hover:bg-indigo-50 rounded transition-colors"
+                        >
+                            Select
+                        </button>
+                    </div>
+                    
+                    {/* Assignments Breakdown for Alternative */}
+                    <div className="flex flex-wrap gap-1.5">
+                        {renderGroupedAssignments(opt.assignments)}
+                    </div>
+
+                    <div className="text-[10px] text-slate-500">
+                        {opt.reasons.join(' • ')}
+                    </div>
+                </div>
+            ))}
+            {otherOptions.length === 0 && (
+                <div className="text-center py-2 text-xs text-slate-400 italic">
+                    No other viable options found.
+                </div>
+            )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const SearchDropdown: React.FC<SearchDropdownProps> = ({
   id,
@@ -197,6 +425,13 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
       )}
     </div>
   );
+};
+
+const formatDateShort = (dateStr: string) => {
+  if (!dateStr || dateStr === '-') return '-';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return dateStr;
+  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 };
 
 // --- Optimized Row Component ---
@@ -418,18 +653,24 @@ const MemoizedOrderRow = React.memo(({
                     </div>
                 )}
 
-                {/* Single Variant Info */}
-                {fabricDetails && fabricDetails.variants && fabricDetails.variants.length === 1 && (
-                     <div className="mt-1 px-2 text-[10px] text-slate-500 truncate" title={fabricDetails.variants[0].yarns.map(y => `${y.percentage}% ${y.name}`).join(', ')}>
-                        {fabricDetails.variants[0].yarns.map(y => `${y.percentage}% ${y.name || 'Unknown'}`).join(', ')}
-                     </div>
-                )}
-
-                {/* Legacy Composition Info */}
-                {fabricDetails && (!fabricDetails.variants || fabricDetails.variants.length === 0) && fabricDetails.yarnComposition && (
-                     <div className="mt-1 px-2 text-[10px] text-slate-500 truncate">
-                        {fabricDetails.yarnComposition.map((y: any) => `${y.percentage}% ${y.name || y.yarnName || 'Unknown'}`).join(', ')}
-                     </div>
+                {/* Total Yarn Display */}
+                {hasComposition && row.requiredQty > 0 && (
+                   <div className="mt-1 px-1 flex items-center gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenFabricDetails(row.material, row.requiredQty, row.id);
+                        }}
+                        className="text-[10px] font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 hover:bg-blue-100 transition-colors flex items-center gap-1"
+                        title="View Yarn Details"
+                      >
+                        <Calculator size={10} />
+                        Yarn Info
+                      </button>
+                      <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200" title="Total Yarn Required including scrap">
+                        Total: {totalYarnForOrder.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+                      </span>
+                   </div>
                 )}
 
                 {hasComposition && (
@@ -439,15 +680,7 @@ const MemoizedOrderRow = React.memo(({
                    </div>
                 )}
               </div>
-              {row.material && (
-                <button
-                  onClick={() => onOpenFabricDetails(row.material, row.requiredQty, row.id)}
-                  className={`absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded transition-all z-10 ${hasComposition ? 'text-emerald-600 bg-emerald-50 opacity-100' : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50 opacity-0 group-hover/fabric:opacity-100'}`}
-                  title="Yarn Composition"
-                >
-                  <Calculator className="w-3 h-3" />
-                </button>
-              )}
+              {/* Removed absolute calculator button in favor of inline action */}
             </div>
           </td>
 
@@ -680,13 +913,13 @@ const MemoizedOrderRow = React.memo(({
           </td>
 
           {/* Start Date (Auto) */}
-          <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500">
-            {statusInfo?.startDate || '-'}
+          <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500 whitespace-nowrap">
+            {formatDateShort(statusInfo?.startDate)}
           </td>
 
           {/* End Date (Auto) */}
-          <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500">
-            {statusInfo?.endDate || '-'}
+          <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500 whitespace-nowrap">
+            {formatDateShort(statusInfo?.endDate)}
           </td>
 
           {/* Scrap (Auto) */}
@@ -760,6 +993,7 @@ const MemoizedOrderRow = React.memo(({
                     <th className="px-3 py-2 text-center w-16 text-[10px] text-slate-400">ايام</th>
                     <th className="px-3 py-2 text-right w-32">تاريخ الارسال</th>
                     <th className="px-3 py-2 text-center w-16 text-[10px] text-slate-400">ايام</th>
+                    <th className="px-3 py-2 text-right w-32">المصبغة</th>
                     <th className="px-3 py-2 text-center w-20">حوض الصباغة</th>
                     <th className="px-3 py-2 text-center w-20">مرسل</th>
                     <th className="px-3 py-2 text-center w-20">مستلم</th>
@@ -834,6 +1068,19 @@ const MemoizedOrderRow = React.memo(({
                             {Math.floor((new Date().getTime() - new Date(batch.dateSent).getTime()) / (1000 * 60 * 60 * 24))}
                           </span>
                         )}
+                      </td>
+                      <td className="p-0">
+                        <input
+                          type="text"
+                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right text-xs"
+                          value={batch.dyehouse || ''}
+                          onChange={(e) => {
+                            const newPlan = [...(row.dyeingPlan || [])];
+                            newPlan[idx] = { ...batch, dyehouse: e.target.value };
+                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                          }}
+                          placeholder="المصبغة..."
+                        />
                       </td>
                       <td className="p-0">
                         <input
@@ -920,6 +1167,7 @@ const MemoizedOrderRow = React.memo(({
                             id: crypto.randomUUID(),
                             color: '',
                             quantity: 0,
+                            dyehouse: '',
                             machine: '',
                             notes: ''
                           };
@@ -936,6 +1184,18 @@ const MemoizedOrderRow = React.memo(({
                   </tr>
                 </tbody>
               </table>
+              
+              {/* Smart Allocation Recommendation */}
+              {row.dyeingPlan && row.dyeingPlan.length > 0 && (
+                <SmartAllocationPanel 
+                  plan={row.dyeingPlan} 
+                  dyehouses={dyehouses} 
+                  onApply={(dyehouseName) => {
+                     const newPlan = row.dyeingPlan?.map(batch => ({ ...batch, dyehouse: dyehouseName }));
+                     handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                  }}
+                />
+              )}
         </div>
         </td>
       </tr>
@@ -960,7 +1220,7 @@ export const ClientOrdersPage: React.FC = () => {
   const [showYarnRequirements, setShowYarnRequirements] = useState(false);
   const [selectedYarnDetails, setSelectedYarnDetails] = useState<any>(null);
   const [showDyehouse, setShowDyehouse] = useState(false);
-  const [dyehouses, setDyehouses] = useState<{ id: string; name: string }[]>([]);
+  const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
   const [externalFactories, setExternalFactories] = useState<any[]>([]);
   
   // Create Plan Modal State
@@ -1060,7 +1320,7 @@ export const ClientOrdersPage: React.FC = () => {
     DataService.getYarns().then(setYarns);
 
     // Dyehouses
-    DataService.getDyehouses().then(setDyehouses);
+    DataService.getDyehouses().then(data => setDyehouses(data as unknown as Dyehouse[]));
 
     // Inventory
     const unsubInventory = onSnapshot(collection(db, 'yarn_inventory'), (snapshot) => {
@@ -1363,6 +1623,60 @@ export const ClientOrdersPage: React.FC = () => {
 
     return { ordered: totalOrdered, manufactured: totalManufactured, remaining: totalRemaining, progress };
   }, [selectedCustomer, statsMap]);
+
+  const totalYarnRequirements = useMemo(() => {
+    if (!selectedCustomer || !selectedCustomer.orders) return [];
+
+    const requirements = new Map<string, { weight: number, fabrics: Map<string, number> }>();
+
+    selectedCustomer.orders.forEach(order => {
+        if (!order.material || !order.requiredQty) return;
+        
+        const fabric = fabrics.find(f => f.name === order.material);
+        if (!fabric) return;
+
+        // Determine active composition
+        let composition: any[] = [];
+        if (order.variantId) {
+            if (fabric.variants) {
+                const variant = fabric.variants.find(v => v.id === order.variantId);
+                if (variant) composition = variant.yarns;
+            }
+        } else if (fabric.yarnComposition) {
+            composition = fabric.yarnComposition;
+        } else if (fabric.variants && fabric.variants.length === 1) {
+            composition = fabric.variants[0].yarns;
+        }
+
+        if (composition.length > 0) {
+            composition.forEach(comp => {
+                const yarnName = comp.name;
+                if (!yarnName) return;
+
+                const baseQty = (order.requiredQty * (comp.percentage || 0)) / 100;
+                const scrapMultiplier = 1 + ((comp.scrapPercentage || 0) / 100);
+                const totalNeeded = baseQty * scrapMultiplier;
+
+                const current = requirements.get(yarnName) || { weight: 0, fabrics: new Map<string, number>() };
+                current.weight += totalNeeded;
+                
+                const currentFabricWeight = current.fabrics.get(order.material) || 0;
+                current.fabrics.set(order.material, currentFabricWeight + totalNeeded);
+                
+                requirements.set(yarnName, current);
+            });
+        }
+    });
+
+    return Array.from(requirements.entries()).map(([name, data]) => ({
+        name,
+        weight: data.weight,
+        fabrics: Array.from(data.fabrics.entries()).map(([fabricName, fabricWeight]) => ({
+            name: fabricName,
+            weight: fabricWeight
+        })).sort((a, b) => b.weight - a.weight)
+    })).sort((a, b) => b.weight - a.weight);
+  }, [selectedCustomer, fabrics]);
 
   const handleAddCustomer = async () => {
     if (!newCustomerName.trim()) return;
@@ -1755,74 +2069,6 @@ export const ClientOrdersPage: React.FC = () => {
     c.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  // Calculate Total Yarn Requirements for the selected customer
-  const totalYarnRequirements = useMemo(() => {
-    if (!selectedCustomer) return [];
-    
-    // Map<yarnId, { totalWeight: number, fabrics: Map<fabricName, number> }>
-    const totals = new Map<string, { totalWeight: number, fabrics: Map<string, number> }>();
-    
-    selectedCustomer.orders.forEach(order => {
-      if (!order.material) return;
-      
-      const fabric = fabrics.find(f => f.name === order.material);
-      if (!fabric) return;
-
-      // Determine active composition
-      let composition: any[] = [];
-      if (order.variantId) {
-          if (fabric.variants) {
-              // Use loose comparison (String) to handle potential type mismatches (number vs string)
-              const variant = fabric.variants.find(v => String(v.id) === String(order.variantId));
-              if (variant) composition = variant.yarns;
-          }
-      } else if (fabric.yarnComposition && fabric.yarnComposition.length > 0) {
-          composition = fabric.yarnComposition;
-      } else if (fabric.variants && fabric.variants.length > 0) {
-          // Fallback: If no variant selected but variants exist, use the first one (Default)
-          composition = fabric.variants[0].yarns;
-      }
-
-      if (composition.length > 0) {
-        const qty = order.requiredQty || 0;
-        composition.forEach(comp => {
-          const baseWeight = (qty * (comp.percentage || 0)) / 100;
-          const scrapFactor = 1 + ((comp.scrapPercentage || 0) / 100);
-          const totalWeight = baseWeight * scrapFactor;
-          
-          // Use yarnId if available, otherwise fallback to name
-          const key = comp.yarnId || comp.name; // Note: FabricYarn has 'name', YarnComponent has 'yarnId'
-          
-          if (!totals.has(key)) {
-            totals.set(key, { totalWeight: 0, fabrics: new Map() });
-          }
-          
-          const entry = totals.get(key)!;
-          entry.totalWeight += totalWeight;
-          
-          const currentFabricWeight = entry.fabrics.get(order.material) || 0;
-          entry.fabrics.set(order.material, currentFabricWeight + totalWeight);
-        });
-      }
-    });
-
-    return Array.from(totals.entries()).map(([yarnIdOrName, data]) => {
-      // Try to resolve name if key is an ID
-      const yarn = yarns.find(y => y.id === yarnIdOrName);
-      const name = yarn ? yarn.name : yarnIdOrName;
-      
-      return {
-        id: yarnIdOrName,
-        name: name,
-        weight: data.totalWeight,
-        fabrics: Array.from(data.fabrics.entries()).map(([fabricName, weight]) => ({
-            name: fabricName,
-            weight
-        })).sort((a, b) => b.weight - a.weight)
-      };
-    }).sort((a, b) => b.weight - a.weight);
-  }, [selectedCustomer, fabrics, yarns]);
-
   // DEBUG HELPER
   const getDebugInfo = () => {
     const logs: string[] = [];
@@ -1881,7 +2127,7 @@ export const ClientOrdersPage: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-100px)] bg-slate-50 rounded-xl overflow-hidden border border-slate-200 shadow-sm">
+    <div className="flex flex-col min-h-[calc(100vh-100px)] bg-slate-50 rounded-xl border border-slate-200 shadow-sm">
       <style>{globalStyles}</style>
       
       {/* Top Bar: Client Selection */}
@@ -1950,7 +2196,23 @@ export const ClientOrdersPage: React.FC = () => {
           </button>
 
           <button 
-            onClick={() => setShowDyehouse(!showDyehouse)}
+            onClick={() => {
+              const newState = !showYarnRequirements;
+              setShowYarnRequirements(newState);
+              if (newState) setShowDyehouse(false);
+            }}
+            className={`flex items-center gap-2 px-3 py-2 border text-sm rounded-lg transition-colors font-medium ${showYarnRequirements ? 'bg-indigo-100 border-indigo-300 text-indigo-800' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}
+          >
+            <Package className="w-4 h-4" />
+            {showYarnRequirements ? 'Show Orders' : 'Show Yarn Requirements'}
+          </button>
+
+          <button 
+            onClick={() => {
+              const newState = !showDyehouse;
+              setShowDyehouse(newState);
+              if (newState) setShowYarnRequirements(false);
+            }}
             className={`flex items-center gap-2 px-3 py-2 border text-sm rounded-lg transition-colors font-medium ${showDyehouse ? 'bg-purple-100 border-purple-300 text-purple-800' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}
           >
             <Droplets className="w-4 h-4" />
@@ -2095,7 +2357,7 @@ export const ClientOrdersPage: React.FC = () => {
         ) : selectedCustomer ? (
           <>
             {/* Bulk Actions */}
-            {selectedRows.size > 0 && (
+            {selectedRows.size > 0 && !showYarnRequirements && (
               <div className="absolute top-0 left-0 right-0 z-20 px-4 py-2 bg-blue-50 border-b border-blue-100 flex items-center gap-4 animate-in slide-in-from-top-2 shadow-sm">
                 <span className="text-sm font-medium text-blue-700">{selectedRows.size} rows selected</span>
                 <div className="h-4 w-px bg-blue-200"></div>
@@ -2136,265 +2398,274 @@ export const ClientOrdersPage: React.FC = () => {
               </div>
             )}
 
-            <div className="flex-1 overflow-auto p-4 bg-slate-50">
-              <div className="bg-white rounded-lg shadow border border-slate-200 overflow-visible min-w-max mb-4">
-                <table className="w-full text-sm border-collapse">
-                  <thead className="bg-slate-100 text-slate-600 font-semibold sticky top-0 z-10 shadow-sm text-xs uppercase tracking-wider">
-                    <tr>
-                      <th className="p-3 w-10 border-b border-r border-slate-200 text-center">
-                        <button onClick={toggleSelectAll} className="text-slate-400 hover:text-slate-600">
-                          {selectedCustomer.orders.length > 0 && selectedRows.size === selectedCustomer.orders.length ? (
-                            <CheckSquare className="w-4 h-4 text-blue-600" />
+            <div className="flex-1 p-4 bg-slate-50">
+              {!showYarnRequirements ? (
+                <>
+                  <div className="bg-white rounded-lg shadow border border-slate-200 overflow-x-auto mb-4">
+                    <table className="w-full text-sm border-collapse whitespace-nowrap">
+                      <thead className="bg-slate-100 text-slate-600 font-semibold shadow-sm text-xs uppercase tracking-wider">
+                        <tr>
+                          <th className="p-3 w-10 border-b border-r border-slate-200 text-center">
+                            <button onClick={toggleSelectAll} className="text-slate-400 hover:text-slate-600">
+                              {selectedCustomer.orders.length > 0 && selectedRows.size === selectedCustomer.orders.length ? (
+                                <CheckSquare className="w-4 h-4 text-blue-600" />
+                              ) : (
+                                <Square className="w-4 h-4" />
+                              )}
+                            </button>
+                          </th>
+                          {showDyehouse ? (
+                            <>
+                              <th className="p-3 text-right border-b border-r border-slate-200 min-w-[300px]">القماش</th>
+                              <th className="p-3 text-right border-b border-r border-slate-200 min-w-[120px]">المصبغة</th>
+                              <th className="p-3 text-right border-b border-r border-slate-200 min-w-[200px]">الماكينات</th>
+                              <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي المرسل</th>
+                              <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي المستلم</th>
+                              <th className="p-3 text-center border-b border-r border-slate-200 w-10"></th>
+                            </>
                           ) : (
-                            <Square className="w-4 h-4" />
+                            <>
+                              <th className="p-3 text-left border-b border-r border-slate-200 min-w-[350px]">Fabric</th>
+                              <th className="p-3 text-left border-b border-r border-slate-200 min-w-[140px]">Accessories</th>
+                              <th className="p-3 text-right border-b border-r border-slate-200 w-20">Acc. Qty</th>
+                            </>
                           )}
-                        </button>
-                      </th>
-                      {showDyehouse ? (
-                        <>
-                          <th className="p-3 text-right border-b border-r border-slate-200 min-w-[120px]">القماش</th>
-                          <th className="p-3 text-right border-b border-r border-slate-200 min-w-[120px]">المصبغة</th>
-                          <th className="p-3 text-right border-b border-r border-slate-200 min-w-[200px]">الماكينات</th>
-                          <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي المرسل</th>
-                          <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي المستلم</th>
-                          <th className="p-3 text-center border-b border-r border-slate-200 w-10"></th>
-                        </>
-                      ) : (
-                        <>
-                          <th className="p-3 text-left border-b border-r border-slate-200 min-w-[120px]">Fabric</th>
-                          <th className="p-3 text-left border-b border-r border-slate-200 min-w-[140px]">Accessories</th>
-                          <th className="p-3 text-right border-b border-r border-slate-200 w-20">Acc. Qty</th>
-                        </>
-                      )}
-                      {!showDyehouse && (
-                        <>
-                          <th className="p-3 text-center border-b border-r border-slate-200 min-w-[140px]">Status</th>
-                          <th className="p-3 text-right border-b border-r border-slate-200 w-24">Ordered</th>
-                          <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-slate-50">Remaining</th>
-                          <th className="p-3 text-center border-b border-r border-slate-200 w-24">Receive Date</th>
-                          <th className="p-3 text-center border-b border-r border-slate-200 w-24">Start Date</th>
-                          <th className="p-3 text-center border-b border-r border-slate-200 w-24">End Date</th>
-                          <th className="p-3 text-right border-b border-r border-slate-200 w-20">Scrap</th>
-                          <th className="p-3 text-left border-b border-r border-slate-200 min-w-[100px]">Others</th>
-                          <th className="p-3 text-left border-b border-r border-slate-200 min-w-[150px]">Notes</th>
-                          <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-orange-50">Fab. Deliv</th>
-                          <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-purple-50">Acc. Deliv</th>
-                        </>
-                      )}
-                      {showDyehouse && (
-                         <th className="p-3 text-right border-b border-r border-slate-200 w-24">المطلوب</th>
-                      )}
-                      <th className="p-3 w-10 border-b border-slate-200"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {selectedCustomer.orders.map((row) => {
-                      const statusInfo = row.material ? statsMap.get(row.material) : null;
-                      // If we have active machines, override the remaining qty
-                      if (statusInfo && statusInfo.active.length > 0) {
-                          // statusInfo.remaining is already calculated in the map
-                      }
-                      
-                      const isSelected = selectedRows.has(row.id);
+                          {!showDyehouse && (
+                            <>
+                              <th className="p-3 text-center border-b border-r border-slate-200 w-28">Status</th>
+                              <th className="p-3 text-right border-b border-r border-slate-200 w-20">Ordered</th>
+                              <th className="p-3 text-right border-b border-r border-slate-200 w-20 bg-slate-50">Remaining</th>
+                              <th className="p-3 text-center border-b border-r border-slate-200 w-24">Receive Date</th>
+                              <th className="p-3 text-center border-b border-r border-slate-200 w-24">Start Date</th>
+                              <th className="p-3 text-center border-b border-r border-slate-200 w-24">End Date</th>
+                              <th className="p-3 text-right border-b border-r border-slate-200 w-20">Scrap</th>
+                              <th className="p-3 text-left border-b border-r border-slate-200 min-w-[100px]">Others</th>
+                              <th className="p-3 text-left border-b border-r border-slate-200 w-32">Notes</th>
+                              <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-orange-50">Fab. Deliv</th>
+                              <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-purple-50">Acc. Deliv</th>
+                            </>
+                          )}
+                          {showDyehouse && (
+                             <th className="p-3 text-right border-b border-r border-slate-200 w-24">المطلوب</th>
+                          )}
+                          <th className="p-3 w-10 border-b border-slate-200"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {selectedCustomer.orders.map((row) => {
+                          const statusInfo = row.material ? statsMap.get(row.material) : null;
+                          // If we have active machines, override the remaining qty
+                          if (statusInfo && statusInfo.active.length > 0) {
+                              // statusInfo.remaining is already calculated in the map
+                          }
+                          
+                          const isSelected = selectedRows.has(row.id);
 
-                      return (
-                        <MemoizedOrderRow
-                          key={row.id}
-                          row={row}
-                          statusInfo={statusInfo}
-                          fabrics={fabrics}
-                          isSelected={isSelected}
-                          toggleSelectRow={toggleSelectRow}
-                          handleUpdateOrder={handleUpdateOrder}
-                          handleCreateFabric={handleCreateFabric}
-                          handlePlanSearch={handlePlanSearch}
-                          handleDeleteRow={handleDeleteRow}
-                          selectedCustomerName={selectedCustomer.name}
-                          onOpenFabricDetails={handleOpenFabricDetails}
-                          showDyehouse={showDyehouse}
-                          onOpenCreatePlan={(order) => setCreatePlanModal({ 
-                            isOpen: true, 
-                            order, 
-                            customerName: selectedCustomer.name 
-                          })}
-                          dyehouses={dyehouses}
-                          handleCreateDyehouse={handleCreateDyehouse}
-                          machines={machines}
-                          externalFactories={externalFactories}
-                        />
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                          return (
+                            <MemoizedOrderRow
+                              key={row.id}
+                              row={row}
+                              statusInfo={statusInfo}
+                              fabrics={fabrics}
+                              isSelected={isSelected}
+                              toggleSelectRow={toggleSelectRow}
+                              handleUpdateOrder={handleUpdateOrder}
+                              handleCreateFabric={handleCreateFabric}
+                              handlePlanSearch={handlePlanSearch}
+                              handleDeleteRow={handleDeleteRow}
+                              selectedCustomerName={selectedCustomer.name}
+                              onOpenFabricDetails={handleOpenFabricDetails}
+                              showDyehouse={showDyehouse}
+                              onOpenCreatePlan={(order) => setCreatePlanModal({ 
+                                isOpen: true, 
+                                order, 
+                                customerName: selectedCustomer.name 
+                              })}
+                              dyehouses={dyehouses}
+                              handleCreateDyehouse={handleCreateDyehouse}
+                              machines={machines}
+                              externalFactories={externalFactories}
+                            />
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
 
-              {/* Order Summary & Yarn Requirements */}
-              <div className="mt-4 space-y-4">
-                {/* Order Summary Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-                    <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
-                        <div>
-                            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Ordered</p>
-                            <p className="text-2xl font-bold text-slate-800 mt-1">{orderTotals.ordered.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
-                        </div>
-                        <div className="p-3 bg-blue-50 rounded-full">
-                            <Package className="w-6 h-6 text-blue-600" />
-                        </div>
-                    </div>
-                    
-                    <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
-                        <div>
-                            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Manufactured</p>
-                            <p className="text-2xl font-bold text-emerald-600 mt-1">{orderTotals.manufactured.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
-                        </div>
-                        <div className="p-3 bg-emerald-50 rounded-full">
-                            <CheckCircle2 className="w-6 h-6 text-emerald-600" />
-                        </div>
-                    </div>
-
-                    <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
-                        <div>
-                            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Remaining</p>
-                            <p className="text-2xl font-bold text-amber-600 mt-1">{orderTotals.remaining.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
-                        </div>
-                        <div className="p-3 bg-amber-50 rounded-full">
-                            <AlertCircle className="w-6 h-6 text-amber-600" />
-                        </div>
-                    </div>
-
-                    <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex flex-col justify-center">
-                        <div className="flex justify-between items-end mb-2">
-                            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Progress</p>
-                            <p className="text-lg font-bold text-blue-600">{orderTotals.progress.toFixed(1)}%</p>
-                        </div>
-                        <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
-                            <div 
-                                className="bg-blue-600 h-2.5 rounded-full transition-all duration-500" 
-                                style={{ width: `${Math.min(100, Math.max(0, orderTotals.progress))}%` }}
-                            ></div>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Yarn Requirements Section - Always Visible & Enhanced */}
-                {totalYarnRequirements.length > 0 && (
-                    <div className="mt-8 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden animate-in fade-in duration-500">
-                        <div className="bg-slate-50 px-6 py-4 border-b border-slate-200 flex justify-between items-center">
+                  {/* Order Summary Cards */}
+                  <div className="mt-4 space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
                             <div>
-                                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                                    <Package className="w-5 h-5 text-indigo-600" />
-                                    Yarn Requirements
-                                </h3>
-                                <p className="text-sm text-slate-500 mt-1">
-                                    Calculated based on current orders and fabric compositions
-                                </p>
+                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Ordered</p>
+                                <p className="text-2xl font-bold text-slate-800 mt-1">{orderTotals.ordered.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
                             </div>
-                            <div className="text-sm font-medium text-slate-600 bg-white px-3 py-1 rounded-full border border-slate-200 shadow-sm">
-                                {totalYarnRequirements.length} Unique Yarns
+                            <div className="p-3 bg-blue-50 rounded-full">
+                                <Package className="w-6 h-6 text-blue-600" />
                             </div>
                         </div>
                         
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm text-left">
-                                <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
-                                  <tr>
-                                    <th className="px-6 py-3 w-1/3">Yarn Name</th>
-                                    <th className="px-6 py-3 text-right">Total Requirement</th>
-                                    <th className="px-6 py-3 text-right">Inventory (Total)</th>
-                                    <th className="px-6 py-3 text-right">Net Available</th>
-                                    <th className="px-6 py-3 text-center">Status</th>
-                                    <th className="px-6 py-3 w-20 text-center">Action</th>
-                                  </tr>
-                                </thead>
-                        <tbody className="divide-y divide-slate-100 bg-white">
-                          {totalYarnRequirements.map((yarn, idx) => {
-                            // Inventory Logic
-                            const inventoryItems = inventory.filter(item => 
-                                item.yarnName.toLowerCase().trim() === yarn.name.toLowerCase().trim()
-                            );
-                            
-                            const totalStock = inventoryItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
-                            
-                            let totalAllocated = 0;
-                            let allocatedToThisCustomer = 0;
-                            
-                            inventoryItems.forEach(item => {
-                                if (item.allocations) {
-                                    item.allocations.forEach(alloc => {
-                                        totalAllocated += (alloc.quantity || 0);
-                                        if (alloc.customerId === selectedCustomerId) {
-                                            allocatedToThisCustomer += (alloc.quantity || 0);
-                                        }
-                                    });
-                                }
-                            });
-                            
-                            const netAvailable = totalStock - totalAllocated;
-                            const availableForThisCustomer = netAvailable + allocatedToThisCustomer;
-                            const isEnough = availableForThisCustomer >= yarn.weight;
-                            const deficit = yarn.weight - availableForThisCustomer;
+                        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
+                            <div>
+                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Manufactured</p>
+                                <p className="text-2xl font-bold text-emerald-600 mt-1">{orderTotals.manufactured.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
+                            </div>
+                            <div className="p-3 bg-emerald-50 rounded-full">
+                                <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+                            </div>
+                        </div>
 
-                            return (
-                                <tr 
-                                key={idx}
-                                onClick={() => setYarnBreakdownModal({ 
-                                    isOpen: true, 
-                                    yarnName: yarn.name, 
-                                    totalWeight: yarn.weight,
-                                    fabrics: yarn.fabrics
-                                })}
-                                className="hover:bg-blue-50 cursor-pointer transition-colors group"
-                                >
-                                <td className="px-4 py-3 font-medium text-slate-700 group-hover:text-blue-700">
-                                    {yarn.name}
-                                </td>
-                                <td className="px-4 py-3 text-right font-mono font-bold text-slate-700 group-hover:text-blue-700">
-                                    {yarn.weight.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
-                                </td>
-                                <td className="px-4 py-3 text-right font-mono text-slate-600">
-                                    {totalStock.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
-                                </td>
-                                <td 
-                                    onClick={(e) => {
-                                        e.stopPropagation(); // Prevent row click
-                                        setLotDetailsModal({
-                                            isOpen: true,
-                                            yarnName: yarn.name,
-                                            lots: inventoryItems
-                                        });
-                                    }}
-                                    className={`px-4 py-3 text-right font-mono font-bold cursor-pointer hover:underline ${availableForThisCustomer < yarn.weight ? 'text-red-600' : 'text-emerald-600'}`}
-                                    title="Click to view available lots"
-                                >
-                                    {availableForThisCustomer.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
-                                </td>
-                                <td className="px-4 py-3 text-center">
-                                    {isEnough ? (
-                                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-bold">
-                                            <CheckCircle2 size={12} />
-                                            Available
-                                        </span>
-                                    ) : (
-                                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-bold" title={`Shortage: ${deficit.toFixed(1)} kg`}>
-                                            <AlertCircle size={12} />
-                                            Shortage
-                                        </span>
-                                    )}
-                                </td>
-                                <td className="px-4 py-3 text-center">
-                                    <button className="p-1 rounded-full bg-slate-100 text-slate-500 group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors">
-                                    <Search className="w-4 h-4" />
-                                    </button>
-                                </td>
-                                </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
+                            <div>
+                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Remaining</p>
+                                <p className="text-2xl font-bold text-amber-600 mt-1">{orderTotals.remaining.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
+                            </div>
+                            <div className="p-3 bg-amber-50 rounded-full">
+                                <AlertCircle className="w-6 h-6 text-amber-600" />
+                            </div>
+                        </div>
+
+                        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex flex-col justify-center">
+                            <div className="flex justify-between items-end mb-2">
+                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Progress</p>
+                                <p className="text-lg font-bold text-blue-600">{orderTotals.progress.toFixed(1)}%</p>
+                            </div>
+                            <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                                <div 
+                                    className="bg-blue-600 h-2.5 rounded-full transition-all duration-500" 
+                                    style={{ width: `${Math.min(100, Math.max(0, orderTotals.progress))}%` }}
+                                ></div>
+                            </div>
+                        </div>
                     </div>
+                  </div>
+                </>
+              ) : (
+                /* Yarn Requirements View */
+                <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden animate-in fade-in duration-300">
+                    <div className="bg-slate-50 px-6 py-4 border-b border-slate-200 flex justify-between items-center">
+                        <div>
+                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                <Package className="w-5 h-5 text-indigo-600" />
+                                Yarn Requirements
+                            </h3>
+                            <p className="text-sm text-slate-500 mt-1">
+                                Calculated based on current orders and fabric compositions
+                            </p>
+                        </div>
+                        <div className="text-sm font-medium text-slate-600 bg-white px-3 py-1 rounded-full border border-slate-200 shadow-sm">
+                            {totalYarnRequirements.length} Unique Yarns
+                        </div>
+                    </div>
+                    
+                    {totalYarnRequirements.length > 0 ? (
+                      <div className="overflow-x-auto">
+                          <table className="w-full text-sm text-left">
+                              <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+                                <tr>
+                                  <th className="px-6 py-3 w-1/3">Yarn Name</th>
+                                  <th className="px-6 py-3 text-right">Total Requirement</th>
+                                  <th className="px-6 py-3 text-right">Inventory (Total)</th>
+                                  <th className="px-6 py-3 text-right">Net Available</th>
+                                  <th className="px-6 py-3 text-center">Status</th>
+                                  <th className="px-6 py-3 w-20 text-center">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 bg-white">
+                                {totalYarnRequirements.map((yarn, idx) => {
+                                  // Inventory Logic
+                                  const inventoryItems = inventory.filter(item => 
+                                      item.yarnName.toLowerCase().trim() === yarn.name.toLowerCase().trim()
+                                  );
+                                  
+                                  const totalStock = inventoryItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
+                                  
+                                  let totalAllocated = 0;
+                                  let allocatedToThisCustomer = 0;
+                                  
+                                  inventoryItems.forEach(item => {
+                                      if (item.allocations) {
+                                          item.allocations.forEach(alloc => {
+                                              totalAllocated += (alloc.quantity || 0);
+                                              if (alloc.customerId === selectedCustomerId) {
+                                                  allocatedToThisCustomer += (alloc.quantity || 0);
+                                              }
+                                          });
+                                      }
+                                  });
+                                  
+                                  const netAvailable = totalStock - totalAllocated;
+                                  const availableForThisCustomer = netAvailable + allocatedToThisCustomer;
+                                  const isEnough = availableForThisCustomer >= yarn.weight;
+                                  const deficit = yarn.weight - availableForThisCustomer;
+
+                                  return (
+                                      <tr 
+                                      key={idx}
+                                      onClick={() => setYarnBreakdownModal({ 
+                                          isOpen: true, 
+                                          yarnName: yarn.name, 
+                                          totalWeight: yarn.weight,
+                                          fabrics: yarn.fabrics
+                                      })}
+                                      className="hover:bg-blue-50 cursor-pointer transition-colors group"
+                                      >
+                                      <td className="px-4 py-3 font-medium text-slate-700 group-hover:text-blue-700">
+                                          {yarn.name}
+                                      </td>
+                                      <td className="px-4 py-3 text-right font-mono font-bold text-slate-700 group-hover:text-blue-700">
+                                          {yarn.weight.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+                                      </td>
+                                      <td className="px-4 py-3 text-right font-mono text-slate-600">
+                                          {totalStock.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+                                      </td>
+                                      <td 
+                                          onClick={(e) => {
+                                              e.stopPropagation(); // Prevent row click
+                                              setLotDetailsModal({
+                                                  isOpen: true,
+                                                  yarnName: yarn.name,
+                                                  lots: inventoryItems
+                                              });
+                                          }}
+                                          className={`px-4 py-3 text-right font-mono font-bold cursor-pointer hover:underline ${availableForThisCustomer < yarn.weight ? 'text-red-600' : 'text-emerald-600'}`}
+                                          title="Click to view available lots"
+                                      >
+                                          {availableForThisCustomer.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+                                      </td>
+                                      <td className="px-4 py-3 text-center">
+                                          {isEnough ? (
+                                              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-bold">
+                                                  <CheckCircle2 size={12} />
+                                                  Available
+                                              </span>
+                                          ) : (
+                                              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-bold" title={`Shortage: ${deficit.toFixed(1)} kg`}>
+                                                  <AlertCircle size={12} />
+                                                  Shortage
+                                              </span>
+                                          )}
+                                      </td>
+                                      <td className="px-4 py-3 text-center">
+                                          <button className="p-1 rounded-full bg-slate-100 text-slate-500 group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors">
+                                          <Search className="w-4 h-4" />
+                                          </button>
+                                      </td>
+                                      </tr>
+                                  );
+                                })}
+                              </tbody>
+                          </table>
+                      </div>
+                    ) : (
+                      <div className="p-12 text-center text-slate-500">
+                        <Package className="w-16 h-16 mx-auto mb-4 text-slate-300" />
+                        <p className="text-lg font-medium">No yarn requirements found.</p>
+                        <p className="text-sm text-slate-400 mt-2">Add orders with fabric compositions to see requirements here.</p>
+                      </div>
+                    )}
                 </div>
-                )}
-              </div>
+              )}
             </div>
           </>
         ) : (

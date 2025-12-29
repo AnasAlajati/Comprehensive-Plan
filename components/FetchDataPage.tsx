@@ -9,7 +9,7 @@ import { LinkOrderModal } from './LinkOrderModal';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
-import { CheckCircle, Send, Link, Truck, Layout, Factory, FileSpreadsheet, Upload, X, Check, Sparkles, Edit, ArrowRight, History, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+import { CheckCircle, Send, Link, Truck, Layout, Factory, FileSpreadsheet, Upload, X, Check, Sparkles, Edit, ArrowRight, History, CheckCircle2, XCircle, AlertTriangle, Download } from 'lucide-react';
 import { ExternalProductionSheet } from './ExternalProductionSheet'; // New Component - Force Refresh
 
 // Navigable fields across the whole row (including read-only) for smooth Excel-like movement
@@ -164,9 +164,13 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
   const [inputValue, setInputValue] = useState(value);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Helper to get display label
+  const getLabel = (opt: any) => opt.shortName || opt.name;
+
   useEffect(() => {
-    setInputValue(value);
-  }, [value]);
+    const selected = options.find(o => o.name === value);
+    setInputValue(selected ? getLabel(selected) : value);
+  }, [value, options]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -191,12 +195,12 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
   }, [id]);
 
   const filteredOptions = options.filter(opt =>
-    opt.name.toLowerCase().includes(searchTerm.toLowerCase())
+    getLabel(opt).toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const handleSelect = (optionName: string) => {
-    setInputValue(optionName);
-    onChange(optionName);
+  const handleSelect = (option: any) => {
+    setInputValue(getLabel(option));
+    onChange(option.name);
     setSearchTerm('');
     setIsOpen(false);
   };
@@ -260,10 +264,10 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
               {filteredOptions.map((opt) => (
                 <div
                   key={opt.id}
-                  onClick={() => handleSelect(opt.name)}
+                  onClick={() => handleSelect(opt)}
                   className="px-2 py-1.5 hover:bg-blue-50 cursor-pointer text-xs border-b border-slate-100 last:border-b-0"
                 >
-                  {opt.name}
+                  {getLabel(opt)}
                 </div>
               ))}
               {searchTerm && !options.some(o => o.name.toLowerCase() === searchTerm.toLowerCase()) && (
@@ -309,7 +313,159 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [isNewDay, setIsNewDay] = useState(false);
   const [reportStarted, setReportStarted] = useState(false);
   const [sourceDate, setSourceDate] = useState<string>('');
+  const [fetchModalOpen, setFetchModalOpen] = useState(false);
+  const [fetchSourceDate, setFetchSourceDate] = useState<string>('');
+  const [lastValidDate, setLastValidDate] = useState<string>('');
   const printRef = useRef<HTMLDivElement>(null);
+
+  const handleExportBackup = () => {
+    try {
+      const backupData = {
+        metadata: {
+          date: selectedDate,
+          timestamp: new Date().toISOString(),
+          version: '1.0'
+        },
+        logs: filteredLogs.map(log => ({
+          machineId: log.machineId,
+          status: log.status,
+          customStatusNote: log.customStatusNote || '',
+          client: log.client,
+          fabric: log.fabric,
+          dayProduction: Number(log.dayProduction) || 0,
+          avgProduction: Number(log.avgProduction) || 0,
+          scrap: Number(log.scrap) || 0,
+          reason: log.reason || '',
+          remainingMfg: Number(log.remainingMfg) || 0, // CRITICAL: Save exact value
+          orderReference: log.orderReference || '',
+          orderId: log.orderId || ''
+        }))
+      };
+
+      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `DailyLog_${selectedDate}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      showMessage('✅ Backup exported successfully');
+    } catch (error) {
+      console.error('Export failed:', error);
+      showMessage('❌ Export failed', true);
+    }
+  };
+
+  const handleImportBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Reset input so same file can be selected again
+    e.target.value = '';
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const content = evt.target?.result as string;
+        const backup = JSON.parse(content);
+        
+        // Validation
+        if (!backup.metadata || !backup.logs || !Array.isArray(backup.logs)) {
+          throw new Error('Invalid backup file format');
+        }
+
+        if (backup.metadata.date !== selectedDate) {
+          if (!window.confirm(`⚠️ Date Mismatch!\n\nFile Date: ${backup.metadata.date}\nCurrent View: ${selectedDate}\n\nDo you want to proceed and OVERWRITE data for ${selectedDate}?`)) {
+            return;
+          }
+        } else {
+           if (!window.confirm(`⚠️ This will OVERWRITE all data for ${selectedDate} with the backup file.\n\nAre you sure?`)) {
+             return;
+           }
+        }
+
+        setLoading(true);
+        
+        // Process Import
+        const machines = await DataService.getMachinesFromMachineSS();
+        const updatePromises: Promise<void>[] = [];
+        let updatedCount = 0;
+
+        for (const log of backup.logs) {
+           const machineId = String(log.machineId);
+           const machine = machines.find(m => String(m.id) === machineId);
+           
+           if (machine) {
+              // Construct Log Entry
+              const newLogEntry = {
+                id: selectedDate,
+                date: selectedDate,
+                dayProduction: log.dayProduction,
+                scrap: log.scrap,
+                reason: log.reason,
+                status: log.status,
+                fabric: log.fabric,
+                client: log.client,
+                avgProduction: log.avgProduction,
+                remainingMfg: log.remainingMfg, // CRITICAL: Force value from file
+                customStatusNote: log.customStatusNote,
+                orderReference: log.orderReference,
+                orderId: log.orderId,
+                timestamp: new Date().toISOString()
+              };
+
+              const currentLogs = machine.dailyLogs || [];
+              const existingLogIndex = currentLogs.findIndex((l: any) => l.date === selectedDate);
+              
+              let updatedLogs = [...currentLogs];
+              if (existingLogIndex >= 0) {
+                updatedLogs[existingLogIndex] = { ...updatedLogs[existingLogIndex], ...newLogEntry };
+              } else {
+                updatedLogs.push(newLogEntry);
+              }
+
+              // 1. Update Array (Legacy)
+              const updatePromise = DataService.updateMachineInMachineSS(machineId, {
+                dailyLogs: updatedLogs,
+                lastLogDate: selectedDate,
+                lastLogData: {
+                   date: selectedDate,
+                   dayProduction: newLogEntry.dayProduction,
+                   scrap: newLogEntry.scrap,
+                   status: newLogEntry.status,
+                   fabric: newLogEntry.fabric,
+                   client: newLogEntry.client,
+                   remainingMfg: newLogEntry.remainingMfg,
+                   reason: newLogEntry.reason,
+                   customStatusNote: newLogEntry.customStatusNote
+                },
+                lastUpdated: new Date().toISOString()
+              });
+
+              // 2. Update Sub-collection
+              const subCollectionPromise = DataService.updateDailyLog(machineId, selectedDate, newLogEntry);
+
+              updatePromises.push(Promise.all([updatePromise, subCollectionPromise]).then(() => {}));
+              updatedCount++;
+           }
+        }
+
+        await Promise.all(updatePromises);
+        await handleFetchLogs(selectedDate);
+        showMessage(`✅ Successfully restored ${updatedCount} logs from backup`);
+
+      } catch (error: any) {
+        console.error('Import failed:', error);
+        showMessage('❌ Import failed: ' + error.message, true);
+      } finally {
+        setLoading(false);
+      }
+    };
+    reader.readAsText(file);
+  };
 
   const handleSendReport = async () => {
     if (isReportSent) return; // Prevent double send if already sent
@@ -1040,7 +1196,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         const subLogRef = doc(db, 'MachineSS', String(machine.id), 'dailyLogs', item.importDate);
         batch.set(subLogRef, {
           ...newLog,
-          machineId: Number(machine.id),
+          machineId: machine.id,
           timestamp: new Date().toISOString()
         }, { merge: true });
       }
@@ -1106,17 +1262,39 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [customerOrders, setCustomerOrders] = useState<any[]>([]);
 
   const loadFabricsAndClients = async () => {
+    // 1. Load from Local Storage (Cache) first for offline support
+    const cachedFabrics = localStorage.getItem('cached_fabrics');
+    const cachedClients = localStorage.getItem('cached_clients');
+    
+    if (cachedFabrics) {
+      try {
+        setFabrics(JSON.parse(cachedFabrics));
+      } catch (e) { console.error("Error parsing cached fabrics", e); }
+    }
+    
+    if (cachedClients) {
+      try {
+        setClients(JSON.parse(cachedClients));
+      } catch (e) { console.error("Error parsing cached clients", e); }
+    }
+
     try {
       const [fabricsData, clientsData, ordersData] = await Promise.all([
         DataService.getFabrics(),
         DataService.getClients(),
         DataService.getCustomerOrders()
       ]);
+      
+      // 2. Update State & Cache
       setFabrics(fabricsData);
       setClients(clientsData);
       setCustomerOrders(ordersData);
+      
+      localStorage.setItem('cached_fabrics', JSON.stringify(fabricsData));
+      localStorage.setItem('cached_clients', JSON.stringify(clientsData));
+      
     } catch (error) {
-      console.error('Error loading fabrics and clients:', error);
+      console.error('Error loading fabrics and clients (Offline mode active):', error);
     }
   };
 
@@ -1316,6 +1494,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     }
     
     setIsNewDay(false);
+    setLastValidDate(date);
 
     // Check if any machine is missing a log for this date and create it
     const updatedMachines = machines.map((machine) => {
@@ -1386,7 +1565,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     const endTime = performance.now();
     const timeTaken = (endTime - startTime).toFixed(2);
     setFetchTime(parseFloat(timeTaken));
-  }, []);
+  }, [reportStarted]);
 
   const handleFetchLogs = useCallback(async (date: string) => {
     // Legacy function kept for compatibility, but now just triggers processLogs if we have data
@@ -1653,9 +1832,26 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       }
 
       if (field === 'fabric') {
-        await DataService.addFabric({ name: newName });
-        const updatedFabrics = await DataService.getFabrics();
-        setFabrics(updatedFabrics);
+        // 1. Optimistic Local Update (Immediate Feedback)
+        const newFabricObj = { id: 'temp_' + Date.now(), name: newName };
+        // Check if already exists to avoid duplicates
+        if (!fabrics.some(f => f.name.toLowerCase() === newName.toLowerCase())) {
+            const newFabricsList = [...fabrics, newFabricObj].sort((a, b) => a.name.localeCompare(b.name));
+            setFabrics(newFabricsList);
+            localStorage.setItem('cached_fabrics', JSON.stringify(newFabricsList));
+        }
+
+        // 2. Try Server Update (Background)
+        try {
+            await DataService.addFabric({ name: newName });
+            // If online, fetch the real list with real IDs
+            const updatedFabrics = await DataService.getFabrics();
+            setFabrics(updatedFabrics);
+            localStorage.setItem('cached_fabrics', JSON.stringify(updatedFabrics));
+        } catch (e) {
+            console.warn("Offline: Fabric saved locally only", e);
+            showMessage(`⚠️ Offline: "${newName}" saved locally`, false);
+        }
         
         // Trigger Smart Link Check
         const currentClient = updatedLogs[logIndex].client;
@@ -1664,9 +1860,23 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         }
 
       } else if (field === 'client') {
-        await DataService.addClient({ name: newName });
-        const updatedClients = await DataService.getClients();
-        setClients(updatedClients);
+        // 1. Optimistic Local Update
+        const newClientObj = { id: 'temp_' + Date.now(), name: newName };
+        if (!clients.some(c => c.name.toLowerCase() === newName.toLowerCase())) {
+            const newClientsList = [...clients, newClientObj].sort((a, b) => a.name.localeCompare(b.name));
+            setClients(newClientsList);
+            localStorage.setItem('cached_clients', JSON.stringify(newClientsList));
+        }
+
+        try {
+            await DataService.addClient({ name: newName });
+            const updatedClients = await DataService.getClients();
+            setClients(updatedClients);
+            localStorage.setItem('cached_clients', JSON.stringify(updatedClients));
+        } catch (e) {
+             console.warn("Offline: Client saved locally only", e);
+             showMessage(`⚠️ Offline: "${newName}" saved locally`, false);
+        }
 
         // Trigger Smart Link Check
         const currentFabric = updatedLogs[logIndex].fabric;
@@ -2289,6 +2499,68 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       {/* Inject global styles to hide number input spinners */}
       <style>{globalStyles}</style>
 
+      {/* Fetch Data Modal */}
+      {fetchModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-200">
+            <div className="bg-blue-600 px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="bg-white/20 p-2 rounded-lg">
+                  <History className="text-white" size={24} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Fetch Previous Data</h3>
+                  <p className="text-blue-100 text-xs">Select source date to copy from</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setFetchModalOpen(false)}
+                className="text-white/70 hover:text-white hover:bg-white/10 p-1 rounded-full transition-colors"
+                title="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-6">
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-700">
+                  Source Date:
+                </label>
+                <div className="relative">
+                  <input 
+                    type="date" 
+                    value={fetchSourceDate}
+                    onChange={(e) => setFetchSourceDate(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                  />
+                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                    <History size={18} />
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500">
+                  This will copy machine status, fabric, and client from the selected date and calculate the new remaining quantity.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={() => {
+                    handleFetchFromPreviousDay(fetchSourceDate);
+                    setFetchModalOpen(false);
+                  }}
+                  disabled={!fetchSourceDate}
+                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl shadow-lg shadow-blue-200 transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
+                >
+                  <span>Fetch Data</span>
+                  <ArrowRight size={18} />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Start New Report Modal */}
       {isNewDay && !loading && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
@@ -2304,7 +2576,15 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 </div>
               </div>
               <button 
-                onClick={() => setReportStarted(true)}
+                onClick={() => {
+                  if (lastValidDate) {
+                    setSelectedDate(lastValidDate);
+                    handleFetchLogs(lastValidDate);
+                  } else {
+                    // Fallback if no history (e.g. first load on empty day)
+                    setReportStarted(true);
+                  }
+                }}
                 className="text-white/70 hover:text-white hover:bg-white/10 p-1 rounded-full transition-colors"
                 title="Close"
               >
@@ -2439,11 +2719,16 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
               </button>
             )}
             <button
-              onClick={handleFetchFromPreviousDay}
+              onClick={() => {
+                const dateObj = new Date(selectedDate);
+                dateObj.setDate(dateObj.getDate() - 1);
+                setFetchSourceDate(dateObj.toISOString().split('T')[0]);
+                setFetchModalOpen(true);
+              }}
               className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-md text-xs font-bold shadow-sm transition-colors flex items-center gap-1"
-              title="Copy status and fabric from yesterday, and calculate new remaining quantity"
+              title="Copy status and fabric from a previous date"
             >
-              <span>↺</span> Fetch Yesterday
+              <span>↺</span> Fetch Data
             </button>
             <button
               onClick={() => setShowImportModal(true)}
@@ -2453,6 +2738,24 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
               <FileSpreadsheet size={14} />
               Import ODOO
             </button>
+            <button
+              onClick={handleExportBackup}
+              className="bg-slate-600 hover:bg-slate-700 text-white px-3 py-1 rounded-md text-xs font-bold shadow-sm transition-colors flex items-center gap-1"
+              title="Download JSON Backup"
+            >
+              <Download size={14} />
+              Export JSON
+            </button>
+            <label className="bg-slate-600 hover:bg-slate-700 text-white px-3 py-1 rounded-md text-xs font-bold shadow-sm transition-colors flex items-center gap-1 cursor-pointer">
+              <Upload size={14} />
+              Import JSON
+              <input
+                type="file"
+                accept=".json"
+                onChange={handleImportBackup}
+                className="hidden"
+              />
+            </label>
           </div>
           <div className="flex gap-3">
             <button
