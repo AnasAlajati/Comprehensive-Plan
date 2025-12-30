@@ -93,7 +93,7 @@ export const DataService = {
   },
 
   async addFabric(fabric: Omit<Fabric, 'id'>): Promise<string> {
-    const docRef = await addDoc(collection(db, 'fabrics'), {
+    const docRef = await addDoc(collection(db, 'FabricSS'), {
       ...fabric,
       createdAt: Timestamp.now()
     });
@@ -103,7 +103,7 @@ export const DataService = {
 
 
   async addClient(client: Omit<Client, 'id'>): Promise<string> {
-    const docRef = await addDoc(collection(db, 'clients'), {
+    const docRef = await addDoc(collection(db, 'CustomerSheets'), {
       ...client,
       createdAt: Timestamp.now()
     });

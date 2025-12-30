@@ -80,7 +80,7 @@ export const OrdersPage: React.FC = () => {
           setYarnInventory(data);
       });
 
-      const unsubFabrics = onSnapshot(collection(db, 'fabrics'), (snapshot) => {
+      const unsubFabrics = onSnapshot(collection(db, 'FabricSS'), (snapshot) => {
           const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as FabricDefinition));
           setFabrics(data);
       });

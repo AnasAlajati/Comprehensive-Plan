@@ -9,8 +9,10 @@ import { LinkOrderModal } from './LinkOrderModal';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
-import { CheckCircle, Send, Link, Truck, Layout, Factory, FileSpreadsheet, Upload, X, Check, Sparkles, Edit, ArrowRight, History, CheckCircle2, XCircle, AlertTriangle, Download } from 'lucide-react';
+import { CheckCircle, Send, Link, Truck, Layout, Factory, FileSpreadsheet, Upload, X, Check, Sparkles, Edit, ArrowRight, History, CheckCircle2, XCircle, AlertTriangle, Download, Plus, Search, Calendar, FileText, Book } from 'lucide-react';
 import { ExternalProductionSheet } from './ExternalProductionSheet'; // New Component - Force Refresh
+import { FabricFormModal } from './FabricFormModal';
+import { FabricDirectoryModal } from './FabricDirectoryModal';
 
 // Navigable fields across the whole row (including read-only) for smooth Excel-like movement
 const NAVIGABLE_FIELDS: (keyof any)[] = [
@@ -102,10 +104,11 @@ interface SearchDropdownProps {
   options: any[];
   value: string;
   onChange: (value: string) => void;
-  onCreateNew: () => void;
+  onCreateNew?: () => void;
   onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
   onFocus?: () => void;
   placeholder?: string;
+  strict?: boolean;
 }
 
 interface StagedLog {
@@ -157,7 +160,8 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
   onCreateNew,
   onKeyDown,
   onFocus,
-  placeholder = '---'
+  placeholder = '---',
+  strict = false
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -225,6 +229,24 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
   };
 
   const handleInputBlur = () => {
+    // Strict Mode: Clear if not in options
+    if (strict && inputValue.trim()) {
+      const match = options.find(opt => 
+        getLabel(opt).toLowerCase() === inputValue.toLowerCase() || 
+        opt.name.toLowerCase() === inputValue.toLowerCase()
+      );
+      
+      if (!match) {
+        setInputValue('');
+        onChange('');
+      } else {
+        // Normalize to the correct name if it was a case-insensitive match
+        if (match.name !== value) {
+            onChange(match.name);
+        }
+      }
+    }
+
     // Delay closing to allow clicks on dropdown items to register
     setTimeout(() => setIsOpen(false), 150);
   };
@@ -270,7 +292,7 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
                   {getLabel(opt)}
                 </div>
               ))}
-              {searchTerm && !options.some(o => o.name.toLowerCase() === searchTerm.toLowerCase()) && (
+              {searchTerm && onCreateNew && !options.some(o => o.name.toLowerCase() === searchTerm.toLowerCase()) && (
                 <div
                   onClick={handleCreateNew}
                   className="px-2 py-1.5 hover:bg-emerald-50 cursor-pointer text-xs border-t border-slate-200 text-emerald-600 font-medium"
@@ -279,7 +301,7 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
                 </div>
               )}
             </>
-          ) : searchTerm ? (
+          ) : searchTerm && onCreateNew ? (
             <div
               onClick={handleCreateNew}
               className="px-2 py-1.5 hover:bg-emerald-50 cursor-pointer text-xs text-emerald-600 font-medium"
@@ -316,6 +338,21 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [fetchModalOpen, setFetchModalOpen] = useState(false);
   const [fetchSourceDate, setFetchSourceDate] = useState<string>('');
   const [lastValidDate, setLastValidDate] = useState<string>('');
+  const [isFabricModalOpen, setIsFabricModalOpen] = useState(false);
+  const [isFabricDirectoryOpen, setIsFabricDirectoryOpen] = useState(false);
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    type: 'fabric' | 'client';
+    name: string;
+    machineId: string;
+    logId: string;
+  }>({
+    isOpen: false,
+    type: 'fabric',
+    name: '',
+    machineId: '',
+    logId: ''
+  });
   const printRef = useRef<HTMLDivElement>(null);
 
   const handleExportBackup = () => {
@@ -569,8 +606,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [fetchTime, setFetchTime] = useState<number>(0);
-  const [inlineCreateModal, setInlineCreateModal] = useState<{ type: 'fabric' | 'client' | null; isOpen: boolean; machineId: string; logId: string; newName?: string }>({ type: null, isOpen: false, machineId: '', logId: '' });
-  const [inlineCreateForm, setInlineCreateForm] = useState({ name: '' });
   const [linkModalOpen, setLinkModalOpen] = useState<{ isOpen: boolean; machine: MachineRow | null }>({ isOpen: false, machine: null });
   const [plansModalOpen, setPlansModalOpen] = useState<{ isOpen: boolean; machineId: string; machineName: string; plans: PlanItem[] }>({ isOpen: false, machineId: '', machineName: '', plans: [] });
   const [addPlanModal, setAddPlanModal] = useState<{ isOpen: boolean; type: 'PRODUCTION' | 'SETTINGS' }>({ isOpen: false, type: 'PRODUCTION' });
@@ -607,6 +642,22 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [externalProduction, setExternalProduction] = useState<number>(0);
   const [showExternalSheet, setShowExternalSheet] = useState(false); // Toggle for External Sheet
   
+  const handleSaveFabric = async (formData: any) => {
+    if (!formData.name) return;
+    setLoading(true);
+    try {
+      await DataService.addFabric(formData);
+      const updatedFabrics = await DataService.getFabrics();
+      setFabrics(updatedFabrics);
+      setIsFabricModalOpen(false);
+      showMessage('✅ Fabric added successfully');
+    } catch (error: any) {
+      showMessage('❌ Error adding fabric: ' + error.message, true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Import ODOO State
   const [showImportModal, setShowImportModal] = useState(false);
   const [importPreview, setImportPreview] = useState<StagedLog[]>([]);
@@ -1791,127 +1842,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     }
   };
 
-  const handleInlineCreateItem = async (machineId: string, logId: string, field: 'fabric' | 'client', newName: string) => {
-    if (!newName.trim()) {
-      showMessage('❌ Please enter a name', true);
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const machines = await DataService.getMachinesFromMachineSS();
-      const machine = machines.find(m => m.id === machineId);
-      if (!machine) return;
-
-      const updatedLogs = [...(machine.dailyLogs || [])];
-      
-      // Check if log exists for the selected date
-      let logIndex = updatedLogs.findIndex(log => log.date === selectedDate);
-      
-      if (logIndex < 0) {
-        // Create new log for this date
-        const newLog = {
-          id: selectedDate, // Use date as ID
-          date: selectedDate,
-          dayProduction: 0,
-          scrap: 0,
-          status: machine.status || '',
-          fabric: '',
-          client: '',
-          avgProduction: machine.avgProduction || 0,
-          remainingMfg: 0,
-          reason: '',
-          timestamp: new Date().toISOString()
-        };
-        newLog[field] = newName;
-        updatedLogs.push(newLog);
-        logIndex = updatedLogs.length - 1;
-      } else {
-        // Update existing log
-        updatedLogs[logIndex][field] = newName;
-      }
-
-      if (field === 'fabric') {
-        // 1. Optimistic Local Update (Immediate Feedback)
-        const newFabricObj = { id: 'temp_' + Date.now(), name: newName };
-        // Check if already exists to avoid duplicates
-        if (!fabrics.some(f => f.name.toLowerCase() === newName.toLowerCase())) {
-            const newFabricsList = [...fabrics, newFabricObj].sort((a, b) => a.name.localeCompare(b.name));
-            setFabrics(newFabricsList);
-            localStorage.setItem('cached_fabrics', JSON.stringify(newFabricsList));
-        }
-
-        // 2. Try Server Update (Background)
-        try {
-            await DataService.addFabric({ name: newName });
-            // If online, fetch the real list with real IDs
-            const updatedFabrics = await DataService.getFabrics();
-            setFabrics(updatedFabrics);
-            localStorage.setItem('cached_fabrics', JSON.stringify(updatedFabrics));
-        } catch (e) {
-            console.warn("Offline: Fabric saved locally only", e);
-            showMessage(`⚠️ Offline: "${newName}" saved locally`, false);
-        }
-        
-        // Trigger Smart Link Check
-        const currentClient = updatedLogs[logIndex].client;
-        if (currentClient) {
-            checkSmartLink(machineId, logId, currentClient, newName);
-        }
-
-      } else if (field === 'client') {
-        // 1. Optimistic Local Update
-        const newClientObj = { id: 'temp_' + Date.now(), name: newName };
-        if (!clients.some(c => c.name.toLowerCase() === newName.toLowerCase())) {
-            const newClientsList = [...clients, newClientObj].sort((a, b) => a.name.localeCompare(b.name));
-            setClients(newClientsList);
-            localStorage.setItem('cached_clients', JSON.stringify(newClientsList));
-        }
-
-        try {
-            await DataService.addClient({ name: newName });
-            const updatedClients = await DataService.getClients();
-            setClients(updatedClients);
-            localStorage.setItem('cached_clients', JSON.stringify(updatedClients));
-        } catch (e) {
-             console.warn("Offline: Client saved locally only", e);
-             showMessage(`⚠️ Offline: "${newName}" saved locally`, false);
-        }
-
-        // Trigger Smart Link Check
-        const currentFabric = updatedLogs[logIndex].fabric;
-        if (currentFabric) {
-            checkSmartLink(machineId, logId, newName, currentFabric);
-        }
-      }
-
-      const updatePayload: any = {
-        dailyLogs: updatedLogs,
-        lastUpdated: new Date().toISOString()
-      };
-
-      // Sync with Root Machine Fields if this is the Active Day
-      if (selectedDate === activeDay) {
-          const currentLog = updatedLogs[logIndex];
-          updatePayload.status = currentLog.status;
-          updatePayload.client = currentLog.client;
-          updatePayload.material = currentLog.fabric;
-          updatePayload.remainingMfg = currentLog.remainingMfg;
-          updatePayload.dayProduction = currentLog.dayProduction;
-          updatePayload.reason = currentLog.reason;
-      }
-
-      await DataService.updateMachineInMachineSS(machineId, updatePayload);
-
-      setInlineCreateModal({ type: null, isOpen: false, machineId: '', logId: '' });
-      setInlineCreateForm({ name: '' });
-      await handleFetchLogs(selectedDate);
-      showMessage(`✅ ${field === 'fabric' ? 'Fabric' : 'Client'} created and selected`);
-    } catch (error: any) {
-      showMessage('❌ Error: ' + error.message, true);
-    }
-    setLoading(false);
-  };
 
   const openPlansModal = async (machineId: string, machineName: string) => {
     try {
@@ -2643,152 +2573,198 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       <div className="max-w-[1400px] mx-auto flex flex-col gap-4">
 
         {/* Header with Date and Export */}
-        <div className="flex flex-wrap items-center justify-between bg-white p-3 rounded-xl border border-slate-200 shadow-sm gap-3">
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className="text-sm font-bold text-slate-500 uppercase tracking-wider">Report Date:</span>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => {
-                setSelectedDate(e.target.value);
-                handleFetchLogs(e.target.value);
-              }}
-              className="bg-slate-50 border border-slate-300 text-slate-700 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2 outline-none font-medium shadow-sm"
-            />
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-4">
+          
+          {/* Top Row: Date, Filters, Sync */}
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
+            
+            {/* Date Selection */}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Date:</span>
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => {
+                    setSelectedDate(e.target.value);
+                    handleFetchLogs(e.target.value);
+                  }}
+                  className="bg-transparent text-slate-700 text-sm font-medium outline-none cursor-pointer"
+                />
+              </div>
+              
+              {/* Sync Status */}
+              <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200 text-xs font-medium text-slate-500">
+                {navigator.onLine ? (
+                  <>
+                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                    <span>Synced</span>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-2 h-2 rounded-full bg-amber-500"></div>
+                    <span>Local Mode</span>
+                  </>
+                )}
+              </div>
+            </div>
 
-            {/* Filters */}
-            <div className="flex items-center gap-2 ml-2 sm:ml-4 sm:border-l sm:border-slate-200 sm:pl-4">
-               <input 
-                 type="text" 
-                 placeholder="Search..." 
-                 value={searchTerm}
-                 onChange={(e) => setSearchTerm(e.target.value)}
-                 className="w-28 sm:w-32 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none"
-               />
+            {/* Filters Group */}
+            <div className="flex items-center gap-2 flex-wrap">
+               <div className="relative">
+                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 w-3.5 h-3.5" />
+                 <input 
+                   type="text" 
+                   placeholder="Search..." 
+                   value={searchTerm}
+                   onChange={(e) => setSearchTerm(e.target.value)}
+                   className="pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none w-32 transition-all"
+                 />
+               </div>
+               
                <select
                  value={filterType}
                  onChange={(e) => setFilterType(e.target.value)}
-                 className="w-24 sm:w-28 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none appearance-none"
+                 className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none cursor-pointer"
                >
                  {availableTypes.map(type => (
                    <option key={type} value={type}>{type}</option>
                  ))}
                </select>
+
                <input 
                  type="text" 
-                 placeholder="Client..." 
+                 placeholder="Filter Client..." 
                  value={filterClient}
                  onChange={(e) => setFilterClient(e.target.value)}
-                 className="w-24 sm:w-28 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none"
+                 className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none w-28 transition-all"
                />
+               
                <input 
                  type="text" 
-                 placeholder="Fabric..." 
+                 placeholder="Filter Fabric..." 
                  value={filterFabric}
                  onChange={(e) => setFilterFabric(e.target.value)}
-                 className="w-24 sm:w-28 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none"
+                 className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none w-28 transition-all"
                />
             </div>
+          </div>
 
-            {/* Save Status Indicator */}
-            <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-50 border border-slate-200 text-xs font-medium text-slate-500">
-               {navigator.onLine ? (
-                 <>
-                   <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                   <span>Synced</span>
-                 </>
-               ) : (
-                 <>
-                   <div className="w-2 h-2 rounded-full bg-amber-500"></div>
-                   <span>Local</span>
-                 </>
-               )}
+          {/* Bottom Row: Actions */}
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            
+            {/* Primary Actions */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsFabricModalOpen(true)}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 transition-colors flex items-center gap-2 shadow-sm"
+              >
+                <Plus size={16} />
+                Add Fabric
+              </button>
+
+              <button
+                onClick={() => setIsFabricDirectoryOpen(true)}
+                className="px-3 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center gap-2 shadow-sm"
+                title="View and edit fabric directory"
+              >
+                <Book size={16} />
+                Directory
+              </button>
+
+              <button
+                onClick={() => {
+                  const dateObj = new Date(selectedDate);
+                  dateObj.setDate(dateObj.getDate() - 1);
+                  setFetchSourceDate(dateObj.toISOString().split('T')[0]);
+                  setFetchModalOpen(true);
+                }}
+                className="px-3 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center gap-2 shadow-sm"
+                title="Copy status and fabric from a previous date"
+              >
+                <span>↺</span> Fetch Data
+              </button>
+
+              {activeDay === selectedDate ? (
+                <div className="px-3 py-2 rounded-lg text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 flex items-center gap-2 shadow-sm cursor-default">
+                  <CheckCircle size={16} />
+                  Active Day
+                </div>
+              ) : (
+                <button
+                  onClick={handleMarkActiveDay}
+                  className="px-3 py-2 rounded-lg text-sm font-medium text-slate-600 bg-slate-100 border border-slate-200 hover:bg-slate-200 transition-all flex items-center gap-2 shadow-sm"
+                  title="Set this date as the active working day"
+                >
+                  <Calendar size={16} />
+                  Mark Active
+                </button>
+              )}
             </div>
 
-            {activeDay === selectedDate ? (
-              <div className="bg-green-100 text-green-700 border border-green-200 px-3 py-1 rounded-md text-xs font-bold flex items-center gap-1 shadow-sm">
-                ✅ Active Day
-              </div>
-            ) : (
-              <button
-                onClick={handleMarkActiveDay}
-                className="bg-slate-800 hover:bg-slate-700 text-white px-3 py-1 rounded-md text-xs font-bold shadow-sm transition-colors"
-                title="Set this date as the active working day for the schedule"
-              >
-                Mark as Active Day
-              </button>
-            )}
-            <button
-              onClick={() => {
-                const dateObj = new Date(selectedDate);
-                dateObj.setDate(dateObj.getDate() - 1);
-                setFetchSourceDate(dateObj.toISOString().split('T')[0]);
-                setFetchModalOpen(true);
-              }}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-md text-xs font-bold shadow-sm transition-colors flex items-center gap-1"
-              title="Copy status and fabric from a previous date"
-            >
-              <span>↺</span> Fetch Data
-            </button>
-            <button
-              onClick={() => setShowImportModal(true)}
-              className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded-md text-xs font-bold shadow-sm transition-colors flex items-center gap-1"
-              title="Import machine plan from ODOO Excel file"
-            >
-              <FileSpreadsheet size={14} />
-              Import ODOO
-            </button>
-            <button
-              onClick={handleExportBackup}
-              className="bg-slate-600 hover:bg-slate-700 text-white px-3 py-1 rounded-md text-xs font-bold shadow-sm transition-colors flex items-center gap-1"
-              title="Download JSON Backup"
-            >
-              <Download size={14} />
-              Export JSON
-            </button>
-            <label className="bg-slate-600 hover:bg-slate-700 text-white px-3 py-1 rounded-md text-xs font-bold shadow-sm transition-colors flex items-center gap-1 cursor-pointer">
-              <Upload size={14} />
-              Import JSON
-              <input
-                type="file"
-                accept=".json"
-                onChange={handleImportBackup}
-                className="hidden"
-              />
-            </label>
-          </div>
-          <div className="flex gap-3">
-            <button
-              onClick={handleSendReport}
-              disabled={isSendingReport || isReportSent}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-bold transition-all shadow-sm border ${
-                isReportSent
-                  ? 'bg-emerald-100 text-emerald-700 border-emerald-300 cursor-default'
-                  : isSendingReport 
-                    ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
-                    : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50 hover:text-slate-800'
-              }`}
-            >
-              {isReportSent ? (
-                <CheckCircle className="w-3 h-3" />
-              ) : isSendingReport ? (
-                <Send className="w-3 h-3 animate-pulse" />
-              ) : (
-                <Send className="w-3 h-3" />
-              )}
+            {/* Secondary Actions / Tools */}
+            <div className="flex items-center gap-2">
+              <div className="h-8 w-px bg-slate-200 mx-1 hidden sm:block"></div>
               
-              {isReportSent ? 'Sent' : isSendingReport ? 'Sending...' : 'Finished'}
-            </button>
-            <button
-              onClick={handleDownloadPDF}
-              disabled={isDownloading}
-              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm disabled:opacity-50"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-              {isDownloading ? 'Processing...' : 'Export PDF'}
-            </button>
+              <button
+                onClick={() => setShowImportModal(true)}
+                className="p-2 rounded-lg text-slate-600 hover:text-purple-600 hover:bg-purple-50 border border-transparent hover:border-purple-100 transition-all"
+                title="Import ODOO"
+              >
+                <FileSpreadsheet size={18} />
+              </button>
+
+              <button
+                onClick={handleExportBackup}
+                className="p-2 rounded-lg text-slate-600 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 transition-all"
+                title="Export JSON"
+              >
+                <Download size={18} />
+              </button>
+
+              <label className="p-2 rounded-lg text-slate-600 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 transition-all cursor-pointer" title="Import JSON">
+                <Upload size={18} />
+                <input
+                  type="file"
+                  accept=".json"
+                  onChange={handleImportBackup}
+                  className="hidden"
+                />
+              </label>
+
+              <button
+                onClick={handleDownloadPDF}
+                disabled={isDownloading}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-bold text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 transition-all disabled:opacity-50 shadow-sm"
+                title="Export PDF"
+              >
+                <FileText size={16} />
+                <span>PDF</span>
+              </button>
+
+              <div className="h-8 w-px bg-slate-200 mx-1 hidden sm:block"></div>
+
+              <button
+                onClick={handleSendReport}
+                disabled={isSendingReport || isReportSent}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm border ${
+                  isReportSent
+                    ? 'bg-emerald-100 text-emerald-700 border-emerald-300 cursor-default'
+                    : isSendingReport 
+                      ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
+                      : 'bg-slate-800 text-white border-slate-800 hover:bg-slate-700 hover:border-slate-700'
+                }`}
+              >
+                {isReportSent ? (
+                  <CheckCircle className="w-4 h-4" />
+                ) : isSendingReport ? (
+                  <Send className="w-4 h-4 animate-pulse" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
+                {isReportSent ? 'Finished' : isSendingReport ? 'Sending...' : 'Finish'}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -3005,13 +2981,9 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             options={fabrics}
                             value={log.fabric || ''}
                             onChange={(val) => handleBlur({ target: { value: val, type: 'text' } } as any, log.machineId, log.id, 'fabric')}
-                            onCreateNew={() => {
-                              const inputEl = document.getElementById(getCellId(log.machineId, 'fabric')) as HTMLInputElement;
-                              const newName = inputEl?.value || '';
-                              handleInlineCreateItem(log.machineId, log.id, 'fabric', newName);
-                            }}
                             onFocus={() => handleCellFocus(idx, 'fabric')}
                             placeholder="---"
+                            strict={true}
                           />
                         </td>
 
@@ -3022,13 +2994,9 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             options={clients}
                             value={log.client || ''}
                             onChange={(val) => handleBlur({ target: { value: val, type: 'text' } } as any, log.machineId, log.id, 'client')}
-                            onCreateNew={() => {
-                              const inputEl = document.getElementById(getCellId(log.machineId, 'client')) as HTMLInputElement;
-                              const newName = inputEl?.value || '';
-                              handleInlineCreateItem(log.machineId, log.id, 'client', newName);
-                            }}
                             onFocus={() => handleCellFocus(idx, 'client')}
                             placeholder="---"
+                            strict={true}
                           />
                           
                           {/* Reference Code Tooltip */}
@@ -3251,43 +3219,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
             </div>
           </div>
         </div>
-
-        {/* Inline Creation Modal */}
-        {false && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded shadow-lg p-4 w-80">
-              <h3 className="text-lg font-bold mb-3">
-                {inlineCreateModal.type === 'fabric' ? 'اضافة خامة جديدة' : 'اضافة عميل جديد'}
-              </h3>
-              <input
-                type="text"
-                value={inlineCreateForm.name}
-                onChange={(e) => setInlineCreateForm({ name: e.target.value })}
-                placeholder={inlineCreateModal.type === 'fabric' ? 'اسم الخامة...' : 'اسم العميل...'}
-                autoFocus
-                className="w-full px-2 py-1 border border-slate-300 rounded mb-3 text-sm"
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    setInlineCreateModal({ type: null, isOpen: false, machineId: '', logId: '' });
-                    setInlineCreateForm({ name: '' });
-                  }}
-                  className="flex-1 px-3 py-1 bg-slate-300 hover:bg-slate-400 rounded text-sm font-bold"
-                >
-                  الغاء
-                </button>
-                <button
-                  onClick={() => handleInlineCreateItem(inlineCreateModal.machineId, inlineCreateModal.logId, inlineCreateModal.type!, inlineCreateForm.name)}
-                  disabled={loading || !inlineCreateForm.name}
-                  className="flex-1 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-bold disabled:opacity-50"
-                >
-                  اضافة
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Plans Modal */}
         {plansModalOpen.isOpen && (
@@ -4003,7 +3934,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                                });
                             }
                           }}
-                          onCreateNew={() => {}}
                           placeholder="Select a machine..."
                         />
                       </div>
@@ -4433,6 +4363,20 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           </div>
         </div>
       )}
+      {/* Add/Edit Modal */}
+      <FabricFormModal
+        isOpen={isFabricModalOpen}
+        onClose={() => setIsFabricModalOpen(false)}
+        onSave={handleSaveFabric}
+        machines={rawMachines}
+      />
+
+      {/* Fabric Directory Modal */}
+      <FabricDirectoryModal
+        isOpen={isFabricDirectoryOpen}
+        onClose={() => setIsFabricDirectoryOpen(false)}
+        machines={rawMachines}
+      />
     </div>
     </div>
   );
