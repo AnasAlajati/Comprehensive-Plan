@@ -6,7 +6,7 @@ import { parseFabricName } from '../services/data';
 import { TelegramService } from '../services/telegramService';
 import { PlanItem, MachineStatus, CustomerOrder, MachineRow } from '../types';
 import { LinkOrderModal } from './LinkOrderModal';
-import html2canvas from 'html2canvas';
+import { toJpeg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 import { CheckCircle, Send, Link, Truck, Layout, Factory, FileSpreadsheet, Upload, X, Check, Sparkles, Edit, ArrowRight, History, CheckCircle2, XCircle, AlertTriangle, Download, Plus, Search, Calendar, FileText, Book } from 'lucide-react';
@@ -28,7 +28,9 @@ const calculateEndDate = (logDate: string, remaining: number, dayProduction: num
   const daysNeeded = Math.ceil(remaining / dayProduction);
   const startDate = new Date(logDate);
   startDate.setDate(startDate.getDate() + daysNeeded);
-  return startDate.toLocaleDateString('ar-EG', { year: 'numeric', month: 'short', day: 'numeric' });
+  // Format: "13-Jan"
+  const dateStr = startDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  return dateStr.replace(' ', '-');
 };
 
 // Helper function to calculate plan end date based on start date and remaining/production
@@ -38,6 +40,14 @@ const calculatePlanEndDate = (startDate: string, remaining: number, productionPe
   const start = new Date(startDate);
   start.setDate(start.getDate() + daysNeeded);
   return start.toISOString().split('T')[0];
+};
+
+const formatDateShort = (dateStr: string) => {
+  if (!dateStr || dateStr === '-') return '-';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return dateStr;
+  const str = date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  return str.replace(' ', '-');
 };
 
 const STATUS_LABELS: Record<MachineStatus, string> = {
@@ -320,11 +330,13 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
 interface FetchDataPageProps {
   selectedDate?: string;
   machines?: any[];
+  onNavigateToPlanning?: (mode: 'INTERNAL' | 'EXTERNAL') => void;
 }
 
 const FetchDataPage: React.FC<FetchDataPageProps> = ({ 
   selectedDate: propSelectedDate,
-  machines = []
+  machines = [],
+  onNavigateToPlanning
 }) => {
   const [selectedDate, setSelectedDate] = useState<string>(propSelectedDate || new Date().toISOString().split('T')[0]);
   const [importDate, setImportDate] = useState<string>(new Date().toISOString().split('T')[0]);
@@ -2214,186 +2226,148 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     setIsDownloading(true);
 
     try {
-      const element = printRef.current;
+      const originalElement = printRef.current;
+      
+      // 1. Clone the node manually to avoid modifying the live DOM
+      const clone = originalElement.cloneNode(true) as HTMLElement;
+      
+      // 2. Setup clone for capture (off-screen but visible)
+      clone.style.position = 'absolute';
+      clone.style.top = '0';
+      clone.style.left = '0';
+      clone.style.zIndex = '-9999'; // Place behind everything instead of far off-screen
+      // Use fit-content to ensure we only capture the actual content size after compaction
+      clone.style.width = 'fit-content';
+      clone.style.height = 'fit-content';
+      clone.style.backgroundColor = '#ffffff';
+      document.body.appendChild(clone);
 
-      // Force report header to be visible during capture
-      const header = element.querySelector('.print-header') as HTMLElement;
+      // 3. Apply transformations to the clone
+      
+      // Show header
+      const header = clone.querySelector('.print-header') as HTMLElement;
       if (header) {
         header.classList.remove('hidden');
         header.style.display = 'block';
       }
+
+      // Compact Layout Adjustments
+      const cells = clone.querySelectorAll('th, td');
+      cells.forEach((cell) => {
+        (cell as HTMLElement).style.padding = '4px';
+        (cell as HTMLElement).style.fontSize = '10px';
+      });
+
+      const footerDivs = clone.querySelectorAll('.p-4');
+      footerDivs.forEach((div) => {
+          if (div.parentElement?.classList.contains('divide-slate-200')) {
+            (div as HTMLElement).style.padding = '8px';
+          }
+      });
+
+      const largeTexts = clone.querySelectorAll('.text-2xl, .text-3xl');
+      largeTexts.forEach((el) => {
+          if (el.classList.contains('text-3xl')) {
+            (el as HTMLElement).style.fontSize = '1.25rem';
+          } else {
+            (el as HTMLElement).style.fontSize = '1rem';
+          }
+      });
       
-      const canvas = await html2canvas(element, {
-        scale: 1.5, // Reduced scale for smaller file size
-        useCORS: true,
-        backgroundColor: '#ffffff',
-        windowWidth: element.scrollWidth + 100, // Ensure full width is captured
-        onclone: (clonedDoc) => {
-          // --- FIX: Sanitize OKLCH colors for html2canvas ---
-          const ctx = document.createElement('canvas').getContext('2d');
-          
-          const safeColor = (c: string) => {
-             if (!c || typeof c !== 'string') return c;
-             if (!ctx) return c; 
-             
-             if (c.includes('oklch') || c.includes('lab(') || c.includes('lch(')) {
-                  try {
-                    ctx.clearRect(0, 0, 1, 1);
-                    ctx.fillStyle = c;
-                    ctx.fillRect(0, 0, 1, 1);
-                    const data = ctx.getImageData(0, 0, 1, 1).data;
-                    return `rgba(${data[0]}, ${data[1]}, ${data[2]}, ${data[3] / 255})`;
-                  } catch (e) {
-                    console.warn('Color conversion failed', e);
-                    return '#000000'; 
-                  }
-             }
-             return c;
-          };
+      const statusSection = clone.querySelector('.md\\:w-64');
+      if (statusSection) {
+          (statusSection as HTMLElement).style.padding = '8px';
+      }
 
-          try {
-            if (ctx) {
-              ctx.canvas.width = 1;
-              ctx.canvas.height = 1;
-              
-              const allElements = clonedDoc.querySelectorAll('*');
-              allElements.forEach((el) => {
-                const style = (el as HTMLElement).style;
-                const computed = getComputedStyle(el);
-                
-                if (computed.backgroundColor) style.backgroundColor = safeColor(computed.backgroundColor);
-                if (computed.color) style.color = safeColor(computed.color);
-                if (computed.borderColor) style.borderColor = safeColor(computed.borderColor);
-                if (computed.outlineColor) style.outlineColor = safeColor(computed.outlineColor);
-                
-                if (computed.boxShadow && computed.boxShadow.includes('oklch')) {
-                   style.boxShadow = 'none'; 
-                }
-              });
-            }
-          } catch (e) {
-            console.error('Error in PDF color sanitization:', e);
+      // Replace inputs/textareas/selects with text spans
+      // We must read values from the ORIGINAL elements because cloneNode doesn't copy current values
+      const originalInputs = originalElement.querySelectorAll('input, textarea, select');
+      const cloneInputs = clone.querySelectorAll('input, textarea, select');
+      
+      cloneInputs.forEach((cloneInput, index) => {
+          const originalInput = originalInputs[index] as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+          
+          const span = document.createElement('span');
+          span.style.display = 'flex';
+          span.style.alignItems = 'center';
+          span.style.justifyContent = 'center';
+          span.style.width = '100%';
+          span.style.height = '100%';
+          span.style.fontSize = 'inherit';
+          span.style.fontWeight = window.getComputedStyle(originalInput).fontWeight;
+          span.style.color = window.getComputedStyle(originalInput).color;
+          span.style.fontFamily = window.getComputedStyle(originalInput).fontFamily;
+          span.style.textAlign = 'center';
+          span.style.whiteSpace = 'pre-wrap';
+
+          if (cloneInput.tagName === 'SELECT') {
+             const select = originalInput as HTMLSelectElement;
+             const selectedOption = select.options[select.selectedIndex];
+             span.textContent = selectedOption ? selectedOption.text : '';
+          } else {
+             span.textContent = originalInput.value;
           }
-          // --------------------------------------------------
 
-          // --- COMPACT LAYOUT ADJUSTMENTS ---
-          // Reduce padding in table cells
-          const cells = clonedDoc.querySelectorAll('th, td');
-          cells.forEach((cell) => {
-            (cell as HTMLElement).style.padding = '4px'; // Reduced from p-2 (8px)
-            (cell as HTMLElement).style.fontSize = '10px'; // Smaller font
-          });
-
-          // Reduce footer padding and font sizes
-          const footerDivs = clonedDoc.querySelectorAll('.p-4');
-          footerDivs.forEach((div) => {
-             // Check if it's part of the footer stats
-             if (div.parentElement?.classList.contains('divide-slate-200')) {
-                (div as HTMLElement).style.padding = '8px'; // Reduced from p-4 (16px)
-             }
-          });
-
-          const largeTexts = clonedDoc.querySelectorAll('.text-2xl, .text-3xl');
-          largeTexts.forEach((el) => {
-             if (el.classList.contains('text-3xl')) {
-                (el as HTMLElement).style.fontSize = '1.25rem'; // Reduced from 1.875rem
-             } else {
-                (el as HTMLElement).style.fontSize = '1rem'; // Reduced from 1.5rem
-             }
-          });
-          
-          // Status overview section
-          const statusSection = clonedDoc.querySelector('.md\\:w-64');
-          if (statusSection) {
-             (statusSection as HTMLElement).style.padding = '8px';
+          // Fix Arabic Text Direction
+          if (/[\u0600-\u06FF]/.test(span.textContent || '')) {
+             span.style.direction = 'rtl';
+             span.style.unicodeBidi = 'isolate';
           }
-          // ----------------------------------
 
-          // Replace inputs with text for clean PDF
-          const inputs = clonedDoc.querySelectorAll('input, textarea');
-          inputs.forEach((input: any) => {
-            const span = clonedDoc.createElement('span');
-            span.textContent = input.value;
-            span.style.display = 'flex';
-            span.style.alignItems = 'center';
-            span.style.justifyContent = 'center';
-            span.style.width = '100%';
-            span.style.height = '100%';
-            span.style.fontSize = 'inherit';
-            span.style.fontWeight = getComputedStyle(input).fontWeight;
-            
-            // Ensure color is safe here too
-            const rawColor = getComputedStyle(input).color;
-            span.style.color = safeColor(rawColor);
+          if (cloneInput.parentNode) {
+            cloneInput.parentNode.replaceChild(span, cloneInput);
+          }
+      });
 
-            span.style.textAlign = 'center';
-            span.style.whiteSpace = 'pre-wrap';
-            if (input.tagName === 'TEXTAREA') {
-               span.style.textAlign = 'center'; 
-            }
-            if (input.parentNode) {
-              input.parentNode.replaceChild(span, input);
-            }
-          });
+      // Scrollables
+      const scrollables = clone.querySelectorAll('.overflow-x-auto');
+      scrollables.forEach(el => {
+          (el as HTMLElement).style.overflow = 'visible';
+          (el as HTMLElement).style.display = 'block';
+          (el as HTMLElement).style.width = 'fit-content';
+      });
+      
+      // Hide elements
+      const handles = clone.querySelectorAll('.drag-handle');
+      handles.forEach(el => (el as HTMLElement).style.display = 'none');
+      
+      const noPrints = clone.querySelectorAll('.no-print');
+      noPrints.forEach(el => (el as HTMLElement).style.display = 'none');
 
-          // Handle selects
-          const selects = clonedDoc.querySelectorAll('select');
-          selects.forEach((select) => {
-            const span = clonedDoc.createElement('span');
-            const selectedOption = select.options[select.selectedIndex];
-            span.textContent = selectedOption ? selectedOption.text : '';
-            span.style.display = 'flex';
-            span.style.alignItems = 'center';
-            span.style.justifyContent = 'center';
-            span.style.width = '100%';
-            span.style.height = '100%';
-            span.style.fontSize = 'inherit';
-            span.style.fontWeight = 'bold';
-            if (select.parentNode) {
-              select.parentNode.replaceChild(span, select);
-            }
-          });
-
-          const scrollables = clonedDoc.querySelectorAll('.overflow-x-auto');
-          scrollables.forEach(el => {
-             (el as HTMLElement).style.overflow = 'visible';
-             (el as HTMLElement).style.display = 'block';
-             // Force width to fit content to avoid clipping
-             (el as HTMLElement).style.width = 'fit-content';
-          });
-          
-          const handles = clonedDoc.querySelectorAll('.drag-handle');
-          handles.forEach(el => (el as HTMLElement).style.display = 'none');
-          
-          const noPrints = clonedDoc.querySelectorAll('.no-print');
-          noPrints.forEach(el => (el as HTMLElement).style.display = 'none');
-
-          // Remove last column (Plans button)
-          const rows = clonedDoc.querySelectorAll('tr');
-          rows.forEach(row => {
-            if (row.lastElementChild) {
-              (row.lastElementChild as HTMLElement).style.display = 'none';
-            }
-          });
+      const rows = clone.querySelectorAll('tr');
+      rows.forEach(row => {
+        if (row.lastElementChild) {
+          (row.lastElementChild as HTMLElement).style.display = 'none';
         }
       });
 
-      // Hide header again after capture
-      if (header) {
-        header.classList.add('hidden');
-        header.style.display = '';
-      }
+      // Wait for layout to settle (fixes white screen issue)
+      await new Promise(resolve => setTimeout(resolve, 100));
 
-      const pdf = new jsPDF('l', 'mm', 'a4');
+      // 4. Generate Image using html-to-image
+      const dataUrl = await toJpeg(clone, {
+        quality: 0.8,
+        cacheBust: true,
+        backgroundColor: '#ffffff',
+        pixelRatio: 1.5,
+      });
+
+      // 5. Generate PDF
+      const pdf = new jsPDF({
+        orientation: 'l',
+        unit: 'mm',
+        format: 'a4',
+        compress: true // Enable PDF compression
+      });
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const margin = 5; // Reduced margin
+      const margin = 5;
       const maxContentWidth = pageWidth - (margin * 2);
       const maxContentHeight = pageHeight - (margin * 2);
 
-      // Calculate dimensions to fit width
-      const imgWidth = canvas.width;
-      const imgHeight = canvas.height;
+      const imgProps = pdf.getImageProperties(dataUrl);
+      const imgWidth = imgProps.width;
+      const imgHeight = imgProps.height;
       
       // Calculate scale to fit width
       let pdfContentWidth = maxContentWidth;
@@ -2407,18 +2381,18 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         pdfContentHeight = maxContentHeight;
       }
 
-      // Center horizontally and vertically
-      const x = margin + (maxContentWidth - pdfContentWidth) / 2;
-      const y = margin + (maxContentHeight - pdfContentHeight) / 2;
+      // Center horizontally if scaled down by height
+      const xOffset = margin + (maxContentWidth - pdfContentWidth) / 2;
       
-      // Use JPEG with 0.7 quality for massive size reduction (28MB -> ~500KB)
-      pdf.addImage(canvas.toDataURL('image/jpeg', 0.7), 'JPEG', x, y, pdfContentWidth, pdfContentHeight);
-      
-      pdf.save(`Daily-Machine-Plan-${selectedDate}.pdf`);
+      pdf.addImage(dataUrl, 'JPEG', xOffset, margin, pdfContentWidth, pdfContentHeight);
+      pdf.save(`Daily_Machine_Plan_${new Date(selectedDate).toISOString().split('T')[0]}.pdf`);
 
-    } catch (err) {
-      console.error("PDF Generation failed", err);
-      alert("Failed to generate PDF. Please try again.");
+      // 6. Cleanup
+      document.body.removeChild(clone);
+
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Failed to generate PDF. Please try again.');
     } finally {
       setIsDownloading(false);
     }
@@ -2812,7 +2786,107 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 <h1 className="text-xl font-bold text-slate-800 uppercase tracking-wide">Daily Machine Plan</h1>
                 <p className="text-sm text-slate-500">Date: {new Date(selectedDate).toLocaleDateString('en-GB', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
             </div>
-          <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-sm bg-white" onBlurCapture={handleGridBlur}>
+
+          {/* Mobile Card View */}
+          <div className="md:hidden space-y-3">
+            {filteredLogs.length === 0 ? (
+              <div className="p-6 text-center text-slate-500 bg-slate-50 rounded-lg border border-slate-200">
+                No logs found
+              </div>
+            ) : (
+              filteredLogs.map((log: any, idx: number) => {
+                const normalizedStatus = normalizeStatusValue(log.status);
+                const isWorking = normalizedStatus === MachineStatus.WORKING;
+                const endDate = calculateEndDate(log.date || selectedDate, log.remainingMfg || 0, log.dayProduction || 0);
+                const diff = ((Number(log.dayProduction) || 0) - (Number(log.avgProduction) || 0)).toFixed(1);
+                
+                return (
+                  <div key={`${log.machineId}-${idx}`} className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+                    {/* Card Header */}
+                    <div className="bg-slate-50 px-4 py-3 border-b border-slate-100 flex justify-between items-center">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-800">{log.machineName}</span>
+                        <span className="text-xs text-slate-400 font-mono">#{idx + 1}</span>
+                      </div>
+                      <div className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${getStatusColor(normalizedStatus)}`}>
+                        {getStatusLabel(normalizedStatus)}
+                      </div>
+                    </div>
+
+                    {/* Card Body */}
+                    <div className="p-4 grid grid-cols-2 gap-4 text-sm">
+                      <div className="col-span-2">
+                        <span className="text-xs text-slate-400 block mb-1">Fabric</span>
+                        <div className="font-medium text-slate-700 truncate">{log.fabric || '-'}</div>
+                      </div>
+                      
+                      <div>
+                        <span className="text-xs text-slate-400 block mb-1">Client</span>
+                        <div className="font-medium text-slate-700">{log.client || '-'}</div>
+                      </div>
+
+                      <div>
+                        <span className="text-xs text-slate-400 block mb-1">End Date</span>
+                        <div className="font-medium text-blue-600">{endDate}</div>
+                      </div>
+
+                      <div>
+                        <span className="text-xs text-slate-400 block mb-1">Remaining</span>
+                        <div className={`font-bold ${Number(log.remainingMfg) === 0 ? 'text-green-600' : 'text-slate-700'}`}>
+                          {log.remainingMfg || 0}
+                        </div>
+                      </div>
+
+                      <div>
+                        <span className="text-xs text-slate-400 block mb-1">Today's Prod.</span>
+                        <div className="font-medium text-slate-700">{log.dayProduction || 0}</div>
+                      </div>
+
+                      <div>
+                        <span className="text-xs text-slate-400 block mb-1">Diff</span>
+                        <div className={`font-medium ${Number(diff) < 0 ? 'text-red-600' : 'text-green-600'}`}>{diff}</div>
+                      </div>
+
+                      {(log.scrap > 0 || log.reason) && (
+                        <div className="col-span-2 bg-red-50 p-2 rounded border border-red-100 mt-2">
+                           {log.scrap > 0 && (
+                             <div className="flex justify-between mb-1">
+                               <span className="text-xs text-red-500">Scrap:</span>
+                               <span className="text-xs font-bold text-red-700">{log.scrap}</span>
+                             </div>
+                           )}
+                           {log.reason && (
+                             <div className="flex justify-between">
+                               <span className="text-xs text-red-500">Reason:</span>
+                               <span className="text-xs font-bold text-red-700">{log.reason}</span>
+                             </div>
+                           )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Card Footer */}
+                    <div className="bg-slate-50 px-4 py-3 border-t border-slate-100 flex justify-between items-center">
+                      <button
+                        onClick={() => setDetailsModal({ isOpen: true, log, index: idx })}
+                        className="text-xs font-medium text-slate-500 hover:text-slate-700"
+                      >
+                        View Details
+                      </button>
+                      <button
+                        onClick={() => openPlansModal(log.machineId, log.machineName)}
+                        className="px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded shadow-sm hover:bg-blue-700 transition-colors"
+                      >
+                        Manage Plans
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto border border-slate-200 rounded-lg shadow-sm bg-white" onBlurCapture={handleGridBlur}>
             <table className="w-full text-xs text-center border-collapse">
               <thead className="bg-slate-50 text-slate-700 font-bold">
                 <tr>
@@ -3275,6 +3349,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         // Calculate end date based on start date + remaining/production per day
                         const calculatedEndDate = calculatePlanEndDate(plan.startDate, plan.remaining || 0, plan.productionPerDay || 0);
                         const displayEndDate = calculatedEndDate || plan.endDate || '-';
+                        const formattedEndDate = formatDateShort(displayEndDate);
                         
                         // Calculate days from start to end date
                         const calculatedDays = plan.startDate && calculatedEndDate 
@@ -3294,7 +3369,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             </td>
                             {/* End Date */}
                             <td className="p-2 border-r border-slate-100 text-center text-xs font-medium text-slate-600 bg-slate-50/30">
-                              {displayEndDate}
+                              {formattedEndDate}
                             </td>
                             {/* Machine */}
                             <td className="p-0 border-r border-slate-100">
@@ -3419,11 +3494,11 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                               ? (() => {
                                   const start = new Date(inlineNewPlan.startDate);
                                   start.setDate(start.getDate() + (inlineNewPlan.days || 0));
-                                  return start.toISOString().split('T')[0];
+                                  return formatDateShort(start.toISOString().split('T')[0]);
                                 })()
                               : '-')
                           : (inlineNewPlan.startDate && inlineNewPlan.remaining && inlineNewPlan.productionPerDay 
-                              ? calculatePlanEndDate(inlineNewPlan.startDate, inlineNewPlan.remaining, inlineNewPlan.productionPerDay)
+                              ? formatDateShort(calculatePlanEndDate(inlineNewPlan.startDate, inlineNewPlan.remaining, inlineNewPlan.productionPerDay))
                               : '-')}
                       </td>
                       {/* Machine */}
@@ -3859,6 +3934,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
              DataService.updateDailySummary(selectedDate, { externalProduction: total });
           }}
           isEmbedded={true}
+          onNavigateToPlanning={onNavigateToPlanning}
         />
       )}
 
@@ -4377,6 +4453,15 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         onClose={() => setIsFabricDirectoryOpen(false)}
         machines={rawMachines}
       />
+
+      {/* PDF Generation Overlay */}
+      {isDownloading && (
+        <div className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex flex-col items-center justify-center text-white">
+          <div className="animate-spin rounded-full h-16 w-16 border-4 border-white/20 border-t-white mb-4"></div>
+          <h3 className="text-xl font-bold">Generating PDF...</h3>
+          <p className="text-slate-300 mt-2">Please wait while we prepare your document.</p>
+        </div>
+      )}
     </div>
     </div>
   );

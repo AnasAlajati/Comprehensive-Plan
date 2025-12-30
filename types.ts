@@ -195,6 +195,10 @@ export interface OrderRow {
   dyeingPlan?: DyeingBatch[]; // NEW: Detailed Dyeing Plan
   customerId?: string; // NEW: Link to parent customer for collectionGroup queries
   variantId?: string; // NEW: Selected Fabric Variant ID
+  requiredGsm?: number; // NEW: Required GSM
+  requiredWidth?: number; // NEW: Required Width
+  isPrinted?: boolean; // NEW: Track if production order has been printed
+  printedAt?: string; // NEW: Date when the order was printed
 }
 
 export interface CustomerSheet {

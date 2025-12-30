@@ -71,13 +71,16 @@ export const FabricDirectoryModal: React.FC<FabricDirectoryModalProps> = ({ isOp
         ...editingFabric, // Keep existing data
         id: docId,
         name: formData.name,
-        code: formData.code,
-        shortName: formData.shortName,
+        code: formData.code || '',
+        shortName: formData.shortName || '',
         // Preserve other fields if they exist in formData or editingFabric
-        variants: formData.variants || editingFabric?.variants,
-        workCenters: formData.workCenters || editingFabric?.workCenters,
-        specs: formData.specs || editingFabric?.specs,
+        variants: formData.variants || editingFabric?.variants || [],
+        workCenters: formData.workCenters || editingFabric?.workCenters || [],
       };
+
+      if (formData.specs) {
+        fabricData.specs = formData.specs;
+      }
 
       await setDoc(doc(db, 'FabricSS', docId), fabricData, { merge: true });
       

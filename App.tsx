@@ -18,25 +18,22 @@ import { db } from './services/firebase';
 import { DataService } from './services/dataService';
 import { MachineRow } from './types';
 import { StatusBadge } from './components/StatusBadge';
-import { MachineList } from './components/MachineList';
 import { PlanningSchedule } from './components/PlanningSchedule';
 import { MaintenanceDashboard } from './components/MaintenanceDashboard';
 import { IdleMachineMonitor } from './components/IdleMachineMonitor';
 import { AIInsightsModal } from './components/AIInsightsModal';
 import { getScheduleRecommendations } from './services/ai';
-import AddDataPage from './components/AddDataPage';
 import FetchDataPage from './components/FetchDataPage';
 import { ClientOrdersPage } from './components/ClientOrdersPage';
 import { CompareDaysPage } from './components/CompareDaysPage';
 import { ProductionHistoryPage } from './components/ProductionHistoryPage';
-import { OrderFulfillmentPage } from './components/OrderFulfillmentPage';
-import { AnalyticsPage } from './components/AnalyticsPage';
 import { YarnInventoryPage } from './components/YarnInventoryPage';
 import { DyehouseInventoryPage } from './components/DyehouseInventoryPage';
 import { DyehouseDirectoryPage } from './components/DyehouseDirectoryPage';
 import { FabricsPage } from './components/FabricsPage';
 import { MachinesPage } from './components/MachinesPage';
 import { InstallPWA } from './components/InstallPWA';
+import { GlobalFabricButton } from './components/GlobalFabricButton';
 import ConnectivityStatus from './components/ConnectivityStatus';
 import { 
   Send, 
@@ -78,7 +75,13 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'card' | 'excel' | 'planning' | 'maintenance' | 'idle' | 'add' | 'orders' | 'compare' | 'history' | 'fulfillment' | 'analytics' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'fabrics' | 'machines'>('planning'); 
+  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'fabrics' | 'machines'>('excel'); 
+  const [planningInitialViewMode, setPlanningInitialViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
+
+  const handleNavigateToPlanning = (mode: 'INTERNAL' | 'EXTERNAL') => {
+    setPlanningInitialViewMode(mode);
+    setViewMode('planning');
+  };
   
   // External Production State
   const [externalProduction, setExternalProduction] = useState<number>(0);
@@ -491,24 +494,6 @@ const App: React.FC = () => {
              {/* Secondary Tools */}
              <div className="flex flex-wrap items-center justify-center gap-1 w-full lg:w-auto overflow-x-auto pb-1 lg:pb-0">
                 
-                {/* Management Group */}
-                <div className="flex items-center gap-1 px-2 border-r border-slate-100 last:border-0">
-                  <button 
-                    onClick={() => setViewMode('card')}
-                    title="Machine Cards"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'card' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <LayoutGrid size={20} />
-                  </button>
-                  <button 
-                    onClick={() => setViewMode('add')}
-                    title="Add Data"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'add' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <PlusCircle size={20} />
-                  </button>
-                </div>
-
                 {/* Analysis Group */}
                 <div className="flex items-center gap-1 px-2 border-r border-slate-100 last:border-0">
                   <button 
@@ -525,24 +510,10 @@ const App: React.FC = () => {
                   >
                     <History size={20} />
                   </button>
-                  <button 
-                    onClick={() => setViewMode('analytics')}
-                    title="Performance Analytics"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'analytics' ? 'bg-pink-50 text-pink-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <PieChart size={20} />
-                  </button>
                 </div>
 
                 {/* Monitoring Group */}
                 <div className="flex items-center gap-1 px-2">
-                  <button 
-                    onClick={() => setViewMode('fulfillment')}
-                    title="Order Fulfillment"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'fulfillment' ? 'bg-cyan-50 text-cyan-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <Truck size={20} />
-                  </button>
                   <button 
                     onClick={() => setViewMode('maintenance')}
                     title="Maintenance & Changeovers"
@@ -592,19 +563,11 @@ const App: React.FC = () => {
         </div>
 
         <div className="w-full overflow-hidden">
-            {viewMode === 'card' && (
-              <MachineList 
-                machines={machines} 
-                loading={machineLoading}
-                onDelete={handleDeleteMachine}
-                onUpdate={handleUpdateMachine}
-              />
-            )}
-
             {viewMode === 'excel' && (
               <FetchDataPage 
                 selectedDate={selectedDate}
                 machines={machines}
+                onNavigateToPlanning={handleNavigateToPlanning}
               />
             )}
 
@@ -612,6 +575,7 @@ const App: React.FC = () => {
               <PlanningSchedule 
                  machines={machines}
                  onUpdate={handleUpdateMachine}
+                 initialViewMode={planningInitialViewMode}
               />
             )}
 
@@ -631,10 +595,6 @@ const App: React.FC = () => {
 
             {viewMode === 'idle' && (
               <IdleMachineMonitor />
-            )}
-
-            {viewMode === 'add' && (
-              <AddDataPage />
             )}
 
             {viewMode === 'orders' && (
@@ -658,18 +618,6 @@ const App: React.FC = () => {
               />
             )}
 
-            {viewMode === 'fulfillment' && (
-              <OrderFulfillmentPage 
-                machines={machines}
-              />
-            )}
-
-            {viewMode === 'analytics' && (
-              <AnalyticsPage 
-                machines={machines}
-              />
-            )}
-
             {viewMode === 'fabrics' && (
               <FabricsPage />
             )}
@@ -686,6 +634,8 @@ const App: React.FC = () => {
           recommendations={aiAnalysis}
         />
       )}
+
+      <GlobalFabricButton machines={machines} />
     </div>
   );
 };

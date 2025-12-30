@@ -21,6 +21,7 @@ import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnIn
 import { FabricDetailsModal } from './FabricDetailsModal';
 import { FabricFormModal } from './FabricFormModal';
 import { CreatePlanModal } from './CreatePlanModal';
+import { FabricProductionOrderModal } from './FabricProductionOrderModal';
 import { 
   Plus, 
   Trash2, 
@@ -44,7 +45,8 @@ import {
   Users,
   ArrowRight,
   Sparkles,
-  Factory
+  Factory,
+  FileText
 } from 'lucide-react';
 
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
@@ -208,7 +210,7 @@ const SmartAllocationPanel: React.FC<{
   if (options.length === 0) return null;
 
   const bestOption = options[0];
-  const otherOptions = options.slice(1, 4); // Show top 3 alternatives
+  const otherOptions = options.slice(1); // Show all alternatives
 
   return (
     <div className="mt-3 bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm animate-in fade-in slide-in-from-top-2">
@@ -257,8 +259,8 @@ const SmartAllocationPanel: React.FC<{
 
       {/* Other Options List */}
       {expanded && (
-        <div className="bg-slate-50 p-2 space-y-2">
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2">Alternative Dyehouses</p>
+        <div className="bg-slate-50 p-2 space-y-2 max-h-64 overflow-y-auto">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2">All Alternative Dyehouses</p>
             {otherOptions.map((opt, idx) => (
                 <div key={idx} className="bg-white p-2 rounded border border-slate-200 flex flex-col gap-2 hover:border-slate-300 transition-colors">
                     <div className="flex items-center justify-between">
@@ -452,7 +454,8 @@ const MemoizedOrderRow = React.memo(({
   dyehouses,
   handleCreateDyehouse,
   machines,
-  externalFactories
+  externalFactories,
+  onOpenProductionOrder
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -471,6 +474,7 @@ const MemoizedOrderRow = React.memo(({
   handleCreateDyehouse: (name: string) => void;
   machines: MachineSS[];
   externalFactories: any[];
+  onOpenProductionOrder: (order: OrderRow, active: string[], planned: string[]) => void;
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const refCode = row.material ? `${selectedCustomerName}-${row.material}` : '-';
@@ -537,6 +541,68 @@ const MemoizedOrderRow = React.memo(({
       
     return { summary, totalCapacity: total, totalSent: sent, totalReceived: received };
   }, [row.dyeingPlan]);
+
+  // Calculate Finished Details (Audit Trail)
+  const finishedDetails = useMemo(() => {
+      const hasActive = statusInfo && statusInfo.active.length > 0;
+      const displayRemaining = hasActive ? statusInfo.remaining : row.remainingQty;
+      const hasAnyPlan = (statusInfo?.active?.length > 0) || (statusInfo?.planned?.length > 0);
+      
+      // Only calculate if potentially finished
+      if (hasAnyPlan || (displayRemaining > 0)) return null;
+
+      const logs: { date: string; machine: string; qty: number }[] = [];
+      
+      // 1. Internal Logs
+      machines.forEach(m => {
+          m.dailyLogs?.forEach(log => {
+              const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+              const logClient = normalize(log.client);
+              const logFabric = normalize(log.fabric);
+              const normClient = normalize(selectedCustomerName);
+              const normFabric = normalize(row.material);
+              
+              const isMatch = (log.orderReference && row.material && log.orderReference.includes(row.material)) || 
+                              (logClient === normClient && logFabric === normFabric);
+
+              if (isMatch && log.dayProduction > 0) {
+                  logs.push({
+                      date: log.date,
+                      machine: m.name,
+                      qty: log.dayProduction
+                  });
+              }
+          });
+      });
+
+      // 2. External Plans
+      externalFactories.forEach(factory => {
+          factory.plans?.forEach((plan: any) => {
+              const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+              const planClient = normalize(plan.client);
+              const planFabric = normalize(plan.fabric);
+              const normClient = normalize(selectedCustomerName);
+              const normFabric = normalize(row.material);
+
+              if (planClient === normClient && planFabric === normFabric) {
+                  logs.push({
+                      date: plan.endDate || plan.startDate || 'Unknown',
+                      machine: `${factory.name} (Ext)`,
+                      qty: plan.quantity || 0
+                  });
+              }
+          });
+      });
+
+      if (logs.length === 0) return null;
+
+      logs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      const lastDate = logs[0].date;
+      const uniqueMachines = Array.from(new Set(logs.map(l => l.machine)));
+      
+      return { lastDate, uniqueMachines, logs };
+  }, [machines, externalFactories, row, selectedCustomerName, statusInfo]);
 
   return (
     <>
@@ -684,6 +750,28 @@ const MemoizedOrderRow = React.memo(({
             </div>
           </td>
 
+          {/* Req GSM */}
+          <td className="p-0 border-r border-slate-200">
+            <input 
+              type="number"
+              className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs"
+              value={row.requiredGsm ?? ''}
+              onChange={(e) => handleUpdateOrder(row.id, { requiredGsm: Number(e.target.value) })}
+              placeholder="-"
+            />
+          </td>
+
+          {/* Req Width */}
+          <td className="p-0 border-r border-slate-200">
+            <input 
+              type="number"
+              className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs"
+              value={row.requiredWidth ?? ''}
+              onChange={(e) => handleUpdateOrder(row.id, { requiredWidth: Number(e.target.value) })}
+              placeholder="-"
+            />
+          </td>
+
           {/* Accessories */}
           <td className="p-0 border-r border-slate-200 relative">
             <input 
@@ -721,7 +809,9 @@ const MemoizedOrderRow = React.memo(({
               <div className="flex flex-col gap-1 flex-1 min-w-0">
                 {(() => {
                   // 1. Internal Active & Planned from statsMap
-                  const internalActive = statusInfo?.active || [];
+                  // Filter out "(Ext)" entries from active list as they are handled by externalMatches
+                  const rawActive = statusInfo?.active || [];
+                  const internalActive = rawActive.filter((m: string) => !m.endsWith('(Ext)'));
                   const internalPlanned = statusInfo?.planned || [];
 
                   // 2. External Matches
@@ -764,9 +854,27 @@ const MemoizedOrderRow = React.memo(({
                   if (!hasAnyPlan) {
                      if ((displayRemaining || 0) <= 0) {
                         return (
-                            <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit">
-                              Finished
-                            </span>
+                            <div className="group/finished relative">
+                                <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit cursor-help">
+                                  Finished
+                                </span>
+                                {finishedDetails && (
+                                    <div className="hidden group-hover/finished:block absolute z-50 bg-white text-slate-700 text-[10px] p-2 rounded shadow-xl border border-slate-200 -mt-10 left-1/2 -translate-x-1/2 min-w-[200px]">
+                                        <div className="font-bold border-b border-slate-100 mb-1 pb-1 text-slate-900">Finished Audit</div>
+                                        <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
+                                            <span className="text-slate-500">Last Date:</span>
+                                            <span className="font-mono">{finishedDetails.lastDate}</span>
+                                            
+                                            <span className="text-slate-500">Machines:</span>
+                                            <div className="flex flex-wrap gap-1">
+                                                {finishedDetails.uniqueMachines.map(m => (
+                                                    <span key={m} className="bg-slate-100 px-1 rounded border border-slate-200">{m}</span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         );
                      }
                      return (
@@ -782,7 +890,18 @@ const MemoizedOrderRow = React.memo(({
                   }
 
                   return (
-                    <>
+                    <div className="flex flex-col gap-1.5 relative">
+                        {/* Debug Info */}
+                        {statusInfo?.debug && (
+                            <div className="hidden group-hover:block absolute z-50 bg-black text-white text-[10px] p-2 rounded shadow-lg bottom-full left-1/2 -translate-x-1/2 mb-2 whitespace-nowrap pointer-events-none">
+                                <div className="font-bold border-b border-gray-700 mb-1 pb-1">Debug Status Source</div>
+                                <div>Active: {statusInfo.debug.activeReasons.length ? statusInfo.debug.activeReasons.join(', ') : 'None'}</div>
+                                <div>Planned: {statusInfo.debug.plannedReasons.length ? statusInfo.debug.plannedReasons.join(', ') : 'None'}</div>
+                                <div>Ext Matches: {externalMatches.length ? externalMatches.map(m => m.factoryName).join(', ') : 'None'}</div>
+                                <div>Direct Machine: {directMachine ? `${directMachine.name} (Assigned to Order)` : 'None'}</div>
+                            </div>
+                        )}
+
                       {/* Internal Active */}
                       {internalActive.length > 0 && (
                         <div className="flex flex-wrap gap-1">
@@ -818,8 +937,20 @@ const MemoizedOrderRow = React.memo(({
                                 if (isMaintenance) badgeClass = "bg-amber-50 text-amber-600 border-amber-200";
 
                                 return (
-                                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap border w-fit ${badgeClass}`}>
+                                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap border w-fit flex items-center gap-1 group/direct ${badgeClass}`} title="Manually Assigned Machine (Direct)">
                                         {directMachine.name} - {status}
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                if (confirm(`Remove manual assignment of ${directMachine.name}?`)) {
+                                                    handleUpdateOrder(row.id, { machine: '' });
+                                                }
+                                            }}
+                                            className="hover:bg-red-100 hover:text-red-600 rounded-full p-0.5 opacity-0 group-hover/direct:opacity-100 transition-opacity"
+                                            title="Remove Manual Assignment"
+                                        >
+                                            <X size={10} />
+                                        </button>
                                     </span>
                                 );
                             })()}
@@ -848,14 +979,15 @@ const MemoizedOrderRow = React.memo(({
                                 : "bg-purple-50 text-purple-700 border-purple-200";
                              
                              return (
-                                <span key={`ext-${i}`} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap border ${badgeClass}`}>
-                                  {match.factoryName} (Ext) - {match.status}
+                                <span key={`e-${i}`} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap border flex items-center gap-1 ${badgeClass}`}>
+                                  <Factory size={10} />
+                                  {match.factoryName}
                                 </span>
                              );
                           })}
                         </div>
                       )}
-                    </>
+                    </div>
                   );
                 })()}
               </div>
@@ -866,6 +998,31 @@ const MemoizedOrderRow = React.memo(({
                 title="Search Plan"
               >
                 <Search className="w-4 h-4" />
+              </button>
+              
+              <button
+                onClick={() => {
+                  // Extract active/planned machines for this row
+                  const rawActive = statusInfo?.active || [];
+                  const internalActive = rawActive.filter((m: string) => !m.endsWith('(Ext)'));
+                  const internalPlanned = statusInfo?.planned || [];
+                  onOpenProductionOrder(row, internalActive, internalPlanned);
+                }}
+                className={`p-1.5 rounded-md transition-all flex-shrink-0 flex items-center gap-1 ${
+                  row.isPrinted 
+                    ? "text-green-600 bg-green-50 hover:bg-green-100 pr-2" 
+                    : "text-slate-400 hover:text-purple-600 hover:bg-purple-50"
+                }`}
+                title={row.isPrinted 
+                  ? `Printed on ${row.printedAt ? new Date(row.printedAt).toLocaleDateString('en-GB') : 'Unknown Date'}` 
+                  : "Print Production Order"}
+              >
+                <FileText className="w-4 h-4" />
+                {row.isPrinted && row.printedAt && (
+                  <span className="text-[10px] font-medium">
+                    {new Date(row.printedAt).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })}
+                  </span>
+                )}
               </button>
             </div>
           </td>
@@ -1208,7 +1365,21 @@ export const ClientOrdersPage: React.FC = () => {
   const [customers, setCustomers] = useState<CustomerSheet[]>([]);
   const [rawCustomers, setRawCustomers] = useState<CustomerSheet[]>([]);
   const [flatOrders, setFlatOrders] = useState<OrderRow[]>([]);
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+  
+  // Initialize from localStorage if available
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(() => {
+      return localStorage.getItem('selectedClientOrderId') || null;
+  });
+
+  // Persist selection changes
+  useEffect(() => {
+      if (selectedCustomerId) {
+          localStorage.setItem('selectedClientOrderId', selectedCustomerId);
+      } else {
+          localStorage.removeItem('selectedClientOrderId');
+      }
+  }, [selectedCustomerId]);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [newCustomerName, setNewCustomerName] = useState('');
   const [isAddingCustomer, setIsAddingCustomer] = useState(false);
@@ -1240,6 +1411,14 @@ export const ClientOrdersPage: React.FC = () => {
     allocations?: Record<string, YarnAllocationItem[]>;
     variantId?: string;
   }>({ isOpen: false, fabric: null, orderQuantity: 0 });
+
+  // Production Order Modal State
+  const [productionOrderModal, setProductionOrderModal] = useState<{
+    isOpen: boolean;
+    order: OrderRow | null;
+    activeMachines: string[];
+    plannedMachines: string[];
+  }>({ isOpen: false, order: null, activeMachines: [], plannedMachines: [] });
 
   // Fix for state reset issue
   const initialSelectionMade = useRef(false);
@@ -1449,6 +1628,27 @@ export const ClientOrdersPage: React.FC = () => {
             });
         });
 
+        // Check External Plans
+        externalFactories.forEach(factory => {
+            if (!factory.plans) return;
+            factory.plans.forEach((plan: any) => {
+                const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+                const planClient = normalize(plan.client);
+                const planFabric = normalize(plan.fabric);
+                const normClient = normalize(clientName);
+                const normFabric = normalize(fabric);
+
+                if (planClient === normClient && planFabric === normFabric) {
+                    // Only include if not completed
+                    if (plan.status !== 'COMPLETED') {
+                        remaining += (Number(plan.remaining) || 0);
+                        // Add to active machines list to ensure the calculated remaining is used
+                        activeMachines.push(`${factory.name} (Ext)`);
+                    }
+                }
+            });
+        });
+
         // 2. Scan Other Customers
         const otherClients = new Set<string>();
         customers.forEach(c => {
@@ -1464,12 +1664,17 @@ export const ClientOrdersPage: React.FC = () => {
             startDate: minDate || '-',
             endDate: maxDate || '-',
             scrap,
-            others: Array.from(otherClients).join(', ')
+            others: Array.from(otherClients).join(', '),
+            // Debug Info
+            debug: {
+                activeReasons: activeMachines.map(m => `Active: ${m}`),
+                plannedReasons: plannedMachines.map(m => `Planned: ${m}`)
+            }
         });
     });
 
     return map;
-  }, [selectedCustomer, machines, customers, activeDay]);
+  }, [selectedCustomer, machines, customers, activeDay, externalFactories]);
 
   const allClientsStats = useMemo(() => {
     if (selectedCustomerId !== ALL_CLIENTS_ID) return [];
@@ -2426,6 +2631,8 @@ export const ClientOrdersPage: React.FC = () => {
                           ) : (
                             <>
                               <th className="p-3 text-left border-b border-r border-slate-200 min-w-[350px]">Fabric</th>
+                              <th className="p-3 text-right border-b border-r border-slate-200 w-20">Req GSM</th>
+                              <th className="p-3 text-right border-b border-r border-slate-200 w-20">Req Width</th>
                               <th className="p-3 text-left border-b border-r border-slate-200 min-w-[140px]">Accessories</th>
                               <th className="p-3 text-right border-b border-r border-slate-200 w-20">Acc. Qty</th>
                             </>
@@ -2485,6 +2692,14 @@ export const ClientOrdersPage: React.FC = () => {
                               handleCreateDyehouse={handleCreateDyehouse}
                               machines={machines}
                               externalFactories={externalFactories}
+                              onOpenProductionOrder={(order, active, planned) => {
+                                setProductionOrderModal({
+                                  isOpen: true,
+                                  order,
+                                  activeMachines: active,
+                                  plannedMachines: planned
+                                });
+                              }}
                             />
                           );
                         })}
@@ -2805,6 +3020,26 @@ export const ClientOrdersPage: React.FC = () => {
           initialData={fabricFormModal.initialName ? { name: fabricFormModal.initialName } as any : null}
           machines={machines}
         />
+
+        {/* Production Order Modal */}
+        {productionOrderModal.isOpen && productionOrderModal.order && (
+          <FabricProductionOrderModal
+            isOpen={productionOrderModal.isOpen}
+            onClose={() => setProductionOrderModal({ ...productionOrderModal, isOpen: false })}
+            order={productionOrderModal.order}
+            clientName={selectedCustomer?.name || ''}
+            fabric={fabrics.find(f => f.name === productionOrderModal.order?.material)}
+            activeMachines={productionOrderModal.activeMachines}
+            plannedMachines={productionOrderModal.plannedMachines}
+            allYarns={yarns}
+            onMarkPrinted={() => {
+              if (productionOrderModal.order) {
+                const now = new Date().toISOString();
+                handleUpdateOrder(productionOrderModal.order.id, { isPrinted: true, printedAt: now });
+              }
+            }}
+          />
+        )}
 
         {/* Inventory View Modal */}
         {inventoryViewModal.isOpen && (

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import { collection, getDocs, writeBatch, doc, query, where, setDoc } from 'firebase/firestore';
+import { collection, getDocs, writeBatch, doc, query, where, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { parseFabricName } from '../services/data';
 import { FabricDefinition, FabricYarn, FabricVariant } from '../types';
@@ -175,6 +175,24 @@ export const FabricsPage: React.FC = () => {
     } catch (err) {
       console.error("Error cleaning names:", err);
       setError("Failed to clean names.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteFabric = async (fabricId: string) => {
+    if (!window.confirm('Are you sure you want to delete this fabric? This action cannot be undone.')) {
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await deleteDoc(doc(db, 'FabricSS', fabricId));
+      setSuccess('Fabric deleted successfully');
+      fetchExistingFabrics();
+    } catch (err) {
+      console.error("Error deleting fabric:", err);
+      setError("Failed to delete fabric");
     } finally {
       setSaving(false);
     }
@@ -852,8 +870,16 @@ export const FabricsPage: React.FC = () => {
                             <button 
                               onClick={() => handleOpenModal(fabric)}
                               className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                              title="Edit Fabric"
                             >
                               <Edit size={16} />
+                            </button>
+                            <button 
+                              onClick={() => handleDeleteFabric(fabric.id!)}
+                              className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100 ml-1"
+                              title="Delete Fabric"
+                            >
+                              <Trash2 size={16} />
                             </button>
                           </td>
                         </tr>

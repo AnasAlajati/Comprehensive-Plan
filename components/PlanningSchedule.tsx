@@ -21,6 +21,14 @@ const globalStyles = `
   }
 `;
 
+const formatDateShort = (dateStr: string) => {
+  if (!dateStr || dateStr === '-') return '-';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return dateStr;
+  const str = date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  return str.replace(' ', '-');
+};
+
 interface ExternalPlanItem extends PlanItem {
   machineName?: string;
   status?: 'PENDING' | 'ACTIVE' | 'COMPLETED';
@@ -37,7 +45,7 @@ interface SearchDropdownProps {
   options: any[];
   value: string;
   onChange: (value: string) => void;
-  onCreateNew: (newValue: string) => void;
+  onCreateNew?: (newValue: string) => void;
   onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
   onFocus?: () => void;
   placeholder?: string;
@@ -114,7 +122,7 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
   };
 
   const handleCreateNew = () => {
-    if (inputValue.trim()) {
+    if (inputValue.trim() && onCreateNew) {
       onCreateNew(inputValue);
       // Don't clear inputValue here, let the parent update the value prop
       setSearchTerm('');
@@ -172,7 +180,7 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
                   {extraInfo && extraInfo(opt)}
                 </div>
               ))}
-              {searchTerm && !options.some(o => getLabel(o).toLowerCase() === searchTerm.toLowerCase()) && (
+              {searchTerm && onCreateNew && !options.some(o => getLabel(o).toLowerCase() === searchTerm.toLowerCase()) && (
                 <div
                   onClick={handleCreateNew}
                   className="px-2 py-1.5 hover:bg-emerald-50 cursor-pointer text-xs border-t border-slate-200 text-emerald-600 font-medium text-left"
@@ -181,7 +189,7 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
                 </div>
               )}
             </>
-          ) : searchTerm ? (
+          ) : searchTerm && onCreateNew ? (
             <div
               onClick={handleCreateNew}
               className="px-2 py-1.5 hover:bg-emerald-50 cursor-pointer text-xs text-emerald-600 font-medium text-left"
@@ -200,10 +208,11 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
 interface PlanningScheduleProps {
   machines?: MachineRow[];
   onUpdate?: (machine: MachineRow) => Promise<void>;
+  initialViewMode?: 'INTERNAL' | 'EXTERNAL';
 }
 type PlanningMachine = MachineRow & { machineSSId: string; scheduleIndex?: number };
 
-export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) => {
+export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, initialViewMode = 'INTERNAL' }) => {
   const [smartAddMachineId, setSmartAddMachineId] = useState<string | null>(null);
   const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean; machine: any; plan?: any; isCurrent?: boolean; } | null>(null);
   const [draggedPlan, setDraggedPlan] = useState<{machineId: string, index: number} | null>(null);
@@ -213,6 +222,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
   const [activeDay, setActiveDay] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [fabricHistory, setFabricHistory] = useState<Record<string, string[]>>({});
   
   // Filter State
   const [searchTerm, setSearchTerm] = useState('');
@@ -232,7 +242,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
   }, [fabrics]);
 
   // External Schedule State
-  const [viewMode, setViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
+  const [viewMode, setViewMode] = useState<'INTERNAL' | 'EXTERNAL'>(initialViewMode);
   const [externalFactories, setExternalFactories] = useState<ExternalFactory[]>([]);
   const [newFactoryName, setNewFactoryName] = useState('');
 
@@ -605,6 +615,27 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
       try {
         const machineDocs = await DataService.getMachinesFromMachineSS();
         if (!isMounted) return;
+
+        // Compute Fabric History (Proven Machines)
+        const history: Record<string, Set<string>> = {};
+        machineDocs.forEach((m: any) => {
+            if (m.dailyLogs && Array.isArray(m.dailyLogs)) {
+                m.dailyLogs.forEach((log: any) => {
+                    if (log.fabric && log.dayProduction > 0) {
+                        if (!history[log.fabric]) history[log.fabric] = new Set();
+                        history[log.fabric].add(m.name || m.machineName);
+                    }
+                });
+            }
+        });
+        
+        // Convert Sets to Arrays
+        const historyMap: Record<string, string[]> = {};
+        Object.entries(history).forEach(([fabric, machines]) => {
+            historyMap[fabric] = Array.from(machines).sort();
+        });
+        setFabricHistory(historyMap);
+
         const mapped = machineDocs.map((machine: any, idx: number) => mapMachineSSDocToMachineRow(machine, idx, activeDay));
         setMachines(mapped);
         setError('');
@@ -1401,7 +1432,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
           const isWorking = machine.status === MachineStatus.WORKING;
           const dailyRate = machine.dayProduction > 0 ? machine.dayProduction : (machine.avgProduction || 1);
           const currentRemainingDays = isWorking && machine.remainingMfg > 0 ? Math.ceil(machine.remainingMfg / dailyRate) : 0;
-          const currentEndDate = isWorking ? addDays(activeDay, currentRemainingDays) : '-';
+          const currentEndDate = isWorking ? formatDateShort(addDays(activeDay, currentRemainingDays)) : '-';
           const isOther = machine.status === MachineStatus.OTHER;
 
           return (
@@ -1511,17 +1542,18 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                         onDrop={(e) => handleDrop(e, machine.machineSSId, index)}
                       >
                         <td className="p-2 text-slate-300 cursor-move hover:text-slate-500 drag-handle align-middle hidden md:table-cell">⠿</td>
-                        <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50 align-middle hidden md:table-cell">{plan.startDate || '-'}</td>
-                        <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50 align-middle hidden md:table-cell">{plan.endDate || '-'}</td>
+                        <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50 align-middle hidden md:table-cell">{formatDateShort(plan.startDate) || '-'}</td>
+                        <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50 align-middle hidden md:table-cell">{formatDateShort(plan.endDate) || '-'}</td>
                         <td className="p-1 align-middle hidden md:table-cell">
                           {!isSettings && (
-                            <input 
-                              type="text"
-                              className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-600 text-xs"
-                              value={plan.originalSampleMachine || ''}
-                              onChange={(e) => handlePlanChange(machine, index, 'originalSampleMachine', e.target.value)}
-                              placeholder="-"
-                            />
+                             <SearchDropdown
+                                id={`orig-${machine.machineSSId}-${index}`}
+                                options={(fabricHistory[plan.fabric] || []).map(m => ({ name: m, id: m }))}
+                                value={plan.originalSampleMachine || ''}
+                                onChange={(val) => handlePlanChange(machine, index, 'originalSampleMachine', val)}
+                                placeholder="-"
+                                className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-600 text-xs"
+                             />
                           )}
                         </td>
                         <td className="p-1 align-middle hidden md:table-cell">
@@ -1537,10 +1569,6 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                             options={clients}
                             value={plan.client || ''}
                             onChange={(val) => handlePlanChange(machine, index, 'client', val)}
-                            onCreateNew={async (val) => {
-                                await handleCreateItem('client', val);
-                                handlePlanChange(machine, index, 'client', val);
-                            }}
                             placeholder="-"
                             className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent font-bold text-slate-700"
                           />}
@@ -1581,10 +1609,6 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                                 options={fabrics}
                                 value={plan.fabric || ''}
                                 onChange={(val) => handlePlanChange(machine, index, 'fabric', val)}
-                                onCreateNew={async (val) => {
-                                    await handleCreateItem('fabric', val);
-                                    handlePlanChange(machine, index, 'fabric', val);
-                                }}
                                 placeholder="-"
                                 className="w-full text-right py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-sm text-slate-700 leading-tight"
                                 extraInfo={(opt) => {
@@ -1765,10 +1789,6 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                             options={clients}
                             value={plan.client || ''}
                             onChange={(val) => handleUpdateExternalPlan(factory.id, index, 'client', val)}
-                            onCreateNew={async (val) => {
-                                await handleCreateItem('client', val);
-                                handleUpdateExternalPlan(factory.id, index, 'client', val);
-                            }}
                             placeholder="-"
                             className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent font-bold text-slate-700"
                           />
@@ -1813,10 +1833,6 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate }) 
                                 options={fabrics}
                                 value={plan.fabric || ''}
                                 onChange={(val) => handleUpdateExternalPlan(factory.id, index, 'fabric', val)}
-                                onCreateNew={async (val) => {
-                                    await handleCreateItem('fabric', val);
-                                    handleUpdateExternalPlan(factory.id, index, 'fabric', val);
-                                }}
                                 placeholder="-"
                                 className="w-full text-right py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-sm text-slate-700 leading-tight"
                              />
