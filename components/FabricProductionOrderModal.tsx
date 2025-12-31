@@ -97,15 +97,15 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
   const getDyehouseMachines = () => {
     if (!order.dyeingPlan || order.dyeingPlan.length === 0) return 'Not Specified';
     
-    const counts = new Map<string, number>();
+    const counts = new Map<number, number>();
     order.dyeingPlan.forEach(batch => {
-      if (batch.machine) {
-        counts.set(batch.machine, (counts.get(batch.machine) || 0) + 1);
+      if (batch.quantity) {
+        counts.set(batch.quantity, (counts.get(batch.quantity) || 0) + 1);
       }
     });
 
     return Array.from(counts.entries())
-      .map(([machine, count]) => `${machine}*${count}`)
+      .map(([capacity, count]) => `${capacity}*${count}`)
       .join(' + ');
   };
 

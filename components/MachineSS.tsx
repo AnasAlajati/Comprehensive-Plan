@@ -596,8 +596,133 @@ const MachineSS: React.FC = () => {
                 </button>
               </div>
             ) : (
-              <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-sm bg-white">
-                <table className="w-full text-xs border-collapse min-w-[1200px]">
+              <>
+                {/* Mobile Card View */}
+                <div className="md:hidden grid grid-cols-2 gap-2 mb-4">
+                  {allRows.map((row, idx) => {
+                    const isWorking = row.log?.status === 'عمل';
+                    return (
+                      <div 
+                        key={`${row.machineId}-${row.logIndex}-mobile`}
+                        className={`bg-white border rounded-lg p-2 shadow-sm ${
+                          !isWorking ? 'border-slate-200 bg-slate-50' : 'border-blue-200'
+                        }`}
+                      >
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                            <div className="font-bold text-slate-800 text-sm">{row.machineName}</div>
+                            <div className="text-[10px] text-slate-500">{row.brand} #{row.machineNum}</div>
+                          </div>
+                          {row.log ? (
+                             <select
+                                value={row.log.status}
+                                onChange={(e) => updateLog(row.machineId, row.logIndex, 'status', e.target.value)}
+                                className={`text-[10px] font-bold rounded px-1 py-0.5 ${
+                                  row.log.status === 'عمل' ? 'bg-green-100 text-green-800' : 
+                                  row.log.status === 'صيانة' ? 'bg-orange-100 text-orange-800' : 
+                                  'bg-red-100 text-red-800'
+                                }`}
+                              >
+                                <option>عمل</option>
+                                <option>متوقفة</option>
+                                <option>صيانة</option>
+                              </select>
+                          ) : (
+                            <button
+                                onClick={() => addDailyLog(row.machineId)}
+                                className="bg-blue-600 text-white px-2 py-0.5 rounded text-[10px]"
+                              >
+                                +
+                              </button>
+                          )}
+                        </div>
+
+                        {row.log ? (
+                          isWorking ? (
+                            <div className="space-y-2">
+                              <div className="grid grid-cols-2 gap-1">
+                                <div>
+                                  <label className="text-[9px] text-slate-400 block">Prod</label>
+                                  <input
+                                    type="number"
+                                    value={row.log.dayProduction}
+                                    onChange={(e) => updateLog(row.machineId, row.logIndex, 'dayProduction', e.target.value)}
+                                    className="w-full border border-slate-200 rounded px-1 py-0.5 text-xs font-bold text-center"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[9px] text-slate-400 block">Scrap</label>
+                                  <input
+                                    type="number"
+                                    value={row.log.scrap}
+                                    onChange={(e) => updateLog(row.machineId, row.logIndex, 'scrap', e.target.value)}
+                                    className="w-full border border-slate-200 rounded px-1 py-0.5 text-xs text-red-600 text-center"
+                                  />
+                                </div>
+                              </div>
+                              
+                              <div>
+                                <label className="text-[9px] text-slate-400 block">Client / Fabric</label>
+                                <div className="grid grid-cols-2 gap-1">
+                                  <input
+                                    type="text"
+                                    value={row.log.client}
+                                    onChange={(e) => updateLog(row.machineId, row.logIndex, 'client', e.target.value)}
+                                    className="w-full border border-slate-200 rounded px-1 py-0.5 text-[10px]"
+                                    placeholder="Client"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={row.log.fabric}
+                                    onChange={(e) => updateLog(row.machineId, row.logIndex, 'fabric', e.target.value)}
+                                    className="w-full border border-slate-200 rounded px-1 py-0.5 text-[10px]"
+                                    placeholder="Fabric"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="flex justify-between items-center">
+                                 <div className="flex-1">
+                                    <label className="text-[9px] text-slate-400 block">Rem</label>
+                                    <input
+                                      type="number"
+                                      value={row.log.remaining || 0}
+                                      onChange={(e) => updateLog(row.machineId, row.logIndex, 'remaining', e.target.value)}
+                                      className="w-full border border-slate-200 rounded px-1 py-0.5 text-xs text-blue-600 font-bold text-center"
+                                    />
+                                 </div>
+                                 <button
+                                  onClick={() => deleteLog(row.machineId, row.logIndex)}
+                                  className="ml-2 text-red-400 hover:text-red-600"
+                                >
+                                  <X size={14} />
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-[10px] text-slate-400 text-center py-1">
+                              {row.log.status} - No Production
+                              <button
+                                  onClick={() => deleteLog(row.machineId, row.logIndex)}
+                                  className="ml-2 text-red-400 hover:text-red-600 align-middle"
+                                >
+                                  <X size={12} />
+                                </button>
+                            </div>
+                          )
+                        ) : (
+                          <div className="text-[10px] text-slate-400 text-center py-2">
+                            No Data
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Desktop Table View */}
+                <div className="hidden md:block overflow-x-auto border border-slate-200 rounded-lg shadow-sm bg-white">
+                  <table className="w-full text-xs border-collapse min-w-[1200px]">
                   <thead className="bg-slate-50 text-slate-700 font-bold">
                     <tr>
                       <th className="p-2 border border-slate-200 w-12">م</th>
@@ -728,6 +853,7 @@ const MachineSS: React.FC = () => {
                   </tbody>
                 </table>
               </div>
+              </>
             )}
 
             {/* Machines List View (For deleting) */}

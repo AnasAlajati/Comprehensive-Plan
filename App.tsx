@@ -27,6 +27,7 @@ import FetchDataPage from './components/FetchDataPage';
 import { ClientOrdersPage } from './components/ClientOrdersPage';
 import { CompareDaysPage } from './components/CompareDaysPage';
 import { ProductionHistoryPage } from './components/ProductionHistoryPage';
+import { FabricHistoryPage } from './components/FabricHistoryPage';
 import { YarnInventoryPage } from './components/YarnInventoryPage';
 import { DyehouseInventoryPage } from './components/DyehouseInventoryPage';
 import { DyehouseDirectoryPage } from './components/DyehouseDirectoryPage';
@@ -75,7 +76,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'fabrics' | 'machines'>('excel'); 
+  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'fabrics' | 'machines'>('excel'); 
   const [planningInitialViewMode, setPlanningInitialViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
 
   const handleNavigateToPlanning = (mode: 'INTERNAL' | 'EXTERNAL') => {
@@ -510,6 +511,13 @@ const App: React.FC = () => {
                   >
                     <History size={20} />
                   </button>
+                  <button 
+                    onClick={() => setViewMode('fabric-history')}
+                    title="Fabric History"
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'fabric-history' ? 'bg-orange-50 text-orange-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    <Package size={20} />
+                  </button>
                 </div>
 
                 {/* Monitoring Group */}
@@ -614,6 +622,12 @@ const App: React.FC = () => {
 
             {viewMode === 'history' && (
               <ProductionHistoryPage 
+                machines={machines}
+              />
+            )}
+
+            {viewMode === 'fabric-history' && (
+              <FabricHistoryPage 
                 machines={machines}
               />
             )}

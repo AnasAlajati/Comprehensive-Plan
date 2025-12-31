@@ -22,6 +22,7 @@ import { FabricDetailsModal } from './FabricDetailsModal';
 import { FabricFormModal } from './FabricFormModal';
 import { CreatePlanModal } from './CreatePlanModal';
 import { FabricProductionOrderModal } from './FabricProductionOrderModal';
+import { OrderProductionHistoryModal } from './OrderProductionHistoryModal';
 import { 
   Plus, 
   Trash2, 
@@ -46,7 +47,8 @@ import {
   ArrowRight,
   Sparkles,
   Factory,
-  FileText
+  FileText,
+  History
 } from 'lucide-react';
 
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
@@ -455,7 +457,9 @@ const MemoizedOrderRow = React.memo(({
   handleCreateDyehouse,
   machines,
   externalFactories,
-  onOpenProductionOrder
+  onOpenProductionOrder,
+  onOpenHistory,
+  hasHistory
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -475,6 +479,8 @@ const MemoizedOrderRow = React.memo(({
   machines: MachineSS[];
   externalFactories: any[];
   onOpenProductionOrder: (order: OrderRow, active: string[], planned: string[]) => void;
+  onOpenHistory: (order: OrderRow) => void;
+  hasHistory: boolean;
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const refCode = row.material ? `${selectedCustomerName}-${row.material}` : '-';
@@ -518,15 +524,15 @@ const MemoizedOrderRow = React.memo(({
   const { summary: assignedMachinesSummary, totalCapacity, totalSent, totalReceived } = useMemo(() => {
     if (!row.dyeingPlan || row.dyeingPlan.length === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0 };
     
-    const machineCounts = new Map<string, number>();
+    const machineCounts = new Map<number, number>();
     let total = 0;
     let sent = 0;
     let received = 0;
 
     row.dyeingPlan.forEach(batch => {
-      if (batch.machine) {
-        const current = machineCounts.get(batch.machine) || 0;
-        machineCounts.set(batch.machine, current + 1);
+      if (batch.quantity) {
+        const current = machineCounts.get(batch.quantity) || 0;
+        machineCounts.set(batch.quantity, current + 1);
       }
       total += batch.quantity || 0;
       sent += batch.quantitySent || 0;
@@ -536,7 +542,7 @@ const MemoizedOrderRow = React.memo(({
     if (machineCounts.size === 0 && total === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0 };
 
     const summary = Array.from(machineCounts.entries())
-      .map(([machine, count]) => `${machine}*${count}`)
+      .map(([capacity, count]) => `${capacity}*${count}`)
       .join(' + ');
       
     return { summary, totalCapacity: total, totalSent: sent, totalReceived: received };
@@ -1024,6 +1030,18 @@ const MemoizedOrderRow = React.memo(({
                   </span>
                 )}
               </button>
+
+              <button
+                onClick={() => onOpenHistory(row)}
+                className={`p-1.5 rounded-md transition-all flex-shrink-0 ${
+                  hasHistory 
+                    ? "text-orange-600 bg-orange-50 hover:bg-orange-100 ring-1 ring-orange-200 shadow-sm" 
+                    : "text-slate-300 hover:text-slate-500 hover:bg-slate-50 opacity-60 hover:opacity-100"
+                }`}
+                title={hasHistory ? "View Production History" : "No Production History Found"}
+              >
+                <History className="w-4 h-4" />
+              </button>
             </div>
           </td>
         </>
@@ -1227,16 +1245,22 @@ const MemoizedOrderRow = React.memo(({
                         )}
                       </td>
                       <td className="p-0">
-                        <input
-                          type="text"
-                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right text-xs"
+                        <SearchDropdown
+                          id={`dyehouse-${row.id}-${idx}`}
+                          options={dyehouses}
                           value={batch.dyehouse || ''}
-                          onChange={(e) => {
+                          onChange={(val) => {
                             const newPlan = [...(row.dyeingPlan || [])];
-                            newPlan[idx] = { ...batch, dyehouse: e.target.value };
+                            const recommended = recommendMachine(val, batch.quantitySent || 0);
+                            newPlan[idx] = { 
+                                ...batch, 
+                                dyehouse: val,
+                                quantity: recommended || batch.quantity 
+                            };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                           }}
                           placeholder="المصبغة..."
+                          className="w-full h-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right text-xs"
                         />
                       </td>
                       <td className="p-0">
@@ -1258,8 +1282,21 @@ const MemoizedOrderRow = React.memo(({
                           className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono font-medium text-blue-600"
                           value={batch.quantitySent || ''}
                           onChange={(e) => {
+                            const val = Number(e.target.value);
                             const newPlan = [...(row.dyeingPlan || [])];
-                            newPlan[idx] = { ...batch, quantitySent: Number(e.target.value) };
+                            
+                            // Auto-calculate vessel size if dyehouse is selected
+                            let recommended = batch.quantity;
+                            if (batch.dyehouse) {
+                                const rec = recommendMachine(batch.dyehouse, val);
+                                if (rec) recommended = rec;
+                            }
+
+                            newPlan[idx] = { 
+                                ...batch, 
+                                quantitySent: val,
+                                quantity: recommended 
+                            };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                           }}
                           placeholder="0"
@@ -1420,6 +1457,9 @@ export const ClientOrdersPage: React.FC = () => {
     plannedMachines: string[];
   }>({ isOpen: false, order: null, activeMachines: [], plannedMachines: [] });
 
+  // Production History Modal State
+  const [selectedOrderForHistory, setSelectedOrderForHistory] = useState<OrderRow | null>(null);
+
   // Fix for state reset issue
   const initialSelectionMade = useRef(false);
 
@@ -1522,6 +1562,34 @@ export const ClientOrdersPage: React.FC = () => {
       unsubSettings();
     };
   }, []);
+
+  // --- History Check Logic ---
+  const [historySet, setHistorySet] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!selectedCustomerId || machines.length === 0) return;
+    
+    const client = customers.find(c => c.id === selectedCustomerId);
+    if (!client) return;
+
+    // Derive history from loaded machines data instead of collectionGroup query
+    // because dailyLogs are stored as arrays in MachineSS documents, not subcollections.
+    const fabrics = new Set<string>();
+    const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+    const targetClient = normalize(client.name);
+
+    machines.forEach(machine => {
+        if (machine.dailyLogs && Array.isArray(machine.dailyLogs)) {
+            machine.dailyLogs.forEach(log => {
+                if (normalize(log.client) === targetClient && log.fabric) {
+                    fabrics.add(log.fabric);
+                }
+            });
+        }
+    });
+    
+    setHistorySet(fabrics);
+  }, [selectedCustomerId, customers, machines]);
 
   // Merge Customers & Orders
   useEffect(() => {
@@ -2331,6 +2399,15 @@ export const ClientOrdersPage: React.FC = () => {
     return logs;
   };
 
+  const recommendMachine = (dyehouseName: string, quantitySent: number) => {
+    const dh = dyehouses.find(d => d.name === dyehouseName);
+    if (!dh || !dh.machines || dh.machines.length === 0) return null;
+    
+    const sorted = [...dh.machines].sort((a, b) => a.capacity - b.capacity);
+    const best = sorted.find(m => m.capacity >= quantitySent);
+    return best ? best.capacity : sorted[sorted.length - 1].capacity;
+  };
+
   return (
     <div className="flex flex-col min-h-[calc(100vh-100px)] bg-slate-50 rounded-xl border border-slate-200 shadow-sm">
       <style>{globalStyles}</style>
@@ -2700,6 +2777,8 @@ export const ClientOrdersPage: React.FC = () => {
                                   plannedMachines: planned
                                 });
                               }}
+                              onOpenHistory={(order) => setSelectedOrderForHistory(order)}
+                              hasHistory={historySet.has(row.material || '')}
                             />
                           );
                         })}
@@ -3038,6 +3117,17 @@ export const ClientOrdersPage: React.FC = () => {
                 handleUpdateOrder(productionOrderModal.order.id, { isPrinted: true, printedAt: now });
               }
             }}
+          />
+        )}
+
+        {/* Production History Modal */}
+        {selectedOrderForHistory && (
+          <OrderProductionHistoryModal
+            isOpen={!!selectedOrderForHistory}
+            onClose={() => setSelectedOrderForHistory(null)}
+            order={selectedOrderForHistory}
+            clientName={selectedCustomer?.name || ''}
+            machines={machines}
           />
         )}
 

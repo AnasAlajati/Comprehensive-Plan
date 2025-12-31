@@ -2793,9 +2793,9 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
             </div>
 
           {/* Mobile Card View */}
-          <div className="md:hidden space-y-3">
+          <div className="md:hidden grid grid-cols-2 gap-2">
             {filteredLogs.length === 0 ? (
-              <div className="p-6 text-center text-slate-500 bg-slate-50 rounded-lg border border-slate-200">
+              <div className="col-span-2 p-6 text-center text-slate-500 bg-slate-50 rounded-lg border border-slate-200">
                 No logs found
               </div>
             ) : (
@@ -2806,64 +2806,62 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 const diff = ((Number(log.dayProduction) || 0) - (Number(log.avgProduction) || 0)).toFixed(1);
                 
                 return (
-                  <div key={`${log.machineId}-${idx}`} className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+                  <div key={`${log.machineId}-${idx}`} className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden flex flex-col">
                     {/* Card Header */}
-                    <div className="bg-slate-50 px-4 py-3 border-b border-slate-100 flex justify-between items-center">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-800">{log.machineName}</span>
-                        <span className="text-xs text-slate-400 font-mono">#{idx + 1}</span>
+                    <div className="bg-slate-50 px-2 py-2 border-b border-slate-100 flex justify-between items-center">
+                      <div className="flex items-center gap-1 overflow-hidden">
+                        <span className="font-bold text-slate-800 text-xs truncate">{log.machineName}</span>
+                        <span className="text-[10px] text-slate-400 font-mono shrink-0">#{idx + 1}</span>
                       </div>
-                      <div className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${getStatusColor(normalizedStatus)}`}>
+                      <div className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider shrink-0 ${getStatusColor(normalizedStatus)}`}>
                         {getStatusLabel(normalizedStatus)}
                       </div>
                     </div>
 
                     {/* Card Body */}
-                    <div className="p-4 grid grid-cols-2 gap-4 text-sm">
-                      <div className="col-span-2">
-                        <span className="text-xs text-slate-400 block mb-1">Fabric</span>
-                        <div className="font-medium text-slate-700 truncate">{log.fabric || '-'}</div>
+                    <div className="p-2 grid grid-cols-1 gap-2 text-xs flex-1">
+                      <div>
+                        <span className="text-[10px] text-slate-400 block mb-0.5">Fabric</span>
+                        <div className="font-medium text-slate-700 truncate" title={log.fabric}>{log.fabric || '-'}</div>
                       </div>
                       
-                      <div>
-                        <span className="text-xs text-slate-400 block mb-1">Client</span>
-                        <div className="font-medium text-slate-700">{log.client || '-'}</div>
-                      </div>
-
-                      <div>
-                        <span className="text-xs text-slate-400 block mb-1">End Date</span>
-                        <div className="font-medium text-blue-600">{endDate}</div>
-                      </div>
-
-                      <div>
-                        <span className="text-xs text-slate-400 block mb-1">Remaining</span>
-                        <div className={`font-bold ${Number(log.remainingMfg) === 0 ? 'text-green-600' : 'text-slate-700'}`}>
-                          {log.remainingMfg || 0}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                            <span className="text-[10px] text-slate-400 block mb-0.5">Client</span>
+                            <div className="font-medium text-slate-700 truncate" title={log.client}>{log.client || '-'}</div>
+                        </div>
+                        <div>
+                            <span className="text-[10px] text-slate-400 block mb-0.5">End</span>
+                            <div className="font-medium text-blue-600">{endDate}</div>
                         </div>
                       </div>
 
-                      <div>
-                        <span className="text-xs text-slate-400 block mb-1">Today's Prod.</span>
-                        <div className="font-medium text-slate-700">{log.dayProduction || 0}</div>
-                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-[10px] text-slate-400 block mb-0.5">Rem</span>
+                            <div className={`font-bold ${Number(log.remainingMfg) === 0 ? 'text-green-600' : 'text-slate-700'}`}>
+                              {log.remainingMfg || 0}
+                            </div>
+                          </div>
 
-                      <div>
-                        <span className="text-xs text-slate-400 block mb-1">Diff</span>
-                        <div className={`font-medium ${Number(diff) < 0 ? 'text-red-600' : 'text-green-600'}`}>{diff}</div>
+                          <div>
+                            <span className="text-[10px] text-slate-400 block mb-0.5">Prod</span>
+                            <div className="font-medium text-slate-700">{log.dayProduction || 0}</div>
+                          </div>
                       </div>
 
                       {(log.scrap > 0 || log.reason) && (
-                        <div className="col-span-2 bg-red-50 p-2 rounded border border-red-100 mt-2">
+                        <div className="bg-red-50 p-1.5 rounded border border-red-100 mt-1">
                            {log.scrap > 0 && (
-                             <div className="flex justify-between mb-1">
-                               <span className="text-xs text-red-500">Scrap:</span>
-                               <span className="text-xs font-bold text-red-700">{log.scrap}</span>
+                             <div className="flex justify-between mb-0.5">
+                               <span className="text-[10px] text-red-500">Scrap:</span>
+                               <span className="text-[10px] font-bold text-red-700">{log.scrap}</span>
                              </div>
                            )}
                            {log.reason && (
                              <div className="flex justify-between">
-                               <span className="text-xs text-red-500">Reason:</span>
-                               <span className="text-xs font-bold text-red-700">{log.reason}</span>
+                               <span className="text-[10px] text-red-500">Rsn:</span>
+                               <span className="text-[10px] font-bold text-red-700 truncate max-w-[60px]" title={log.reason}>{log.reason}</span>
                              </div>
                            )}
                         </div>
@@ -2871,18 +2869,18 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                     </div>
 
                     {/* Card Footer */}
-                    <div className="bg-slate-50 px-4 py-3 border-t border-slate-100 flex justify-between items-center">
+                    <div className="bg-slate-50 px-2 py-2 border-t border-slate-100 flex justify-between items-center gap-1">
                       <button
                         onClick={() => setDetailsModal({ isOpen: true, log, index: idx })}
-                        className="text-xs font-medium text-slate-500 hover:text-slate-700"
+                        className="text-[10px] font-medium text-slate-500 hover:text-slate-700 flex-1 text-center"
                       >
-                        View Details
+                        Details
                       </button>
                       <button
                         onClick={() => openPlansModal(log.machineId, log.machineName)}
-                        className="px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded shadow-sm hover:bg-blue-700 transition-colors"
+                        className="px-2 py-1 bg-blue-600 text-white text-[10px] font-bold rounded shadow-sm hover:bg-blue-700 transition-colors flex-1 text-center truncate"
                       >
-                        Manage Plans
+                        Plans
                       </button>
                     </div>
                   </div>
