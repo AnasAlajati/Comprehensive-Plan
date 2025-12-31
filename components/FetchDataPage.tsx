@@ -1742,16 +1742,21 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   };
 
   const handleUpdateLog = async (machineId: string, logId: string, field: string, newValue: any) => {
+    // Get current values from local state to ensure we don't overwrite recent changes
+    // that might not be in Firestore yet (Race Condition Fix)
+    const currentLog = allLogs.find(l => l.machineId === machineId && l.id === logId);
+    const effectiveClient = field === 'client' ? newValue : (currentLog?.client || '');
+    const effectiveFabric = field === 'fabric' ? newValue : (currentLog?.fabric || '');
+    const effectiveStatus = field === 'status' ? newValue : (currentLog?.status || '');
+
     // Optimistic Update
     let calculatedRemaining: number | undefined;
-    let currentClient = '';
-    let currentFabric = '';
+    let currentClient = effectiveClient;
+    let currentFabric = effectiveFabric;
 
     setAllLogs(prevLogs => prevLogs.map(log => {
       if (log.machineId === machineId && log.id === logId) {
         const updatedLog = { ...log, [field]: newValue };
-        currentClient = updatedLog.client;
-        currentFabric = updatedLog.fabric;
         
         if (field === 'dayProduction') {
            const oldRemaining = Number(log.remainingMfg) || 0;
@@ -1785,9 +1790,9 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           date: selectedDate,
           dayProduction: 0,
           scrap: 0,
-          status: machine.status || '',
-          fabric: '',
-          client: '',
+          status: effectiveStatus || machine.status || '',
+          fabric: effectiveFabric,
+          client: effectiveClient,
           avgProduction: machine.avgProduction || 0,
           remainingMfg: 0,
           reason: '',
