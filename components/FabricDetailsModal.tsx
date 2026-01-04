@@ -60,6 +60,7 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
   const [isEditingVariant, setIsEditingVariant] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'composition' | 'allocations'>('composition');
 
   // Inventory State
   const [inventoryMap, setInventoryMap] = useState<Map<string, YarnInventoryItem[]>>(new Map());
@@ -124,9 +125,33 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
         // Auto-link yarnId if missing but name matches an existing yarn
         const resolvedComposition = initialComposition.map(comp => {
             if (!comp.yarnId && comp.name) {
-                const matchingYarn = allYarns.find(y => y.name.toLowerCase().trim() === comp.name.toLowerCase().trim());
+                console.log(`[AutoLink] Trying to link: "${comp.name}"`);
+                
+                // 1. Try Strict/Trimmed Match
+                let matchingYarn = allYarns.find(y => y.name.toLowerCase().trim() === comp.name.toLowerCase().trim());
+                
+                // 2. Try Robust Match (Ignore spaces and special chars)
+                if (!matchingYarn) {
+                    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
+                    const target = normalize(comp.name);
+                    console.log(`[AutoLink] Normalized Target: "${target}"`);
+                    
+                    matchingYarn = allYarns.find(y => {
+                        const normY = normalize(y.name);
+                        if (normY === target) return true;
+                        // Debug: Log close matches?
+                        if (normY.includes(target) || target.includes(normY)) {
+                            console.log(`[AutoLink] Close match found but not exact: "${y.name}" -> "${normY}"`);
+                        }
+                        return false;
+                    });
+                }
+
                 if (matchingYarn) {
+                    console.log(`[AutoLink] SUCCESS: Linked to "${matchingYarn.name}" (${matchingYarn.id})`);
                     return { ...comp, yarnId: matchingYarn.id };
+                } else {
+                    console.log(`[AutoLink] FAILED: No match found for "${comp.name}"`);
                 }
             }
             return comp;
@@ -186,10 +211,12 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
                 // 3. Default: Add exact name
                 namesToQuery.add(y.name);
                 
-                // 4. Add Loose Matches from Inventory List
-                const normalized = y.name.toLowerCase().trim();
+                // 4. Add Loose/Robust Matches from Inventory List
+                const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
+                const target = normalize(y.name);
+                
                 inventoryYarnNames.forEach(invName => {
-                    if (invName.toLowerCase().trim() === normalized) {
+                    if (normalize(invName) === target) {
                         namesToQuery.add(invName);
                     }
                 });
@@ -197,9 +224,11 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
                 // Fallback: Use component name directly if yarnId is missing
                 namesToQuery.add(c.name);
                 
-                const normalized = c.name.toLowerCase().trim();
+                const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
+                const target = normalize(c.name);
+
                 inventoryYarnNames.forEach(invName => {
-                    if (invName.toLowerCase().trim() === normalized) {
+                    if (normalize(invName) === target) {
                         namesToQuery.add(invName);
                     }
                 });
@@ -228,17 +257,23 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
                         
                         let match = false;
                         
+                        const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
+
                         if (y) {
                             // Strict Match
                             if (y.name === item.yarnName) match = true;
                             // Loose Match
                             if (y.name.toLowerCase().trim() === item.yarnName.toLowerCase().trim()) match = true;
+                            // Robust Match
+                            if (normalize(y.name) === normalize(item.yarnName)) match = true;
                             // Persistent Mapping
                             if (persistentMappings[y.name] === item.yarnName) match = true;
                         } else if (comp.name) {
                             // Fallback: Match by component name directly if yarnId is missing
                             if (comp.name === item.yarnName) match = true;
                             if (comp.name.toLowerCase().trim() === item.yarnName.toLowerCase().trim()) match = true;
+                            // Robust Match
+                            if (normalize(comp.name) === normalize(item.yarnName)) match = true;
                         }
 
                         // Manual Mapping
@@ -334,10 +369,9 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
     setAllocations(prev => ({ ...prev, [yarnId]: newAllocations }));
   };
 
-  const handleSaveAllocations = async () => {
+  const saveAllocationsInternal = async () => {
     if (!orderId || !customerId || !onUpdateOrderAllocations) return;
     
-    setIsSaving(true);
     try {
         // 1. Update Order
         await onUpdateOrderAllocations(orderId, allocations);
@@ -404,12 +438,9 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
         // Update prevAllocations to match current
         setPrevAllocations(JSON.parse(JSON.stringify(allocations)));
         
-        alert("Allocations saved successfully!");
     } catch (err) {
         console.error("Error saving allocations:", err);
-        setError("Failed to save allocations.");
-    } finally {
-        setIsSaving(false);
+        throw err;
     }
   };
 
@@ -440,7 +471,7 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
     setComposition(newComp);
   };
 
-  const handleSave = async () => {
+  const handleSaveAll = async () => {
     if (Math.abs(totalPercentage - 100) > 0.1 && composition.length > 0) {
         if (!confirm(`Total percentage is ${totalPercentage}%. Do you want to save anyway?`)) {
             return;
@@ -450,6 +481,7 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
     setIsSaving(true);
     setError(null);
     try {
+      // 1. Save Composition
       // Ensure numbers are saved as numbers
       const cleanComposition = composition.map(c => ({
         ...c,
@@ -471,9 +503,14 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
           await onUpdateFabric(fabric.id!, { yarnComposition: cleanComposition });
       }
 
+      // 2. Save Allocations (if applicable)
+      if (orderId && customerId && onUpdateOrderAllocations) {
+          await saveAllocationsInternal();
+      }
+
       onClose();
     } catch (err) {
-      console.error("Error saving fabric composition:", err);
+      console.error("Error saving all:", err);
       setError("Failed to save changes.");
     } finally {
       setIsSaving(false);
@@ -481,8 +518,9 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
   };
 
   // Helper to get yarn name by ID
-  const getYarnName = (id: string) => {
-    return allYarns.find(y => y.id === id)?.name || id;
+  const getYarnName = (id: string, name?: string) => {
+    if (!id) return name || 'Unknown Yarn';
+    return allYarns.find(y => y.id === id)?.name || name || id;
   };
 
   const handleSaveVariant = async () => {
@@ -522,87 +560,45 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
         
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-          <div>
-            <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-              <Calculator className="w-5 h-5 text-blue-600" />
-              Yarn Composition
-            </h2>
-            <p className="text-sm text-slate-500">
-              Fabric: <span className="font-medium text-slate-700">{fabric.name}</span>
-            </p>
-            {/* Variant Selector */}
-            <div className="mt-2 flex items-center gap-2">
-                {fabric.variants && fabric.variants.length > 0 ? (
-                    <select 
-                        value={activeVariantId || ''}
-                        disabled={isEditingVariant}
-                        onChange={(e) => {
-                            const vId = e.target.value;
-                            setActiveVariantId(vId);
-                            const v = fabric.variants.find(v => v.id === vId);
-                            if (v) setComposition(v.yarns || []);
-                        }}
-                        className="text-xs p-1 border border-slate-300 rounded bg-white max-w-md"
-                    >
-                        {fabric.variants.map((v, idx) => (
-                            <option key={v.id} value={v.id}>
-                                Variant {idx + 1}: {v.yarns.map(y => `${y.percentage}% ${y.name}`).join(', ')}
-                            </option>
-                        ))}
-                    </select>
-                ) : (
-                    <span className="text-xs text-slate-400 italic">No variants defined</span>
-                )}
-                
-                {!isEditingVariant ? (
-                    <button
-                        onClick={() => {
-                            setIsEditingVariant(true);
-                            // If no composition, start fresh
-                            if (composition.length === 0) {
-                                setComposition([{ yarnId: '', percentage: 100, scrapPercentage: 0 }]);
-                            }
-                        }}
-                        className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded border border-blue-100 hover:bg-blue-100 font-medium flex items-center gap-1"
-                    >
-                        <Plus size={12} /> New Variant
-                    </button>
-                ) : (
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={handleSaveVariant}
-                            disabled={isSaving}
-                            className="text-xs bg-emerald-50 text-emerald-600 px-2 py-1 rounded border border-emerald-100 hover:bg-emerald-100 font-medium flex items-center gap-1"
-                        >
-                            <Save size={12} /> Save as New Variant
-                        </button>
-                        <button
-                            onClick={() => {
-                                setIsEditingVariant(false);
-                                // Reset to active variant
-                                if (activeVariantId) {
-                                    const v = fabric.variants.find(v => v.id === activeVariantId);
-                                    if (v) setComposition(v.yarns || []);
-                                }
-                            }}
-                            className="text-xs text-slate-500 hover:text-slate-700"
-                        >
-                            Cancel
-                        </button>
-                    </div>
-                )}
+        <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <Calculator className="w-5 h-5 text-blue-600" />
+                Yarn Composition & Allocation
+                </h2>
+                <p className="text-sm text-slate-500">
+                Fabric: <span className="font-medium text-slate-700">{fabric.name}</span>
+                </p>
             </div>
+            <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                <X className="w-5 h-5 text-slate-400" />
+            </button>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-            <X className="w-5 h-5 text-slate-400" />
-          </button>
+
+          {/* Tabs */}
+          <div className="flex items-center gap-1 border-b border-slate-200">
+            <button
+                onClick={() => setActiveTab('composition')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'composition' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            >
+                Composition
+            </button>
+            {orderId && (
+                <button
+                    onClick={() => setActiveTab('allocations')}
+                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'allocations' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+                >
+                    Allocations
+                </button>
+            )}
+          </div>
         </div>
 
         {/* Body */}
         <div className="p-6 overflow-y-auto flex-1">
           
-          {/* Order Context */}
+          {/* Order Context Summary (Always Visible) */}
           <div className="mb-6 bg-blue-50 p-4 rounded-lg border border-blue-100 flex items-center justify-between">
             <div>
               <span className="text-xs font-semibold text-blue-600 uppercase tracking-wider">Order Quantity</span>
@@ -616,122 +612,196 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
             </div>
           </div>
 
-          {/* Composition Table */}
-          <div className="space-y-3">
-            <div className="grid grid-cols-12 gap-4 text-xs font-semibold text-slate-500 uppercase tracking-wider px-2">
-              <div className="col-span-5">Yarn Type</div>
-              <div className="col-span-2 text-right">Percentage</div>
-              <div className="col-span-2 text-right">Scrap %</div>
-              <div className="col-span-2 text-right">Required (kg)</div>
-              <div className="col-span-1"></div>
+          {activeTab === 'composition' && (
+            <div className="space-y-4 animate-in fade-in slide-in-from-left-4 duration-300">
+                {/* Variant Selector */}
+                <div className="flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-200 mb-4">
+                    <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-slate-700">Variant:</span>
+                        {fabric.variants && fabric.variants.length > 0 ? (
+                            <select 
+                                value={activeVariantId || ''}
+                                disabled={isEditingVariant}
+                                onChange={(e) => {
+                                    const vId = e.target.value;
+                                    setActiveVariantId(vId);
+                                    const v = fabric.variants.find(v => v.id === vId);
+                                    if (v) setComposition(v.yarns || []);
+                                }}
+                                className="text-sm p-1.5 border border-slate-300 rounded bg-white max-w-xs outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                                {fabric.variants.map((v, idx) => (
+                                    <option key={v.id} value={v.id}>
+                                        Variant {idx + 1}: {v.yarns.map(y => `${y.percentage}% ${y.name}`).join(', ')}
+                                    </option>
+                                ))}
+                            </select>
+                        ) : (
+                            <span className="text-sm text-slate-400 italic">No variants defined</span>
+                        )}
+                    </div>
+                    
+                    {!isEditingVariant ? (
+                        <button
+                            onClick={() => {
+                                setIsEditingVariant(true);
+                                if (composition.length === 0) {
+                                    setComposition([{ yarnId: '', percentage: 100, scrapPercentage: 0 }]);
+                                }
+                            }}
+                            className="text-sm bg-white text-blue-600 px-3 py-1.5 rounded border border-blue-200 hover:bg-blue-50 font-medium flex items-center gap-1 shadow-sm"
+                        >
+                            <Plus size={14} /> New Variant
+                        </button>
+                    ) : (
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={handleSaveVariant}
+                                disabled={isSaving}
+                                className="text-sm bg-emerald-600 text-white px-3 py-1.5 rounded hover:bg-emerald-700 font-medium flex items-center gap-1 shadow-sm"
+                            >
+                                <Save size={14} /> Save as New Variant
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setIsEditingVariant(false);
+                                    if (activeVariantId) {
+                                        const v = fabric.variants.find(v => v.id === activeVariantId);
+                                        if (v) setComposition(v.yarns || []);
+                                    }
+                                }}
+                                className="text-sm text-slate-500 hover:text-slate-700 px-2"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    )}
+                </div>
+
+                {/* Composition Table */}
+                <div className="space-y-3">
+                    <div className="grid grid-cols-12 gap-4 text-xs font-semibold text-slate-500 uppercase tracking-wider px-2">
+                    <div className="col-span-5">Yarn Type</div>
+                    <div className="col-span-2 text-right">Percentage</div>
+                    <div className="col-span-2 text-right">Scrap %</div>
+                    <div className="col-span-2 text-right">Required (kg)</div>
+                    <div className="col-span-1"></div>
+                    </div>
+
+                    {composition.map((comp, index) => {
+                    const baseWeight = (orderQuantity * (comp.percentage || 0)) / 100;
+                    const scrapFactor = 1 + ((comp.scrapPercentage || 0) / 100);
+                    const requiredWeight = baseWeight * scrapFactor;
+
+                    return (
+                    <div key={index} className="grid grid-cols-12 gap-4 items-center bg-slate-50 p-2 rounded-md border border-slate-200 group hover:border-blue-300 transition-colors">
+                        
+                        {/* Yarn Selector */}
+                        <div className="col-span-5">
+                        <YarnSelector 
+                            value={comp.yarnId || comp.name} 
+                            yarns={allYarns}
+                            inventoryYarnNames={inventoryYarnNames}
+                            disabled={!isEditingVariant}
+                            onChange={(val) => {
+                                const selectedYarn = allYarns.find(y => y.id === val);
+                                const newComp = [...composition];
+                                newComp[index] = { 
+                                    ...newComp[index], 
+                                    yarnId: val,
+                                    name: selectedYarn ? selectedYarn.name : newComp[index].name
+                                };
+                                setComposition(newComp);
+                            }}
+                            onAddYarn={onAddYarn}
+                        />
+                        </div>
+
+                        {/* Percentage Input */}
+                        <div className="col-span-2 relative">
+                        <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="0.1"
+                            disabled={!isEditingVariant}
+                            value={comp.percentage}
+                            onChange={(e) => handleUpdateRow(index, 'percentage', e.target.value)}
+                            className={`w-full px-3 py-2 bg-white border border-slate-200 rounded-md text-right focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm ${!isEditingVariant ? 'bg-slate-100 text-slate-500' : ''}`}
+                        />
+                        <span className="absolute right-8 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">%</span>
+                        </div>
+
+                        {/* Scrap Percentage Input */}
+                        <div className="col-span-2 relative">
+                        <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="0.1"
+                            disabled={!isEditingVariant}
+                            value={comp.scrapPercentage || 0}
+                            onChange={(e) => handleUpdateRow(index, 'scrapPercentage', e.target.value)}
+                            className={`w-full px-3 py-2 bg-white border border-slate-200 rounded-md text-right focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono text-sm text-orange-600 ${!isEditingVariant ? 'bg-slate-100 text-slate-500' : ''}`}
+                        />
+                        <span className="absolute right-8 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">%</span>
+                        </div>
+
+                        {/* Calculated Weight */}
+                        <div className="col-span-2 text-right font-mono text-slate-700 font-medium">
+                        {requiredWeight.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+                        </div>
+
+                        {/* Delete */}
+                        <div className="col-span-1 text-center">
+                        {isEditingVariant && (
+                            <button 
+                                onClick={() => handleRemoveRow(index)}
+                                className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
+                            >
+                                <Trash2 className="w-4 h-4" />
+                            </button>
+                        )}
+                        </div>
+                    </div>
+                    )})}
+
+                    {composition.length === 0 && (
+                    <div className="text-center py-8 text-slate-400 italic border-2 border-dashed border-slate-200 rounded-lg">
+                        No yarns defined yet. Add a yarn to start.
+                    </div>
+                    )}
+
+                    {isEditingVariant && (
+                        <button
+                        onClick={handleAddRow}
+                        className="w-full py-3 border-2 border-dashed border-slate-300 rounded-lg text-slate-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-all flex items-center justify-center gap-2 font-medium"
+                        >
+                        <Plus className="w-4 h-4" />
+                        Add Yarn Component
+                        </button>
+                    )}
+                </div>
             </div>
+          )}
 
-            {composition.map((comp, index) => {
-              const baseWeight = (orderQuantity * (comp.percentage || 0)) / 100;
-              const scrapFactor = 1 + ((comp.scrapPercentage || 0) / 100);
-              const requiredWeight = baseWeight * scrapFactor;
-
-              return (
-              <div key={index} className="grid grid-cols-12 gap-4 items-center bg-slate-50 p-2 rounded-md border border-slate-200 group hover:border-blue-300 transition-colors">
-                
-                {/* Yarn Selector */}
-                <div className="col-span-5">
-                  <YarnSelector 
-                    value={comp.yarnId || comp.name} 
-                    yarns={allYarns}
-                    inventoryYarnNames={inventoryYarnNames}
-                    disabled={!isEditingVariant}
-                    onChange={(val) => {
-                        // Update both yarnId and name to keep them in sync
-                        const selectedYarn = allYarns.find(y => y.id === val);
-                        const newComp = [...composition];
-                        newComp[index] = { 
-                            ...newComp[index], 
-                            yarnId: val,
-                            name: selectedYarn ? selectedYarn.name : newComp[index].name
-                        };
-                        setComposition(newComp);
-                    }}
-                    onAddYarn={onAddYarn}
-                  />
+          {activeTab === 'allocations' && orderId && (
+            <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                <div className="bg-indigo-50 p-4 rounded-lg border border-indigo-100 mb-4">
+                    <h3 className="text-sm font-bold text-indigo-800 flex items-center gap-2 mb-2">
+                        <Package className="w-4 h-4" />
+                        Allocation Instructions
+                    </h3>
+                    <p className="text-xs text-indigo-600">
+                        Allocate specific inventory lots to each yarn component. The system will automatically deduct these quantities from inventory upon saving.
+                    </p>
                 </div>
-
-                {/* Percentage Input */}
-                <div className="col-span-2 relative">
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.1"
-                    disabled={!isEditingVariant}
-                    value={comp.percentage}
-                    onChange={(e) => handleUpdateRow(index, 'percentage', e.target.value)}
-                    className={`w-full px-3 py-2 bg-white border border-slate-200 rounded-md text-right focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm ${!isEditingVariant ? 'bg-slate-100 text-slate-500' : ''}`}
-                  />
-                  <span className="absolute right-8 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">%</span>
-                </div>
-
-                {/* Scrap Percentage Input */}
-                <div className="col-span-2 relative">
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.1"
-                    disabled={!isEditingVariant}
-                    value={comp.scrapPercentage || 0}
-                    onChange={(e) => handleUpdateRow(index, 'scrapPercentage', e.target.value)}
-                    className={`w-full px-3 py-2 bg-white border border-slate-200 rounded-md text-right focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono text-sm text-orange-600 ${!isEditingVariant ? 'bg-slate-100 text-slate-500' : ''}`}
-                  />
-                  <span className="absolute right-8 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">%</span>
-                </div>
-
-                {/* Calculated Weight */}
-                <div className="col-span-2 text-right font-mono text-slate-700 font-medium">
-                  {requiredWeight.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
-                </div>
-
-                {/* Delete */}
-                <div className="col-span-1 text-center">
-                  {isEditingVariant && (
-                    <button 
-                        onClick={() => handleRemoveRow(index)}
-                        className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
-                    >
-                        <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              </div>
-            )})}
-
-            {composition.length === 0 && (
-              <div className="text-center py-8 text-slate-400 italic border-2 border-dashed border-slate-200 rounded-lg">
-                No yarns defined yet. Add a yarn to start.
-              </div>
-            )}
-
-            {isEditingVariant && (
-                <button
-                onClick={handleAddRow}
-                className="w-full py-3 border-2 border-dashed border-slate-300 rounded-lg text-slate-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-all flex items-center justify-center gap-2 font-medium"
-                >
-                <Plus className="w-4 h-4" />
-                Add Yarn Component
-                </button>
-            )}
-          </div>
-
-          {/* Yarn Allocation Section (Order Specific) */}
-          {orderId && (
-            <div className="mt-8 border-t border-slate-200 pt-6">
-                <h3 className="text-md font-bold text-slate-800 mb-4 flex items-center gap-2">
-                    <Package className="w-5 h-5 text-indigo-600" />
-                    Yarn Allocation (Order Specific)
-                </h3>
                 
                 {loadingInventory ? (
-                    <div className="text-center py-4 text-slate-500">Loading inventory data...</div>
+                    <div className="text-center py-12 text-slate-500">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+                        Loading inventory data...
+                    </div>
                 ) : (
                     <div className="space-y-3">
                         <div className="grid grid-cols-12 gap-4 text-xs font-semibold text-slate-500 uppercase tracking-wider px-2">
@@ -744,21 +814,113 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
                             const baseWeight = (orderQuantity * (comp.percentage || 0)) / 100;
                             const scrapFactor = 1 + ((comp.scrapPercentage || 0) / 100);
                             const requiredWeight = baseWeight * scrapFactor;
-                            const yarnName = getYarnName(comp.yarnId);
-                            const lots = inventoryMap.get(comp.yarnId) || [];
+                            const yarnName = getYarnName(comp.yarnId, comp.name);
+                            const lots = comp.yarnId ? (inventoryMap.get(comp.yarnId) || []) : [];
                             
                             return (
-                                <div key={index} className="grid grid-cols-12 gap-4 items-start bg-indigo-50/50 p-3 rounded-md border border-indigo-100">
+                                <div key={index} className="grid grid-cols-12 gap-4 items-start bg-white p-3 rounded-md border border-slate-200 shadow-sm">
                                     <div className="col-span-3 font-medium text-slate-700 pt-1">
                                         {yarnName}
-                                        {manualMapping[comp.yarnId] && (
+                                        {comp.yarnId && manualMapping[comp.yarnId] && (
                                             <div className="text-[10px] text-indigo-600 font-normal">
                                                 Mapped to: {manualMapping[comp.yarnId]}
                                             </div>
                                         )}
+                                        {!comp.yarnId && (
+                                            <div className="text-[10px] text-red-500 font-bold flex items-center gap-1 mt-1">
+                                                <AlertCircle size={10} />
+                                                Unlinked Yarn
+                                            </div>
+                                        )}
                                     </div>
                                     <div className="col-span-9 relative">
-                                        {isSearchingInventory === comp.yarnId ? (
+                                        {!comp.yarnId ? (
+                                            <div className="flex flex-col gap-2">
+                                                <div className="p-3 bg-red-50 border border-red-100 rounded text-xs text-red-600 flex items-center gap-2">
+                                                    <AlertCircle size={14} />
+                                                    Please select a valid yarn in the Composition tab to enable allocation.
+                                                </div>
+                                                
+                                                {/* Quick Fix for Inventory Match */}
+                                                {(() => {
+                                                    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
+                                                    const target = normalize(comp.name || '');
+                                                    const inventoryMatch = inventoryYarnNames.find(n => normalize(n) === target);
+                                                    
+                                                    if (inventoryMatch) {
+                                                        return (
+                                                            <button
+                                                                onClick={async () => {
+                                                                    if (confirm(`Create Master Yarn for "${inventoryMatch}"?`)) {
+                                                                        try {
+                                                                            const newId = await onAddYarn(inventoryMatch);
+                                                                            // Update local composition state to link immediately
+                                                                            const newComp = [...composition];
+                                                                            newComp[index] = { ...newComp[index], yarnId: newId };
+                                                                            setComposition(newComp);
+                                                                        } catch (e) {
+                                                                            alert("Failed to create yarn: " + e);
+                                                                        }
+                                                                    }
+                                                                }}
+                                                                className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-medium flex items-center justify-center gap-2 shadow-sm"
+                                                            >
+                                                                <CheckCircle2 size={14} />
+                                                                Fix: Create Master Yarn from Stock
+                                                            </button>
+                                                        );
+                                                    }
+                                                    return null;
+                                                })()}
+
+                                                {/* DEBUG TOOL */}
+                                                <div className="p-2 bg-slate-100 border border-slate-200 rounded text-[10px] font-mono text-slate-600">
+                                                    <div className="font-bold mb-1">DEBUG INFO:</div>
+                                                    <div>Raw Name: "{comp.name}"</div>
+                                                    <div>Normalized: "{comp.name?.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '')}"</div>
+                                                    <div>Master Yarns Loaded: {allYarns.length}</div>
+                                                    
+                                                    <div className="mt-2 font-bold">Potential Candidates in Master List:</div>
+                                                    {(() => {
+                                                        const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
+                                                        const target = normalize(comp.name || '');
+                                                        // Find anything that shares the first 5 chars or is included
+                                                        const candidates = allYarns.filter(y => {
+                                                            const normY = normalize(y.name);
+                                                            return normY.includes(target) || target.includes(normY) || (target.length > 4 && normY.startsWith(target.substring(0, 5)));
+                                                        }).slice(0, 5);
+
+                                                        // Check Inventory List as well
+                                                        const inventoryMatch = inventoryYarnNames.find(n => normalize(n) === target);
+
+                                                        return (
+                                                            <>
+                                                                {inventoryMatch && (
+                                                                    <div className="mb-2 p-1 bg-green-50 border border-green-200 rounded text-green-700">
+                                                                        <strong>Found in Inventory!</strong><br/>
+                                                                        "{inventoryMatch}" exists in stock but is missing from the Master Yarn List. You must create it to link it.
+                                                                    </div>
+                                                                )}
+                                                                
+                                                                {candidates.length === 0 ? (
+                                                                    <div>No close matches found in Master List.</div>
+                                                                ) : (
+                                                                    candidates.map(c => (
+                                                                        <div key={c.id} className="border-t border-slate-200 mt-1 pt-1">
+                                                                            <div>Name: "{c.name}"</div>
+                                                                            <div>Norm: "{normalize(c.name)}"</div>
+                                                                            <div className="text-red-500">
+                                                                                Match: {normalize(c.name) === target ? "YES (Why didn't it link?)" : "NO"}
+                                                                            </div>
+                                                                        </div>
+                                                                    ))
+                                                                )}
+                                                            </>
+                                                        );
+                                                    })()}
+                                                </div>
+                                            </div>
+                                        ) : isSearchingInventory === comp.yarnId ? (
                                             <div className="absolute inset-0 z-10 bg-white border border-indigo-300 rounded-md shadow-lg flex flex-col min-h-[150px]">
                                                 <div className="flex items-center border-b border-slate-100 p-1">
                                                     <input 
@@ -804,16 +966,6 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
                         })}
                     </div>
                 )}
-                
-                <div className="mt-4 flex justify-end">
-                    <button 
-                        onClick={handleSaveAllocations}
-                        disabled={isSaving}
-                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-medium flex items-center gap-2"
-                    >
-                        {isSaving ? 'Saving...' : <><Check className="w-4 h-4" /> Save Allocations</>}
-                    </button>
-                </div>
             </div>
           )}
         </div>
@@ -833,14 +985,14 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
               Cancel
             </button>
             <button 
-              onClick={handleSave}
+              onClick={handleSaveAll}
               disabled={isSaving}
               className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium shadow-sm shadow-blue-200 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSaving ? 'Saving...' : (
                 <>
                   <Save className="w-4 h-4" />
-                  Save Composition
+                  Save Changes
                 </>
               )}
             </button>
@@ -1118,20 +1270,23 @@ const YarnSelector: React.FC<{
 
   // Build Unified Options List
   const options = React.useMemo(() => {
-      const term = search.toLowerCase().trim();
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
+      const term = normalize(search);
+      
       const results: { name: string, source: 'yarn' | 'inventory' | 'both', id?: string }[] = [];
       const seenNames = new Set<string>();
 
       // 1. Add Inventory Items (Priority)
       inventoryYarnNames.forEach(name => {
+          const normalizedName = normalize(name);
+          
           // Use a more lenient search: check if term is included in name OR name is included in term
-          // This helps with partial matches or slight variations
-          if (!term || name.toLowerCase().includes(term)) {
+          if (!term || normalizedName.includes(term)) {
               const normalized = name.toLowerCase().trim();
               
               // Check if this inventory name matches an existing yarn
               // We use a strict match for linking, but lenient for display
-              const existingYarn = yarns.find(y => y.name.toLowerCase().trim() === normalized);
+              const existingYarn = yarns.find(y => normalize(y.name) === normalizedName);
               
               results.push({
                   name: name,
@@ -1146,7 +1301,8 @@ const YarnSelector: React.FC<{
       // RESTORED: We need to show yarns from FabricSS even if they are not in inventory yet,
       // so the user can see what was imported from Excel.
       yarns.forEach(y => {
-          if (!term || y.name.toLowerCase().includes(term)) {
+          const normalizedName = normalize(y.name);
+          if (!term || normalizedName.includes(term)) {
               const normalized = y.name.toLowerCase().trim();
               if (!seenNames.has(normalized)) {
                   results.push({

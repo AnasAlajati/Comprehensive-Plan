@@ -11,7 +11,8 @@ import {
     orderBy,
     Timestamp,
     writeBatch,
-    QueryDocumentSnapshot
+    QueryDocumentSnapshot,
+    addDoc
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { YarnInventoryItem } from '../types';
@@ -131,5 +132,31 @@ export const YarnService = {
             console.error("Error fetching inventory page:", error);
             return { items: [], lastDoc: null };
         }
+    },
+
+    // --- Master Yarn Management ---
+
+    async getAllYarns(): Promise<any[]> {
+        try {
+            const snapshot = await getDocs(collection(db, 'yarns'));
+            return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        } catch (error) {
+            console.error("Error fetching master yarns:", error);
+            return [];
+        }
+    },
+
+    async addYarn(name: string): Promise<string> {
+        try {
+            const docRef = await addDoc(collection(db, 'yarns'), {
+                name,
+                createdAt: new Date().toISOString()
+            });
+            return docRef.id;
+        } catch (error) {
+            console.error("Error adding master yarn:", error);
+            throw error;
+        }
     }
 };
+

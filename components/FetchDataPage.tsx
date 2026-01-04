@@ -13,6 +13,7 @@ import { CheckCircle, Send, Link, Truck, Layout, Factory, FileSpreadsheet, Uploa
 import { ExternalProductionSheet } from './ExternalProductionSheet'; // New Component - Force Refresh
 import { FabricFormModal } from './FabricFormModal';
 import { FabricDirectoryModal } from './FabricDirectoryModal';
+import { MachineHistoryModal } from './MachineHistoryModal';
 
 // Navigable fields across the whole row (including read-only) for smooth Excel-like movement
 const NAVIGABLE_FIELDS: (keyof any)[] = [
@@ -352,6 +353,15 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [lastValidDate, setLastValidDate] = useState<string>('');
   const [isFabricModalOpen, setIsFabricModalOpen] = useState(false);
   const [isFabricDirectoryOpen, setIsFabricDirectoryOpen] = useState(false);
+  const [historyModalOpen, setHistoryModalOpen] = useState<{
+    isOpen: boolean;
+    machineId: string;
+    machineName: string;
+  }>({
+    isOpen: false,
+    machineId: '',
+    machineName: ''
+  });
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     type: 'fabric' | 'client';
@@ -2804,6 +2814,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 const isWorking = normalizedStatus === MachineStatus.WORKING;
                 const endDate = calculateEndDate(log.date || selectedDate, log.remainingMfg || 0, log.dayProduction || 0);
                 const diff = ((Number(log.dayProduction) || 0) - (Number(log.avgProduction) || 0)).toFixed(1);
+                const { shortName } = parseFabricName(log.fabric || '');
                 
                 return (
                   <div key={`${log.machineId}-${idx}`} className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden flex flex-col">
@@ -2822,7 +2833,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                     <div className="p-2 grid grid-cols-1 gap-2 text-xs flex-1">
                       <div>
                         <span className="text-[10px] text-slate-400 block mb-0.5">Fabric</span>
-                        <div className="font-medium text-slate-700 truncate" title={log.fabric}>{log.fabric || '-'}</div>
+                        <div className="font-medium text-slate-700 whitespace-normal leading-tight text-[11px]" title={log.fabric}>{shortName || '-'}</div>
                       </div>
                       
                       <div className="grid grid-cols-2 gap-2">
@@ -3214,6 +3225,13 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         {/* Plans Button */}
                         <td className="border border-slate-200 p-2">
                           <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => setHistoryModalOpen({ isOpen: true, machineId: log.machineId, machineName: log.machineName })}
+                              className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded transition-colors"
+                              title="View History"
+                            >
+                              <History size={14} />
+                            </button>
                             <button
                               id={getCellId(log.machineId, 'plans')}
                               onFocus={() => handleCellFocus(idx, 'plans')}
@@ -4455,6 +4473,14 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         isOpen={isFabricDirectoryOpen}
         onClose={() => setIsFabricDirectoryOpen(false)}
         machines={rawMachines}
+      />
+
+      {/* Machine History Modal */}
+      <MachineHistoryModal
+        isOpen={historyModalOpen.isOpen}
+        onClose={() => setHistoryModalOpen({ ...historyModalOpen, isOpen: false })}
+        machineId={historyModalOpen.machineId}
+        machineName={historyModalOpen.machineName}
       />
 
       {/* PDF Generation Overlay */}

@@ -17,7 +17,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
-import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem, FabricDefinition, Dyehouse, DyehouseMachine } from '../types';
+import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem, FabricDefinition, Dyehouse, DyehouseMachine, Season } from '../types';
 import { FabricDetailsModal } from './FabricDetailsModal';
 import { FabricFormModal } from './FabricFormModal';
 import { CreatePlanModal } from './CreatePlanModal';
@@ -48,7 +48,8 @@ import {
   Sparkles,
   Factory,
   FileText,
-  History
+  History,
+  Trophy
 } from 'lucide-react';
 
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
@@ -82,14 +83,16 @@ interface SearchDropdownProps {
 
 interface DyehouseOption {
   dyehouse: Dyehouse;
-  assignments: { quantity: number; machineCapacity: number }[];
+  assignments: { quantity: number; machineCapacity: number; currentLoad: number }[];
   score: number;
   reasons: string[];
+  machineLoad: Record<number, number>; // Capacity -> Count
 }
 
 const findAllDyehouseOptions = (
   plan: { quantity: number }[], 
-  dyehouses: Dyehouse[]
+  dyehouses: Dyehouse[],
+  loadMap: Record<string, Record<number, number>>
 ): DyehouseOption[] => {
   if (!plan.length || !dyehouses.length) return [];
 
@@ -99,70 +102,80 @@ const findAllDyehouseOptions = (
     if (!dh.machines || dh.machines.length === 0) continue;
 
     let currentScore = 0;
-    let currentAssignments: { quantity: number; machineCapacity: number }[] = [];
+    let currentAssignments: { quantity: number; machineCapacity: number; currentLoad: number }[] = [];
     let reasons: string[] = [];
     
-    // Create a pool of available machines (expand counts)
-    let availableMachines: number[] = [];
-    dh.machines.forEach(m => {
-      for(let i=0; i<m.count; i++) availableMachines.push(m.capacity);
-    });
-    availableMachines.sort((a, b) => a - b); // Sort ascending
+    // Get current load for this dyehouse
+    const dhLoad = loadMap[dh.name] || {};
 
+    // Create a pool of available machines
+    // We just look at available capacities.
+    let availableCapacities = dh.machines.map(m => m.capacity).sort((a, b) => a - b);
+    
     let totalWastedSpace = 0;
     let underCapacityCount = 0;
+    let totalLoadPenalty = 0;
 
     for (const batch of plan) {
       const qty = Number(batch.quantity) || 0;
       if (qty <= 0) continue;
       
-      // Find best fit: smallest machine >= quantity
-      let bestMachineIdx = -1;
+      // Find best fit
+      let bestCap = -1;
       
       // 1. Try to find exact or larger
-      for (let i = 0; i < availableMachines.length; i++) {
-        if (availableMachines[i] >= qty) {
-          bestMachineIdx = i;
+      for (const cap of availableCapacities) {
+        if (cap >= qty) {
+          bestCap = cap;
           break;
         }
       }
 
-      // 2. If no larger machine, find largest available (and penalize heavily)
-      if (bestMachineIdx === -1) {
-         if (availableMachines.length > 0) {
-             bestMachineIdx = availableMachines.length - 1; // Largest available
-             currentScore += 10000; // Huge penalty for under-capacity
+      // 2. If no larger machine, find largest available
+      if (bestCap === -1) {
+         if (availableCapacities.length > 0) {
+             bestCap = availableCapacities[availableCapacities.length - 1];
+             currentScore += 10000; 
              underCapacityCount++;
          } else {
              currentScore += 100000; 
          }
       }
 
-      if (bestMachineIdx !== -1) {
-        const capacity = availableMachines[bestMachineIdx];
-        const diff = capacity - qty;
+      if (bestCap !== -1) {
+        const diff = bestCap - qty;
         if (diff >= 0) {
-            currentScore += diff; // Penalty is wasted space
+            currentScore += diff; 
             totalWastedSpace += diff;
         }
-        currentAssignments.push({ quantity: qty, machineCapacity: capacity });
+        
+        // Load Penalty
+        const currentLoad = dhLoad[bestCap] || 0;
+        const loadPenalty = currentLoad * 500; // 1 order = 500 points of "badness"
+        currentScore += loadPenalty;
+        totalLoadPenalty += loadPenalty;
+
+        currentAssignments.push({ quantity: qty, machineCapacity: bestCap, currentLoad });
       }
     }
 
     // Generate Reasons
     if (underCapacityCount > 0) {
-        reasons.push(`⚠️ ${underCapacityCount} batches exceed max vessel capacity`);
-    } else if (totalWastedSpace === 0) {
-        reasons.push("✨ Perfect Capacity Match");
+        reasons.push(`⚠️ Capacity Issue`);
+    } else if (totalLoadPenalty === 0 && totalWastedSpace === 0) {
+        reasons.push("✨ Perfect Match");
+    } else if (totalLoadPenalty > 0) {
+        reasons.push(`⚠️ High Load`);
     } else {
-        reasons.push("✅ Closest Vessel Match");
+        reasons.push("✅ Available");
     }
 
     results.push({
         dyehouse: dh,
         assignments: currentAssignments,
         score: currentScore,
-        reasons
+        reasons,
+        machineLoad: dhLoad
     });
   }
 
@@ -173,133 +186,272 @@ const findAllDyehouseOptions = (
 const SmartAllocationPanel: React.FC<{
   plan: any[];
   dyehouses: Dyehouse[];
+  allOrders: OrderRow[];
   onApply: (dyehouseName: string) => void;
-}> = ({ plan, dyehouses, onApply }) => {
-  const [expanded, setExpanded] = useState(false);
-  
-  const options = useMemo(() => {
-    return findAllDyehouseOptions(plan, dyehouses);
-  }, [plan, dyehouses]);
-
-  // Helper to group assignments for cleaner display
-  const renderGroupedAssignments = (assignments: { quantity: number; machineCapacity: number }[]) => {
-      const groups: Record<string, { count: number, qty: number, cap: number }> = {};
-      
-      assignments.forEach(a => {
-          const key = `${a.quantity}-${a.machineCapacity}`;
-          if (!groups[key]) {
-              groups[key] = { count: 0, qty: a.quantity, cap: a.machineCapacity };
-          }
-          groups[key].count++;
-      });
-      
-      return Object.values(groups)
-        .sort((a, b) => b.cap - a.cap)
-        .map((group, i) => (
-          <span key={i} className="text-[10px] text-indigo-700 bg-white px-2 py-1 rounded border border-indigo-200 shadow-sm flex items-center gap-1.5">
-              {group.count > 1 && (
-                  <span className="font-bold bg-indigo-50 px-1.5 rounded text-indigo-800">
-                      {group.count}x
-                  </span>
-              )}
-              <span className="text-slate-600 font-medium">{group.qty}kg</span>
-              <ArrowRight size={10} className="text-slate-400" />
-              <b className="font-mono text-indigo-900">{group.cap}kg Vessel</b>
-          </span>
-      ));
+  context?: {
+      customer: string;
+      fabric: string;
+      qty: number;
+      requiredColors?: number;
   };
+}> = ({ plan, dyehouses, allOrders, onApply, context }) => {
+  const [expanded, setExpanded] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [showColorDetails, setShowColorDetails] = useState(false);
+  
+  // Calculate Global Load Map
+  const loadMap = useMemo(() => {
+      const map: Record<string, Record<number, number>> = {};
+      allOrders.forEach(order => {
+          if (!order.dyeingPlan) return;
+          order.dyeingPlan.forEach(batch => {
+              if (batch.dyehouse && batch.plannedCapacity) {
+                  if (!map[batch.dyehouse]) map[batch.dyehouse] = {};
+                  if (!map[batch.dyehouse][batch.plannedCapacity]) map[batch.dyehouse][batch.plannedCapacity] = 0;
+                  map[batch.dyehouse][batch.plannedCapacity]++;
+              }
+          });
+      });
+      return map;
+  }, [allOrders]);
+
+  const options = useMemo(() => {
+    return findAllDyehouseOptions(plan, dyehouses, loadMap);
+  }, [plan, dyehouses, loadMap]);
 
   if (options.length === 0) return null;
 
   const bestOption = options[0];
-  const otherOptions = options.slice(1); // Show all alternatives
+  const otherOptions = options.slice(1);
+
+  const renderMachineBadges = (option: DyehouseOption, large: boolean = false) => {
+      // Get all machine types for this dyehouse
+      const machines = option.dyehouse.machines || [];
+      const sortedMachines = [...machines].sort((a, b) => a.capacity - b.capacity);
+      
+      return (
+          <div className={`flex flex-wrap gap-1 ${large ? 'mt-2' : 'mt-1'}`}>
+              {sortedMachines.map((m, idx) => {
+                  const load = option.machineLoad[m.capacity] || 0;
+                  // Check if this machine is being suggested for any batch in the current plan
+                  const isSuggested = option.assignments.some(a => a.machineCapacity === m.capacity);
+                  
+                  return (
+                      <span 
+                        key={idx} 
+                        className={`rounded border flex items-center gap-1 ${
+                            large ? 'text-[11px] px-2 py-1' : 'text-[9px] px-1.5 py-0.5'
+                        } ${
+                            isSuggested 
+                                ? "bg-indigo-600 text-white border-indigo-600 font-bold shadow-sm" 
+                                : "bg-slate-50 text-slate-500 border-slate-200"
+                        }`}
+                        title={`${load} active orders on ${m.capacity}kg machines`}
+                      >
+                          {m.capacity}kg
+                          <span className={`ml-0.5 ${isSuggested ? "text-indigo-100" : "text-slate-400"}`}>
+                              ({load})
+                          </span>
+                      </span>
+                  );
+              })}
+          </div>
+      );
+  };
 
   return (
-    <div className="mt-3 bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm animate-in fade-in slide-in-from-top-2">
-      {/* Best Option Header */}
-      <div className="bg-indigo-50/50 p-3 border-b border-indigo-100">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <div className="flex items-start gap-3">
-                <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg mt-1">
-                <Sparkles size={18} />
+    <>
+        {/* Inline Trigger - Compact & Clean */}
+        <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 bg-indigo-50 text-indigo-700 px-2 py-1 rounded-md border border-indigo-100">
+                    <Sparkles size={12} />
+                    <span className="text-[10px] font-bold uppercase tracking-wide">Smart Suggestion</span>
                 </div>
-                <div>
                 <div className="flex items-center gap-2">
-                    <h4 className="text-sm font-bold text-indigo-900">
-                        Recommended: {bestOption.dyehouse.name}
-                    </h4>
-                    <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium border border-emerald-200">
-                        Best Fit
+                    <span className="text-xs font-bold text-slate-700">{bestOption.dyehouse.name}</span>
+                    <div className="flex flex-wrap items-center gap-2 border-l border-slate-200 pl-2">
+                        {bestOption.assignments.map((a, i) => (
+                            <span key={i} className="flex items-center gap-1.5 text-[10px] text-slate-600 bg-white px-2 py-1 rounded-md border border-slate-200 shadow-sm whitespace-nowrap">
+                                <span className="font-bold text-slate-700">{a.quantity}kg</span>
+                                <ArrowRight size={10} className="text-slate-400" />
+                                <span className="font-bold text-indigo-600 bg-indigo-50 px-1 rounded">{a.machineCapacity}kg Vessel</span>
+                            </span>
+                        ))}
+                    </div>
+                    <span className="text-[10px] text-slate-400 border-l border-slate-200 pl-2">
+                        {bestOption.reasons[0]}
                     </span>
                 </div>
-                <p className="text-xs text-indigo-600/80 mt-0.5 font-medium">
-                    {bestOption.reasons.join(' • ')}
-                </p>
-                <div className="flex flex-wrap gap-2 mt-2">
-                    {renderGroupedAssignments(bestOption.assignments)}
-                </div>
-                </div>
             </div>
-            <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="flex items-center gap-2">
                 <button
-                    onClick={() => setExpanded(!expanded)}
-                    className="flex-1 sm:flex-none px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-600 text-xs font-medium rounded-md border border-slate-200 transition-colors flex items-center justify-center gap-1"
+                    onClick={() => setShowModal(true)}
+                    className="text-[10px] text-slate-500 hover:text-indigo-600 font-medium px-2 py-1 hover:bg-slate-50 rounded transition-colors"
                 >
-                    {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                    {expanded ? 'Hide Options' : 'Other Options'}
+                    View Details
                 </button>
                 <button
                     onClick={() => onApply(bestOption.dyehouse.name)}
-                    className="flex-1 sm:flex-none px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-md shadow-sm transition-colors flex items-center justify-center gap-1"
+                    className="text-[10px] bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded shadow-sm font-medium transition-colors flex items-center gap-1"
                 >
-                    <Factory size={14} />
-                    Assign Best Fit
+                    <CheckCircle2 size={12} />
+                    Apply
                 </button>
             </div>
         </div>
-      </div>
 
-      {/* Other Options List */}
-      {expanded && (
-        <div className="bg-slate-50 p-2 space-y-2 max-h-64 overflow-y-auto">
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2">All Alternative Dyehouses</p>
-            {otherOptions.map((opt, idx) => (
-                <div key={idx} className="bg-white p-2 rounded border border-slate-200 flex flex-col gap-2 hover:border-slate-300 transition-colors">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-slate-700">{opt.dyehouse.name}</span>
-                            {opt.score > 10000 && (
-                                <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200">
-                                    Under Capacity
-                                </span>
-                            )}
+        {/* Modal */}
+        {showModal && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+                    {/* Modal Header */}
+                    <div className="p-4 border-b border-slate-100 bg-slate-50/50">
+                        <div className="flex items-start justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="bg-indigo-100 p-2 rounded-lg text-indigo-600">
+                                    <Sparkles size={20} />
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-slate-800 text-lg">Smart Allocation Analysis</h3>
+                                    <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
+                                        <span>Comparing capacity & load for optimal efficiency</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <button onClick={() => setShowModal(false)} className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors">
+                                <X size={20} />
+                            </button>
                         </div>
-                        <button
-                            onClick={() => onApply(opt.dyehouse.name)}
-                            className="text-xs text-slate-500 hover:text-indigo-600 font-medium px-2 py-1 hover:bg-indigo-50 rounded transition-colors"
-                        >
-                            Select
-                        </button>
-                    </div>
-                    
-                    {/* Assignments Breakdown for Alternative */}
-                    <div className="flex flex-wrap gap-1.5">
-                        {renderGroupedAssignments(opt.assignments)}
+                        
+                        {/* Context Bar */}
+                        {context && (
+                            <div className="mt-4 flex items-center gap-4 bg-white border border-slate-200 rounded-lg p-2 text-xs">
+                                <div className="flex flex-col px-2 border-r border-slate-100">
+                                    <span className="text-[10px] text-slate-400 uppercase font-bold">Customer</span>
+                                    <span className="font-medium text-slate-700">{context.customer}</span>
+                                </div>
+                                <div className="flex flex-col px-2 border-r border-slate-100">
+                                    <span className="text-[10px] text-slate-400 uppercase font-bold">Fabric</span>
+                                    <span className="font-medium text-slate-700">{context.fabric}</span>
+                                </div>
+                                <div 
+                                    className="flex flex-col px-2 border-r border-slate-100 cursor-pointer hover:bg-slate-50 transition-colors relative group select-none"
+                                    onClick={() => setShowColorDetails(!showColorDetails)}
+                                    title="Click to view color breakdown"
+                                >
+                                    <span className="text-[10px] text-slate-400 uppercase font-bold flex items-center gap-1">
+                                        Required Colors
+                                        <ChevronDown size={10} className={`transition-transform ${showColorDetails ? 'rotate-180' : ''}`} />
+                                    </span>
+                                    <span className="font-medium text-slate-700">{context.requiredColors || 0}</span>
+                                    
+                                    {/* Dropdown/Popover for colors */}
+                                    {showColorDetails && (
+                                        <div className="absolute top-full left-0 mt-2 bg-white border border-slate-200 shadow-xl rounded-lg p-2 z-50 min-w-[200px] animate-in fade-in zoom-in-95">
+                                            <div className="text-[10px] font-bold text-slate-400 mb-2 uppercase border-b border-slate-100 pb-1">Color Breakdown</div>
+                                            <div className="space-y-1 max-h-[200px] overflow-y-auto custom-scrollbar">
+                                                {plan.map((batch, idx) => (
+                                                    <div key={idx} className="flex items-center justify-between text-xs hover:bg-slate-50 p-1 rounded">
+                                                        <div className="flex items-center gap-2">
+                                                            <div 
+                                                                className="w-2 h-2 rounded-full border border-slate-200 shadow-sm" 
+                                                                style={{ backgroundColor: batch.color ? '#6366f1' : '#cbd5e1' }} // Placeholder color logic
+                                                            ></div>
+                                                            <span className="font-medium text-slate-700">{batch.color || 'Unspecified'}</span>
+                                                        </div>
+                                                        <span className="font-mono text-slate-500 bg-slate-100 px-1.5 rounded text-[10px]">{batch.quantity}kg</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="flex flex-col px-2">
+                                    <span className="text-[10px] text-slate-400 uppercase font-bold">Total Qty</span>
+                                    <span className="font-medium text-slate-700 font-mono">{context.qty}kg</span>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
-                    <div className="text-[10px] text-slate-500">
-                        {opt.reasons.join(' • ')}
+                    {/* Modal Body */}
+                    <div className="p-6 overflow-y-auto bg-slate-50/30 space-y-6">
+                        
+                        {/* Top Recommendation */}
+                        <div className="space-y-2">
+                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                                <Trophy size={14} className="text-amber-500" />
+                                Top Recommendation
+                            </h4>
+                            <div className="bg-white rounded-lg border-2 border-indigo-500 shadow-lg p-4 relative overflow-hidden group">
+                                <div className="absolute top-0 right-0 bg-indigo-500 text-white text-[10px] font-bold px-3 py-1 rounded-bl-lg shadow-sm">
+                                    BEST MATCH
+                                </div>
+                                
+                                <div className="flex items-start justify-between mb-4">
+                                    <div>
+                                        <h2 className="text-xl font-bold text-slate-800">{bestOption.dyehouse.name}</h2>
+                                        <div className="flex flex-wrap gap-2 mt-1">
+                                            {bestOption.reasons.map((r, i) => (
+                                                <span key={i} className="text-[10px] px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full font-medium border border-indigo-100">
+                                                    {r}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => { onApply(bestOption.dyehouse.name); setShowModal(false); }}
+                                        className="mt-6 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg shadow-md font-medium transition-all transform active:scale-95 flex items-center gap-2"
+                                    >
+                                        Select This Option
+                                        <ArrowRight size={16} />
+                                    </button>
+                                </div>
+
+                                <div className="bg-slate-50 rounded border border-slate-100 p-3">
+                                    <div className="text-[10px] font-medium text-slate-400 mb-2 uppercase">Machine Availability & Load</div>
+                                    {renderMachineBadges(bestOption, true)} 
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Other Options */}
+                        {options.length > 1 && (
+                            <div className="space-y-2">
+                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Other Possibilities</h4>
+                                <div className="grid grid-cols-1 gap-3">
+                                    {options.slice(1).map((opt, idx) => (
+                                        <div key={idx} className="bg-white rounded-lg border border-slate-200 p-4 hover:border-indigo-300 transition-all hover:shadow-md group">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <div>
+                                                    <h3 className="font-bold text-slate-700">{opt.dyehouse.name}</h3>
+                                                    <div className="flex gap-2 mt-0.5">
+                                                        {opt.reasons.map((r, i) => (
+                                                            <span key={i} className="text-[10px] text-slate-500">
+                                                                {r}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    onClick={() => { onApply(opt.dyehouse.name); setShowModal(false); }}
+                                                    className="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded font-medium transition-colors opacity-0 group-hover:opacity-100"
+                                                >
+                                                    Select
+                                                </button>
+                                            </div>
+                                            {renderMachineBadges(opt, false)}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
-            ))}
-            {otherOptions.length === 0 && (
-                <div className="text-center py-2 text-xs text-slate-400 italic">
-                    No other viable options found.
-                </div>
-            )}
-        </div>
-      )}
-    </div>
+            </div>
+        )}
+    </>
   );
 };
 
@@ -459,7 +611,9 @@ const MemoizedOrderRow = React.memo(({
   externalFactories,
   onOpenProductionOrder,
   onOpenHistory,
-  hasHistory
+  hasHistory,
+  onFilterMachine,
+  allOrders
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -481,7 +635,10 @@ const MemoizedOrderRow = React.memo(({
   onOpenProductionOrder: (order: OrderRow, active: string[], planned: string[]) => void;
   onOpenHistory: (order: OrderRow) => void;
   hasHistory: boolean;
+  onFilterMachine?: (capacity: string) => void;
+  allOrders: OrderRow[];
 }) => {
+  const [showMachineDetails, setShowMachineDetails] = useState<{ capacity: number; batches: any[] } | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const refCode = row.material ? `${selectedCustomerName}-${row.material}` : '-';
   const hasActive = statusInfo && statusInfo.active.length > 0;
@@ -521,31 +678,35 @@ const MemoizedOrderRow = React.memo(({
   }
 
   // Calculate Assigned Machines Summary & Total Capacity
-  const { summary: assignedMachinesSummary, totalCapacity, totalSent, totalReceived } = useMemo(() => {
-    if (!row.dyeingPlan || row.dyeingPlan.length === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0 };
+  const { summary: assignedMachinesSummary, totalCapacity, totalSent, totalReceived, groupedBatches } = useMemo(() => {
+    if (!row.dyeingPlan || row.dyeingPlan.length === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0, groupedBatches: new Map() };
     
     const machineCounts = new Map<number, number>();
+    const grouped = new Map<number, any[]>();
     let total = 0;
     let sent = 0;
     let received = 0;
 
     row.dyeingPlan.forEach(batch => {
-      if (batch.quantity) {
-        const current = machineCounts.get(batch.quantity) || 0;
-        machineCounts.set(batch.quantity, current + 1);
+      if (batch.plannedCapacity) {
+        const current = machineCounts.get(batch.plannedCapacity) || 0;
+        machineCounts.set(batch.plannedCapacity, current + 1);
+        
+        const list = grouped.get(batch.plannedCapacity) || [];
+        list.push(batch);
+        grouped.set(batch.plannedCapacity, list);
       }
       total += batch.quantity || 0;
       sent += batch.quantitySent || 0;
       received += batch.receivedQuantity || 0;
     });
 
-    if (machineCounts.size === 0 && total === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0 };
+    if (machineCounts.size === 0 && total === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0, groupedBatches: new Map() };
 
     const summary = Array.from(machineCounts.entries())
-      .map(([capacity, count]) => `${capacity}*${count}`)
-      .join(' + ');
+      .map(([capacity, count]) => ({ capacity, count }));
       
-    return { summary, totalCapacity: total, totalSent: sent, totalReceived: received };
+    return { summary, totalCapacity: total, totalSent: sent, totalReceived: received, groupedBatches: grouped };
   }, [row.dyeingPlan]);
 
   // Calculate Finished Details (Audit Trail)
@@ -631,39 +792,100 @@ const MemoizedOrderRow = React.memo(({
                 })()}
              </div>
           </td>
-          {/* Dyehouse */}
-          <td className="p-0 border-r border-slate-200">
-            <SearchDropdown
-              id={`dyehouse-${row.id}`}
-              options={dyehouses}
-              value={row.dyehouse || ''}
-              onChange={(val) => handleUpdateOrder(row.id, { dyehouse: val })}
-              onCreateNew={handleCreateDyehouse}
-              placeholder="اختر المصبغة..."
-            />
+          {/* Dyehouse (Computed Read-Only) */}
+          <td className="p-0 border-r border-slate-200 bg-slate-50/50">
+             <div className="flex items-center h-full w-full px-3 py-2 text-slate-600 text-xs font-medium">
+                {(() => {
+                   const plan = row.dyeingPlan || [];
+                   const uniqueDyehouses = Array.from(new Set(plan.map(b => b.dyehouse).filter(Boolean)));
+                   
+                   if (uniqueDyehouses.length === 0) return <span className="text-slate-400 italic">Unassigned</span>;
+                   // Join with " + " as requested
+                   return (
+                     <span title={uniqueDyehouses.join(' + ')} className="truncate max-w-[150px] block">
+                       {uniqueDyehouses.join(' + ')}
+                     </span>
+                   );
+                })()}
+             </div>
           </td>
           {/* Assigned Machines (Calculated) */}
-          <td className="p-0 border-r border-slate-200">
-             <div className="flex flex-col justify-center h-full w-full px-3 py-1">
-                <div className="text-slate-700 font-mono text-xs">{assignedMachinesSummary}</div>
-                {totalCapacity > 0 && (
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <span className="font-bold text-slate-800 text-xs">= {totalCapacity}</span>
-                    <span className="text-[10px] text-slate-400">/ {row.requiredQty}</span>
-                    {(() => {
-                      const diff = Math.abs(totalCapacity - row.requiredQty);
-                      const percentage = row.requiredQty > 0 ? (diff / row.requiredQty) * 100 : 0;
-                      const isProblem = percentage > 15;
-                      
-                      return isProblem ? (
-                        <AlertCircle className="w-3 h-3 text-amber-500" title={`الفرق: ${percentage.toFixed(1)}%`} />
-                      ) : (
-                        <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-                      );
-                    })()}
-                  </div>
-                )}
+          <td className="p-0 border-r border-slate-200 relative">
+             <div className="flex flex-col justify-center h-full w-full px-3 py-2">
+                <div className="flex flex-wrap gap-2 justify-center items-center">
+                    {Array.isArray(assignedMachinesSummary) ? (
+                        assignedMachinesSummary.map((part, idx) => (
+                            <span 
+                                key={idx} 
+                                className="bg-slate-100 text-slate-700 font-mono text-xs px-1.5 py-0.5 rounded border border-slate-200 cursor-pointer hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (onFilterMachine) onFilterMachine(String(part.capacity));
+                                    const batches = groupedBatches.get(part.capacity) || [];
+                                    setShowMachineDetails({ capacity: part.capacity, batches });
+                                }}
+                            >
+                                {part.capacity} <span className="text-slate-400 text-[10px]">x{part.count}</span>
+                            </span>
+                        ))
+                    ) : (
+                        <div className="text-slate-700 font-mono text-xs">{assignedMachinesSummary}</div>
+                    )}
+                    
+                    {/* Status Icon with Tooltip */}
+                    {totalCapacity > 0 && (
+                        <div className="relative group/total ml-1">
+                            {(() => {
+                                const diff = Math.abs(totalCapacity - row.requiredQty);
+                                const percentage = row.requiredQty > 0 ? (diff / row.requiredQty) * 100 : 0;
+                                const isProblem = percentage > 15;
+                                return isProblem ? (
+                                    <AlertCircle className="w-4 h-4 text-amber-500 cursor-help" />
+                                ) : (
+                                    <CheckCircle2 className="w-4 h-4 text-emerald-500 cursor-help" />
+                                );
+                            })()}
+                            
+                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/total:block z-50 bg-slate-800 text-white text-xs rounded px-2 py-1 whitespace-nowrap shadow-lg pointer-events-none">
+                                <div className="font-bold mb-0.5 border-b border-slate-600 pb-0.5">Total Capacity</div>
+                                <div className="flex items-center gap-2 font-mono">
+                                    <span className={totalCapacity < row.requiredQty ? "text-amber-300" : "text-emerald-300"}>{totalCapacity}</span>
+                                    <span className="text-slate-400">/</span>
+                                    <span>{row.requiredQty}</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
              </div>
+             
+             {/* Popover */}
+             {showMachineDetails && (
+                <div className="absolute top-full left-0 z-50 mt-1 w-72 bg-white border border-slate-200 shadow-xl rounded-lg p-3">
+                    <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-100">
+                        <h4 className="font-bold text-xs text-slate-800">
+                            {showMachineDetails.capacity}kg Machines ({showMachineDetails.batches.length})
+                        </h4>
+                        <button onClick={(e) => { e.stopPropagation(); setShowMachineDetails(null); }} className="text-slate-400 hover:text-slate-600">
+                            <X className="w-3 h-3" />
+                        </button>
+                    </div>
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {showMachineDetails.batches.map((batch, idx) => (
+                            <div key={idx} className="text-xs bg-slate-50 p-2 rounded border border-slate-100">
+                                <div className="flex justify-between mb-1">
+                                    <span className="font-medium text-slate-700">{row.material}</span>
+                                    <span className="text-slate-500">{batch.color || '-'}</span>
+                                </div>
+                                <div className="flex justify-between text-[10px] text-slate-400">
+                                    <span>{batch.machine || 'Unassigned'}</span>
+                                    <span>{batch.dateSent || batch.formationDate || '-'}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+             )}
           </td>
           {/* Total Sent */}
           <td className="p-0 border-r border-slate-200 text-right">
@@ -1169,8 +1391,9 @@ const MemoizedOrderRow = React.memo(({
                     <th className="px-3 py-2 text-right w-32">تاريخ الارسال</th>
                     <th className="px-3 py-2 text-center w-16 text-[10px] text-slate-400">ايام</th>
                     <th className="px-3 py-2 text-right w-32">المصبغة</th>
-                    <th className="px-3 py-2 text-center w-20">حوض الصباغة</th>
-                    <th className="px-3 py-2 text-center w-20">مرسل</th>
+                    <th className="px-3 py-2 text-center w-20" title="Customer Demand">مطلوب</th>
+                    <th className="px-3 py-2 text-center w-24" title="Vessel Capacity">ماكنة الصباغة</th>
+                    <th className="px-3 py-2 text-center w-20" title="Actual Sent">مرسل</th>
                     <th className="px-3 py-2 text-center w-20">مستلم</th>
                     <th className="px-3 py-2 text-center w-20">الحالة</th>
                     <th className="px-3 py-2 text-right">ملاحظات</th>
@@ -1251,11 +1474,12 @@ const MemoizedOrderRow = React.memo(({
                           value={batch.dyehouse || ''}
                           onChange={(val) => {
                             const newPlan = [...(row.dyeingPlan || [])];
-                            const recommended = recommendMachine(val, batch.quantitySent || 0);
+                            // Auto-calculate vessel size if dyehouse is selected
+                            const recommended = recommendMachine(val, batch.quantity || 0);
                             newPlan[idx] = { 
                                 ...batch, 
                                 dyehouse: val,
-                                quantity: recommended || batch.quantity 
+                                plannedCapacity: recommended || batch.plannedCapacity 
                             };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                           }}
@@ -1263,10 +1487,11 @@ const MemoizedOrderRow = React.memo(({
                           className="w-full h-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right text-xs"
                         />
                       </td>
+                      {/* Required (Customer Demand) */}
                       <td className="p-0">
                         <input
                           type="number"
-                          className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-400"
+                          className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600"
                           value={batch.quantity || ''}
                           onChange={(e) => {
                             const newPlan = [...(row.dyeingPlan || [])];
@@ -1274,34 +1499,75 @@ const MemoizedOrderRow = React.memo(({
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                           }}
                           placeholder="0"
+                          title="Customer Demand"
                         />
                       </td>
+                      {/* Vessel (Planned Capacity) -> Machine Selection */}
+                      <td className="p-0 relative">
+                        {(() => {
+                            const selectedDyehouse = dyehouses.find(d => d.name === batch.dyehouse);
+                            const hasMachines = selectedDyehouse && selectedDyehouse.machines && selectedDyehouse.machines.length > 0;
+                            
+                            if (hasMachines) {
+                                return (
+                                    <div className="relative w-full h-full">
+                                        <select
+                                            className="w-full h-full px-1 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono font-bold text-slate-800 text-xs appearance-none cursor-pointer"
+                                            value={batch.plannedCapacity || ''}
+                                            onChange={(e) => {
+                                                const newPlan = [...(row.dyeingPlan || [])];
+                                                newPlan[idx] = { ...batch, plannedCapacity: Number(e.target.value) };
+                                                handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                                            }}
+                                            title="Select Machine Capacity"
+                                        >
+                                            <option value="">-</option>
+                                            {selectedDyehouse.machines.sort((a, b) => a.capacity - b.capacity).map((m, mIdx) => (
+                                                <option key={mIdx} value={m.capacity}>
+                                                    {m.capacity}kg
+                                                </option>
+                                            ))}
+                                        </select>
+                                        {/* Custom Arrow */}
+                                        <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                                            <ChevronDown size={10} />
+                                        </div>
+                                    </div>
+                                );
+                            }
+                            
+                            return (
+                                <input
+                                  type="number"
+                                  className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono font-bold text-slate-800"
+                                  value={batch.plannedCapacity || ''}
+                                  onChange={(e) => {
+                                    const newPlan = [...(row.dyeingPlan || [])];
+                                    newPlan[idx] = { ...batch, plannedCapacity: Number(e.target.value) };
+                                    handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                                  }}
+                                  placeholder="-"
+                                  title="Machine Capacity"
+                                />
+                            );
+                        })()}
+                      </td>
+                      {/* Actual Sent */}
                       <td className="p-0">
                         <input
                           type="number"
                           className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono font-medium text-blue-600"
                           value={batch.quantitySent || ''}
                           onChange={(e) => {
-                            const val = Number(e.target.value);
                             const newPlan = [...(row.dyeingPlan || [])];
-                            
-                            // Auto-calculate vessel size if dyehouse is selected
-                            let recommended = batch.quantity;
-                            if (batch.dyehouse) {
-                                const rec = recommendMachine(batch.dyehouse, val);
-                                if (rec) recommended = rec;
-                            }
-
-                            newPlan[idx] = { 
-                                ...batch, 
-                                quantitySent: val,
-                                quantity: recommended 
-                            };
+                            newPlan[idx] = { ...batch, quantitySent: Number(e.target.value) };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                           }}
                           placeholder="0"
+                          title="Actual Sent"
                         />
                       </td>
+                      {/* Received */}
                       <td className="p-0">
                         <input
                           type="number"
@@ -1384,8 +1650,27 @@ const MemoizedOrderRow = React.memo(({
                 <SmartAllocationPanel 
                   plan={row.dyeingPlan} 
                   dyehouses={dyehouses} 
+                  allOrders={allOrders}
+                  context={{
+                      customer: selectedCustomerName,
+                      fabric: fabrics.find(f => f.name === row.material)?.shortName || row.material,
+                      qty: row.requiredQty,
+                      requiredColors: row.dyeingPlan.length
+                  }}
                   onApply={(dyehouseName) => {
-                     const newPlan = row.dyeingPlan?.map(batch => ({ ...batch, dyehouse: dyehouseName }));
+                     const selectedDyehouse = dyehouses.find(d => d.name === dyehouseName);
+                     const newPlan = row.dyeingPlan?.map(batch => {
+                         let capacity = batch.plannedCapacity;
+                         // Auto-assign machine capacity if available in the selected dyehouse
+                         if (selectedDyehouse && selectedDyehouse.machines && selectedDyehouse.machines.length > 0) {
+                             const sorted = [...selectedDyehouse.machines].sort((a, b) => a.capacity - b.capacity);
+                             // Find smallest machine that fits the quantity
+                             const best = sorted.find(m => m.capacity >= (batch.quantity || 0));
+                             // If none fits (too big), take the largest available
+                             capacity = best ? best.capacity : sorted[sorted.length - 1].capacity;
+                         }
+                         return { ...batch, dyehouse: dyehouseName, plannedCapacity: capacity };
+                     });
                      handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                   }}
                 />
@@ -1431,6 +1716,55 @@ export const ClientOrdersPage: React.FC = () => {
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
   const [externalFactories, setExternalFactories] = useState<any[]>([]);
   
+  // Seasons State
+  const [seasons, setSeasons] = useState<Season[]>([]);
+  // Initialize from localStorage if available
+  const [selectedSeasonId, setSelectedSeasonId] = useState<string | null>(() => {
+      return localStorage.getItem('selectedSeasonId') || null;
+  });
+  const [showAddSeason, setShowAddSeason] = useState(false);
+  const [newSeasonName, setNewSeasonName] = useState('');
+
+  // Machine Filter State
+  const [machineFilter, setMachineFilter] = useState<string>('');
+
+  // Persist Season Selection
+  useEffect(() => {
+      if (selectedSeasonId) {
+          localStorage.setItem('selectedSeasonId', selectedSeasonId);
+      }
+  }, [selectedSeasonId]);
+
+  // Fetch Seasons
+  useEffect(() => {
+    const unsubSeasons = onSnapshot(collection(db, 'Seasons'), async (snapshot) => {
+      const loadedSeasons = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Season));
+      
+      if (loadedSeasons.length === 0) {
+        // Create Default Season if none exist
+        const defaultSeason: Season = {
+          id: '2025-summer',
+          name: '2025 Summer Season',
+          startDate: '2025-01-01',
+          endDate: '2025-06-30',
+          isActive: true
+        };
+        await setDoc(doc(db, 'Seasons', defaultSeason.id), defaultSeason);
+        setSeasons([defaultSeason]);
+        setSelectedSeasonId(defaultSeason.id);
+      } else {
+        setSeasons(loadedSeasons);
+        // Select active or first season if not selected AND not in localStorage
+        // (The state initializer handles the localStorage part, but we need to validate it exists in the loaded list)
+        if (!selectedSeasonId || !loadedSeasons.find(s => s.id === selectedSeasonId)) {
+            const active = loadedSeasons.find(s => s.isActive);
+            setSelectedSeasonId(active ? active.id : loadedSeasons[0].id);
+        }
+      }
+    });
+    return () => unsubSeasons();
+  }, []);
+
   // Create Plan Modal State
   const [createPlanModal, setCreatePlanModal] = useState<{
     isOpen: boolean;
@@ -1594,20 +1928,58 @@ export const ClientOrdersPage: React.FC = () => {
   // Merge Customers & Orders
   useEffect(() => {
     const merged = rawCustomers.map(c => {
-        const subCollectionOrders = flatOrders.filter(o => o.customerId === c.id);
-        // Backward Compatibility: Use legacy array if sub-collection is empty
-        // Note: If you have migrated, subCollectionOrders will be populated.
-        const finalOrders = subCollectionOrders.length > 0 ? subCollectionOrders : (c.orders || []);
+        const subCollectionOrders = flatOrders.filter(o => {
+            if (o.customerId !== c.id) return false;
+            // Season Filter
+            if (selectedSeasonId) {
+                if (o.seasonId) return o.seasonId === selectedSeasonId;
+                // Legacy orders (no seasonId) belong to '2025-summer'
+                return selectedSeasonId === '2025-summer';
+            }
+            return true;
+        });
+        
+        // Backward Compatibility & Fallback Filtering
+        let finalOrders = subCollectionOrders;
+        if (finalOrders.length === 0 && c.orders && c.orders.length > 0) {
+             // Filter legacy array as well
+             finalOrders = c.orders.filter(o => {
+                if (selectedSeasonId) {
+                    if (o.seasonId) return o.seasonId === selectedSeasonId;
+                    return selectedSeasonId === '2025-summer';
+                }
+                return true;
+             });
+        }
+        
         return { ...c, orders: finalOrders };
+    }).filter(c => {
+        // Filter: Show if has orders OR is currently selected
+        if (c.orders.length > 0 || c.id === selectedCustomerId) return true;
+        
+        // Also show if client was created in this season (even if no orders yet)
+        // Legacy clients (no createdSeasonId) default to '2025-summer'
+        if (selectedSeasonId) {
+            const clientSeason = c.createdSeasonId || '2025-summer';
+            return clientSeason === selectedSeasonId;
+        }
+        
+        return true;
     });
+
     merged.sort((a, b) => a.name.localeCompare(b.name));
     setCustomers(merged);
     
     if (!initialSelectionMade.current && merged.length > 0) {
-      setSelectedCustomerId(merged[0].id);
+      // Only auto-select if we don't already have a valid selection from localStorage
+      const currentSelectionExists = selectedCustomerId && merged.some(c => c.id === selectedCustomerId);
+      
+      if (!currentSelectionExists) {
+          setSelectedCustomerId(merged[0].id);
+      }
       initialSelectionMade.current = true;
     }
-  }, [rawCustomers, flatOrders]);
+  }, [rawCustomers, flatOrders, selectedSeasonId, selectedCustomerId]);
 
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
 
@@ -1954,12 +2326,14 @@ export const ClientOrdersPage: React.FC = () => {
   const handleAddCustomer = async () => {
     if (!newCustomerName.trim()) return;
     try {
-      await addDoc(collection(db, 'CustomerSheets'), {
+      const docRef = await addDoc(collection(db, 'CustomerSheets'), {
         name: newCustomerName.trim(),
-        orders: []
+        orders: [],
+        createdSeasonId: selectedSeasonId || '2025-summer' // Tag with current season
       });
       setNewCustomerName('');
       setIsAddingCustomer(false);
+      setSelectedCustomerId(docRef.id); // Auto-select new customer
     } catch (error) {
       console.error("Error adding customer:", error);
     }
@@ -2001,7 +2375,8 @@ export const ClientOrdersPage: React.FC = () => {
       notes: '',
       batchDeliveries: '',
       accessoryDeliveries: '',
-      customerId: selectedCustomerId // Link to parent
+      customerId: selectedCustomerId, // Link to parent
+      seasonId: selectedSeasonId || '2025-summer' // Add Season ID
     };
 
     // Check if we should use sub-collection (if already migrated or empty)
@@ -2342,6 +2717,30 @@ export const ClientOrdersPage: React.FC = () => {
     c.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // Filter Orders based on Machine Filter
+  const filteredOrders = useMemo(() => {
+      if (!selectedCustomer) return [];
+      let orders = selectedCustomer.orders;
+      
+      if (machineFilter) {
+          orders = orders.filter(row => {
+              if (!row.dyeingPlan) return false;
+              return row.dyeingPlan.some(b => 
+                  String(b.quantity) === machineFilter || 
+                  (b.machine && b.machine.toLowerCase().includes(machineFilter.toLowerCase()))
+              );
+          });
+      }
+      return orders;
+  }, [selectedCustomer, machineFilter]);
+
+  const usedFabricNames = useMemo(() => {
+      if (!selectedCustomer || selectedCustomerId === ALL_CLIENTS_ID || selectedCustomerId === ALL_YARNS_ID) {
+          return undefined;
+      }
+      return new Set(selectedCustomer.orders.map(o => o.material).filter(Boolean));
+  }, [selectedCustomer, selectedCustomerId]);
+
   // DEBUG HELPER
   const getDebugInfo = () => {
     const logs: string[] = [];
@@ -2412,136 +2811,214 @@ export const ClientOrdersPage: React.FC = () => {
     <div className="flex flex-col min-h-[calc(100vh-100px)] bg-slate-50 rounded-xl border border-slate-200 shadow-sm">
       <style>{globalStyles}</style>
       
-      {/* Top Bar: Client Selection */}
-      <div className="bg-white border-b border-slate-200 p-4 flex items-center justify-between gap-4 shadow-sm z-20">
-        <div className="flex items-center gap-4 flex-1">
-          <div className="flex items-center gap-2 text-slate-700 font-bold">
-            <UserPlus className="w-5 h-5 text-blue-600" />
-            <span className="hidden sm:inline">Client:</span>
-          </div>
-          
-          <div className="relative max-w-xs w-full">
-             <select 
-               value={selectedCustomerId || ''} 
-               onChange={(e) => setSelectedCustomerId(e.target.value)}
-               className="w-full pl-3 pr-10 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none cursor-pointer font-medium text-slate-700"
-             >
-               <option value={ALL_CLIENTS_ID} className="font-bold text-blue-600">All Clients Overview</option>
-               <option value={ALL_YARNS_ID} className="font-bold text-purple-600">All Yarn Requirements</option>
-               <option value="" disabled>Select a client...</option>
-               {customers.map(c => (
-                 <option key={c.id} value={c.id}>{c.name}</option>
-               ))}
-             </select>
-             <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
-               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
-             </div>
-          </div>
+      {/* Top Bar: Control Center */}
+      <div className="bg-white border-b border-slate-200 shadow-sm z-20">
+        
+        {/* Row 1: Season Header & Context */}
+        <div className="px-6 py-5 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
+            
+            {/* Season Header (Prominent) */}
+            <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2 text-xs font-bold text-indigo-500 uppercase tracking-wider">
+                    <Calendar className="w-3 h-3" />
+                    Current Season
+                </div>
+                <div className="relative group flex items-center gap-2">
+                    <select
+                        value={selectedSeasonId || ''}
+                        onChange={(e) => {
+                            if (e.target.value === 'ADD_NEW') {
+                                setShowAddSeason(true);
+                            } else {
+                                setSelectedSeasonId(e.target.value);
+                            }
+                        }}
+                        className="appearance-none bg-transparent text-2xl font-black text-slate-800 cursor-pointer focus:outline-none hover:text-indigo-700 transition-colors pr-6"
+                    >
+                        {seasons.map(s => (
+                            <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                        <option value="ADD_NEW" className="text-emerald-600 font-bold">+ Add New Season</option>
+                    </select>
+                    <ChevronDown className="absolute right-0 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none group-hover:text-indigo-500 transition-colors" />
+                </div>
+            </div>
 
-          <button 
-            onClick={() => setIsAddingCustomer(true)} 
-            className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors" 
-            title="Add New Client"
-          >
-            <Plus className="w-5 h-5" />
-          </button>
-          
-          {isAddingCustomer && (
-             <div className="flex items-center gap-2 animate-in fade-in slide-in-from-left-2 bg-white p-1 rounded-lg border border-slate-200 shadow-sm absolute top-16 left-4 z-30 sm:static sm:top-auto sm:left-auto sm:border-0 sm:shadow-none sm:p-0">
-                <input
-                  autoFocus
-                  type="text"
-                  placeholder="New Client Name..."
-                  className="px-3 py-1.5 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={newCustomerName}
-                  onChange={e => setNewCustomerName(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleAddCustomer()}
-                />
-                <button onClick={handleAddCustomer} className="px-3 py-1.5 bg-green-600 text-white rounded-md text-sm hover:bg-green-700">
-                  Save
+            {/* Client Selector & Add */}
+            <div className="flex items-center gap-3 w-full lg:w-auto flex-1 lg:flex-none lg:min-w-[400px]">
+                <div className="relative flex-1">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <Users className="h-5 w-5 text-slate-400" />
+                    </div>
+                    <select 
+                        value={selectedCustomerId || ''} 
+                        onChange={(e) => setSelectedCustomerId(e.target.value)}
+                        className="pl-10 pr-10 py-3 bg-white border border-slate-300 text-slate-700 text-base font-semibold rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm transition-all cursor-pointer appearance-none hover:border-indigo-300"
+                    >
+                        <option value={ALL_CLIENTS_ID} className="font-bold text-blue-600">All Clients Overview</option>
+                        <option value={ALL_YARNS_ID} className="font-bold text-purple-600">All Yarn Requirements</option>
+                        <option disabled value="">Select a client...</option>
+                        {customers.map(c => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                    </select>
+                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                        <ChevronDown className="h-5 w-5 text-slate-400" />
+                    </div>
+                </div>
+
+                <button 
+                    onClick={() => setIsAddingCustomer(true)} 
+                    className="p-3 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 transition-colors border border-indigo-100 shadow-sm group" 
+                    title="Add New Client"
+                >
+                    <Plus className="w-5 h-5 group-hover:scale-110 transition-transform" />
                 </button>
-                <button onClick={() => setIsAddingCustomer(false)} className="p-1.5 text-slate-400 hover:text-slate-600">
-                  <X className="w-4 h-4" />
-                </button>
-             </div>
-          )}
+            </div>
 
-          <div className="h-6 w-px bg-slate-200 hidden sm:block mx-2"></div>
-
-          <button 
-            onClick={() => setFabricDictionaryModal(true)}
-            className="flex items-center gap-2 px-3 py-2 border border-slate-300 bg-white text-slate-600 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 text-sm rounded-lg transition-colors font-medium"
-            title="View Fabric Compositions"
-          >
-            <FileSpreadsheet className="w-4 h-4" />
-            <span className="hidden lg:inline">Fabric Dictionary</span>
-          </button>
-
-          <button 
-            onClick={() => {
-              const newState = !showYarnRequirements;
-              setShowYarnRequirements(newState);
-              if (newState) setShowDyehouse(false);
-            }}
-            className={`flex items-center gap-2 px-3 py-2 border text-sm rounded-lg transition-colors font-medium ${showYarnRequirements ? 'bg-indigo-100 border-indigo-300 text-indigo-800' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}
-          >
-            <Package className="w-4 h-4" />
-            {showYarnRequirements ? 'Show Orders' : 'Show Yarn Requirements'}
-          </button>
-
-          <button 
-            onClick={() => {
-              const newState = !showDyehouse;
-              setShowDyehouse(newState);
-              if (newState) setShowYarnRequirements(false);
-            }}
-            className={`flex items-center gap-2 px-3 py-2 border text-sm rounded-lg transition-colors font-medium ${showDyehouse ? 'bg-purple-100 border-purple-300 text-purple-800' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}
-          >
-            <Droplets className="w-4 h-4" />
-            {showDyehouse ? 'Show Fabric Info' : 'Show Dyehouse Info'}
-          </button>
+            {/* Add Client Input (Inline) */}
+            {isAddingCustomer && (
+                <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-4 bg-white p-2 rounded-xl border border-indigo-200 shadow-xl absolute top-24 right-6 z-50">
+                    <input
+                        autoFocus
+                        type="text"
+                        placeholder="New Client Name..."
+                        className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 w-56"
+                        value={newCustomerName}
+                        onChange={e => setNewCustomerName(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && handleAddCustomer()}
+                    />
+                    <button onClick={handleAddCustomer} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 font-medium shadow-sm">
+                        Save
+                    </button>
+                    <button onClick={() => setIsAddingCustomer(false)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg">
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+            )}
         </div>
 
-        {/* Right Actions */}
-        {selectedCustomer && (
-          <div className="flex items-center gap-3">
-             {/* Migration Button (Only if legacy data exists and not yet migrated) */}
-             {(() => {
-                const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
-                const hasLegacyData = rawCustomers.find(c => c.id === selectedCustomerId)?.orders?.length;
-                
-                if (hasLegacyData && !hasSubCollectionData) {
-                    return (
-                        <button 
-                            onClick={handleMigrateData}
-                            className="flex items-center gap-2 px-3 py-2 bg-amber-100 text-amber-700 hover:bg-amber-200 rounded-lg transition-colors text-sm font-medium border border-amber-200"
-                            title="Optimize Database Structure"
-                        >
-                            <Layers className="w-4 h-4" />
-                            Migrate Data
-                        </button>
-                    );
-                }
-                return null;
-             })()}
+        {/* Row 2: Tools & Actions */}
+        <div className="px-6 py-3 bg-slate-50/50 flex flex-col sm:flex-row items-center justify-between gap-4">
+            
+            {/* Left: View Toggles */}
+            <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto pb-2 sm:pb-0 no-scrollbar">
+                <button 
+                    onClick={() => setFabricDictionaryModal(true)}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 text-slate-600 hover:text-indigo-600 hover:border-indigo-200 text-xs font-medium rounded-md shadow-sm transition-all whitespace-nowrap"
+                >
+                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                    Fabric Dictionary
+                </button>
 
-             <button 
-                onClick={() => handleDeleteCustomer(selectedCustomer.id)}
-                className="flex items-center gap-2 px-3 py-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors text-sm font-medium"
-              >
-                <Trash2 className="w-4 h-4" />
-                <span className="hidden sm:inline">Delete Client</span>
-              </button>
-             <div className="h-6 w-px bg-slate-200 hidden sm:block"></div>
-             <button 
-                onClick={handleAddRow}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm font-medium"
-              >
-                <Plus className="w-4 h-4" />
-                <span className="hidden sm:inline">Add Order</span>
-              </button>
-          </div>
-        )}
+                <div className="h-4 w-px bg-slate-300 mx-1"></div>
+
+                <button 
+                    onClick={() => {
+                        const newState = !showYarnRequirements;
+                        setShowYarnRequirements(newState);
+                        if (newState) setShowDyehouse(false);
+                    }}
+                    className={`flex items-center gap-2 px-3 py-1.5 border text-xs font-medium rounded-md shadow-sm transition-all whitespace-nowrap ${
+                        showYarnRequirements 
+                        ? 'bg-indigo-600 border-indigo-600 text-white shadow-indigo-100' 
+                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                >
+                    <Package className="w-3.5 h-3.5" />
+                    Yarn Requirements
+                </button>
+
+                <button 
+                    onClick={() => {
+                        const newState = !showDyehouse;
+                        setShowDyehouse(newState);
+                        if (newState) setShowYarnRequirements(false);
+                    }}
+                    className={`flex items-center gap-2 px-3 py-1.5 border text-xs font-medium rounded-md shadow-sm transition-all whitespace-nowrap ${
+                        showDyehouse 
+                        ? 'bg-purple-600 border-purple-600 text-white shadow-purple-100' 
+                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                >
+                    <Droplets className="w-3.5 h-3.5" />
+                    Dyehouse Info
+                </button>
+
+                {/* Machine Filter */}
+                {showDyehouse && (
+                    <>
+                        <div className="h-4 w-px bg-slate-300 mx-1"></div>
+                        <div className="relative flex items-center">
+                            <Factory className="w-3.5 h-3.5 text-slate-400 absolute left-2" />
+                            <select
+                                value={machineFilter}
+                                onChange={(e) => setMachineFilter(e.target.value)}
+                                className={`pl-8 pr-8 py-1.5 border text-xs font-medium rounded-md shadow-sm transition-all appearance-none cursor-pointer outline-none ${
+                                    machineFilter 
+                                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700' 
+                                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                                }`}
+                            >
+                                <option value="">All Machines</option>
+                                <option value="300">300kg</option>
+                                <option value="600">600kg</option>
+                                <option value="900">900kg</option>
+                                <option value="1200">1200kg</option>
+                            </select>
+                            {machineFilter && (
+                                <button 
+                                    onClick={() => setMachineFilter('')}
+                                    className="absolute right-2 text-indigo-400 hover:text-indigo-600"
+                                >
+                                    <X className="w-3 h-3" />
+                                </button>
+                            )}
+                        </div>
+                    </>
+                )}
+            </div>
+
+            {/* Right: Client Actions */}
+            {selectedCustomer && (
+                <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                    {/* Migration Button */}
+                    {(() => {
+                        const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
+                        const hasLegacyData = rawCustomers.find(c => c.id === selectedCustomerId)?.orders?.length;
+                        
+                        if (hasLegacyData && !hasSubCollectionData) {
+                            return (
+                                <button 
+                                    onClick={handleMigrateData}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 rounded-md transition-colors text-xs font-medium"
+                                >
+                                    <Layers className="w-3.5 h-3.5" />
+                                    Migrate Data
+                                </button>
+                            );
+                        }
+                        return null;
+                    })()}
+
+                    <button 
+                        onClick={() => handleDeleteCustomer(selectedCustomer.id)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 rounded-md transition-colors text-xs font-medium"
+                    >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span className="hidden lg:inline">Delete Client</span>
+                    </button>
+
+                    <button 
+                        onClick={handleAddRow}
+                        className="flex items-center gap-2 px-4 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-all shadow-sm hover:shadow text-xs font-bold tracking-wide"
+                    >
+                        <Plus className="w-4 h-4" />
+                        ADD ORDER
+                    </button>
+                </div>
+            )}
+        </div>
       </div>
 
       {/* Main Content */}
@@ -2736,7 +3213,7 @@ export const ClientOrdersPage: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {selectedCustomer.orders.map((row) => {
+                        {filteredOrders.map((row) => {
                           const statusInfo = row.material ? statsMap.get(row.material) : null;
                           // If we have active machines, override the remaining qty
                           if (statusInfo && statusInfo.active.length > 0) {
@@ -2769,6 +3246,7 @@ export const ClientOrdersPage: React.FC = () => {
                               handleCreateDyehouse={handleCreateDyehouse}
                               machines={machines}
                               externalFactories={externalFactories}
+                              allOrders={flatOrders}
                               onOpenProductionOrder={(order, active, planned) => {
                                 setProductionOrderModal({
                                   isOpen: true,
@@ -2779,6 +3257,7 @@ export const ClientOrdersPage: React.FC = () => {
                               }}
                               onOpenHistory={(order) => setSelectedOrderForHistory(order)}
                               hasHistory={historySet.has(row.material || '')}
+                              onFilterMachine={(cap) => setMachineFilter(cap)}
                             />
                           );
                         })}
@@ -3084,11 +3563,56 @@ export const ClientOrdersPage: React.FC = () => {
           />
         )}
 
+        {/* Add Season Modal */}
+        {showAddSeason && (
+             <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
+                <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md animate-in fade-in zoom-in-95">
+                    <h3 className="text-lg font-bold text-slate-800 mb-4">Add New Season</h3>
+                    <input
+                        autoFocus
+                        type="text"
+                        placeholder="e.g., 2025 Winter Season"
+                        value={newSeasonName}
+                        onChange={(e) => setNewSeasonName(e.target.value)}
+                        className="w-full px-4 py-2 border border-slate-300 rounded-lg mb-4 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                    <div className="flex justify-end gap-2">
+                        <button 
+                            onClick={() => setShowAddSeason(false)}
+                            className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
+                        >
+                            Cancel
+                        </button>
+                        <button 
+                            onClick={async () => {
+                                if (!newSeasonName.trim()) return;
+                                const id = newSeasonName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+                                const newSeason: Season = {
+                                    id,
+                                    name: newSeasonName,
+                                    isActive: true,
+                                    startDate: new Date().toISOString().split('T')[0]
+                                };
+                                await setDoc(doc(db, 'Seasons', id), newSeason);
+                                setSelectedSeasonId(id);
+                                setShowAddSeason(false);
+                                setNewSeasonName('');
+                            }}
+                            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium"
+                        >
+                            Create Season
+                        </button>
+                    </div>
+                </div>
+             </div>
+        )}
+
         {/* Fabric Dictionary Modal */}
         <FabricDictionaryModal 
             isOpen={fabricDictionaryModal}
             onClose={() => setFabricDictionaryModal(false)}
             fabrics={fabrics}
+            usedFabricNames={usedFabricNames}
         />
 
         {/* Fabric Form Modal */}
@@ -3582,18 +4106,23 @@ const FabricDictionaryModal: React.FC<{
   isOpen: boolean;
   onClose: () => void;
   fabrics: FabricDefinition[];
-}> = ({ isOpen, onClose, fabrics }) => {
+  usedFabricNames?: Set<string>;
+}> = ({ isOpen, onClose, fabrics, usedFabricNames }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [showAll, setShowAll] = useState(false);
 
   if (!isOpen) return null;
 
-  const filteredFabrics = fabrics.filter(f => 
-    f.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const displayedFabrics = fabrics.filter(f => {
+      const matchesSearch = f.name.toLowerCase().includes(searchTerm.toLowerCase());
+      const isUsed = usedFabricNames ? usedFabricNames.has(f.name) : true;
+      // Default to showing only used fabrics if a filter is provided, unless showAll is true
+      return matchesSearch && (showAll || !usedFabricNames || isUsed);
+  });
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
           <div>
             <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
@@ -3601,7 +4130,7 @@ const FabricDictionaryModal: React.FC<{
               Fabric Composition Dictionary
             </h2>
             <p className="text-sm text-slate-500">
-              Reference guide for all fabric yarn requirements
+              {usedFabricNames && !showAll ? 'Showing fabrics used in current order' : 'Showing all available fabrics'}
             </p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
@@ -3609,8 +4138,8 @@ const FabricDictionaryModal: React.FC<{
           </button>
         </div>
 
-        <div className="p-4 border-b border-slate-100 bg-white">
-            <div className="relative">
+        <div className="p-4 border-b border-slate-100 bg-white flex gap-4">
+            <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input 
                     type="text" 
@@ -3620,60 +4149,92 @@ const FabricDictionaryModal: React.FC<{
                     onChange={(e) => setSearchTerm(e.target.value)}
                 />
             </div>
+            {usedFabricNames && (
+                <button
+                    onClick={() => setShowAll(!showAll)}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${showAll ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200'}`}
+                >
+                    {showAll ? 'Show Used Only' : 'Show All Fabrics'}
+                </button>
+            )}
         </div>
 
         <div className="p-0 overflow-y-auto flex-1 bg-slate-50/50">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
-                {filteredFabrics.map(fabric => (
-                    <div key={fabric.id} className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden hover:shadow-md transition-shadow">
-                        <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
-                            <h3 className="font-bold text-slate-700">{fabric.name}</h3>
-                            <span className="text-xs font-mono text-slate-400 bg-white px-2 py-1 rounded border border-slate-100">
-                                {fabric.variants ? `${fabric.variants.length} Variants` : 'Standard'}
-                            </span>
-                        </div>
-                        <div className="p-4">
-                            {fabric.variants && fabric.variants.length > 0 ? (
-                                <div className="space-y-3">
-                                    {fabric.variants.map((variant, idx) => (
-                                        <div key={idx} className="text-sm">
-                                            <div className="font-medium text-slate-600 mb-1 flex items-center gap-2">
-                                                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400"></span>
-                                                Variant {idx + 1}
+            <table className="w-full text-sm text-left border-collapse">
+                <thead className="bg-slate-100 text-slate-600 font-semibold border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+                    <tr>
+                        <th className="px-6 py-3 w-1/4 border-r border-slate-200">Fabric Name</th>
+                        <th className="px-6 py-3 w-1/6 border-r border-slate-200">Short Code</th>
+                        <th className="px-6 py-3">Yarn Composition (Cell Format)</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 bg-white">
+                    {displayedFabrics.map(fabric => (
+                        <tr key={fabric.id} className="hover:bg-slate-50 transition-colors">
+                            <td className="px-6 py-4 font-medium text-slate-800 border-r border-slate-100 align-top">
+                                {fabric.name}
+                                {fabric.variants && fabric.variants.length > 0 && (
+                                    <span className="block mt-1 text-xs text-slate-400 font-normal">
+                                        {fabric.variants.length} Variants Available
+                                    </span>
+                                )}
+                            </td>
+                            <td className="px-6 py-4 text-slate-600 border-r border-slate-100 align-top font-mono text-xs">
+                                {fabric.shortName || fabric.code || '-'}
+                            </td>
+                            <td className="px-6 py-4 align-top">
+                                {fabric.variants && fabric.variants.length > 0 ? (
+                                    <div className="space-y-4">
+                                        {fabric.variants.map((variant, vIdx) => (
+                                            <div key={vIdx} className="bg-slate-50 rounded border border-slate-200 p-2">
+                                                <div className="text-xs font-bold text-indigo-600 mb-2 border-b border-slate-200 pb-1">
+                                                    {variant.name}
+                                                </div>
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                    {variant.yarns.map((y, yIdx) => (
+                                                        <div key={yIdx} className="flex items-center justify-between bg-white px-2 py-1 rounded border border-slate-100 text-xs">
+                                                            <span className="font-medium text-slate-700">{y.name}</span>
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="font-mono bg-blue-50 text-blue-700 px-1.5 rounded">{y.percentage}%</span>
+                                                                {y.scrapPercentage && (
+                                                                    <span className="font-mono bg-red-50 text-red-700 px-1.5 rounded" title="Scrap">+{y.scrapPercentage}%</span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </div>
-                                            <div className="pl-3.5 space-y-1">
-                                                {variant.yarns.map((y, yIdx) => (
-                                                    <div key={yIdx} className="flex justify-between text-slate-500 text-xs border-b border-slate-50 last:border-0 py-1">
-                                                        <span>{y.name}</span>
-                                                        <span className="font-mono">
-                                                            {y.percentage}% <span className="text-slate-300">|</span> Scrap: {y.scrapPercentage}%
-                                                        </span>
-                                                    </div>
-                                                ))}
+                                        ))}
+                                    </div>
+                                ) : fabric.yarnComposition && fabric.yarnComposition.length > 0 ? (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        {fabric.yarnComposition.map((y, yIdx) => (
+                                            <div key={yIdx} className="flex items-center justify-between bg-slate-50 px-3 py-2 rounded border border-slate-100 text-xs">
+                                                <span className="font-medium text-slate-700">{y.name || y.yarnName}</span>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-mono bg-blue-50 text-blue-700 px-1.5 rounded">{y.percentage}%</span>
+                                                    {y.scrapPercentage && (
+                                                        <span className="font-mono bg-red-50 text-red-700 px-1.5 rounded" title="Scrap">+{y.scrapPercentage}%</span>
+                                                    )}
+                                                </div>
                                             </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : fabric.yarnComposition && fabric.yarnComposition.length > 0 ? (
-                                <div className="space-y-1">
-                                    {fabric.yarnComposition.map((y: any, yIdx: number) => (
-                                        <div key={yIdx} className="flex justify-between text-sm text-slate-600 border-b border-slate-50 last:border-0 py-1">
-                                            <span>{y.name || y.yarnName}</span>
-                                            <span className="font-mono text-slate-500">
-                                                {y.percentage}% <span className="text-slate-300">|</span> Scrap: {y.scrapPercentage || 0}%
-                                            </span>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : (
-                                <div className="text-center py-2 text-slate-400 italic text-sm">
-                                    No composition data defined.
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                ))}
-            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <span className="text-slate-400 italic text-xs">No composition defined</span>
+                                )}
+                            </td>
+                        </tr>
+                    ))}
+                    {displayedFabrics.length === 0 && (
+                        <tr>
+                            <td colSpan={3} className="px-6 py-8 text-center text-slate-400 italic">
+                                No fabrics found matching your criteria.
+                            </td>
+                        </tr>
+                    )}
+                </tbody>
+            </table>
         </div>
         
         <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end">

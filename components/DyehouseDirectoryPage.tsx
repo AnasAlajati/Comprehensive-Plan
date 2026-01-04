@@ -8,10 +8,13 @@ import {
   doc,
   query,
   where,
-  getDocs
+  getDocs,
+  collectionGroup
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { Dyehouse, DyehouseMachine } from '../types';
+import { Dyehouse, DyehouseMachine, CustomerSheet } from '../types';
+import { DyehouseMachineDetails } from './DyehouseMachineDetails';
+import { DyehouseGlobalSchedule } from './DyehouseGlobalSchedule';
 import { 
   Plus, 
   Trash2, 
@@ -22,7 +25,9 @@ import {
   Package, 
   Settings,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  LayoutGrid,
+  List
 } from 'lucide-react';
 
 export const DyehouseDirectoryPage: React.FC = () => {
@@ -34,6 +39,11 @@ export const DyehouseDirectoryPage: React.FC = () => {
   const [newDyehouseName, setNewDyehouseName] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Dyehouse | null>(null);
+  
+  // New State
+  const [viewMode, setViewMode] = useState<'directory' | 'global'>('directory');
+  const [selectedMachine, setSelectedMachine] = useState<{ dyehouse: string, capacity: number } | null>(null);
+  const [machineCounts, setMachineCounts] = useState<Record<string, number>>({});
 
   // Fetch Dyehouses
   useEffect(() => {
@@ -62,6 +72,54 @@ export const DyehouseDirectoryPage: React.FC = () => {
        
        setInventoryStats(stats);
        setDiscoveredLocations(Array.from(locations));
+    });
+    return () => unsub();
+  }, []);
+
+  // Calculate Machine Counts
+  useEffect(() => {
+    const unsub = onSnapshot(query(collectionGroup(db, 'orders')), (snapshot) => {
+      const counts: Record<string, number> = {};
+      
+      snapshot.docs.forEach(doc => {
+        const order = doc.data() as any; // OrderRow
+
+        if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
+            order.dyeingPlan.forEach((batch: any) => {
+              // Determine Dyehouse (Batch override > Order default)
+              const dyehouseName = batch.dyehouse || order.dyehouse || '';
+              if (!dyehouseName) return;
+
+              // Determine Machine Capacities this batch belongs to
+              // We match based on Planned Capacity (Machine) > Machine Name > Quantity
+              const capacitiesToIncrement = new Set<string>();
+
+              // 1. Planned Capacity (Explicit Machine Selection)
+              if (batch.plannedCapacity) {
+                  capacitiesToIncrement.add(String(batch.plannedCapacity));
+              }
+              // 2. Machine Name Match (Legacy)
+              else {
+                  const rawMachine = batch.machine || order.dyehouseMachine || '';
+                  const machineCapacityFromText = String(rawMachine).replace(/[^0-9]/g, '');
+                  
+                  if (machineCapacityFromText) {
+                      capacitiesToIncrement.add(machineCapacityFromText);
+                  } else if (batch.quantity) {
+                      // 3. Fallback to Quantity (Legacy)
+                      capacitiesToIncrement.add(String(batch.quantity));
+                  }
+              }
+              
+              capacitiesToIncrement.forEach(cap => {
+                const key = `${dyehouseName}-${cap}`;
+                counts[key] = (counts[key] || 0) + 1;
+              });
+            });
+          }
+      });
+      
+      setMachineCounts(counts);
     });
     return () => unsub();
   }, []);
@@ -157,25 +215,47 @@ export const DyehouseDirectoryPage: React.FC = () => {
   return (
     <div className="flex flex-col h-full bg-slate-50">
       {/* Header */}
-      <div className="bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center">
+      <div className="bg-white border-b border-slate-200 px-6 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
             <Factory className="text-purple-600" />
-            Dyehouse Directory
+            Dyehouse Management
           </h1>
-          <p className="text-slate-500 text-sm mt-1">Manage dyehouses and their machine capacities</p>
+          <p className="text-slate-500 text-sm mt-1">Manage dyehouses, capacities, and view global schedules</p>
         </div>
-        <button
-          onClick={() => setIsAdding(true)}
-          className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm"
-        >
-          <Plus size={18} />
-          Add Dyehouse
-        </button>
+        
+        <div className="flex items-center gap-3">
+          <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200">
+            <button 
+              onClick={() => setViewMode('directory')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'directory' ? 'bg-white shadow text-purple-600' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              <LayoutGrid size={16} />
+              Directory
+            </button>
+            <button 
+              onClick={() => setViewMode('global')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'global' ? 'bg-white shadow text-purple-600' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              <List size={16} />
+              Global Schedule
+            </button>
+          </div>
+
+          {viewMode === 'directory' && (
+            <button
+              onClick={() => setIsAdding(true)}
+              className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm"
+            >
+              <Plus size={18} />
+              Add Dyehouse
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Add Modal/Inline Form */}
-      {isAdding && (
+      {isAdding && viewMode === 'directory' && (
         <div className="bg-white border-b border-slate-200 px-6 py-4 animate-in slide-in-from-top-2">
           <div className="flex items-center gap-3 max-w-md">
             <input
@@ -205,10 +285,13 @@ export const DyehouseDirectoryPage: React.FC = () => {
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {allDyehouses.map((dyehouse) => (
-            <div key={dyehouse.id} className={`bg-white rounded-xl border shadow-sm overflow-hidden hover:shadow-md transition-shadow ${dyehouse.id.startsWith('temp-') ? 'border-blue-200 ring-1 ring-blue-100' : 'border-slate-200'}`}>
-              {editingId === dyehouse.id && editForm ? (
+        {viewMode === 'global' ? (
+          <DyehouseGlobalSchedule />
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {allDyehouses.map((dyehouse) => (
+              <div key={dyehouse.id} className={`bg-white rounded-xl border shadow-sm overflow-hidden hover:shadow-md transition-shadow ${dyehouse.id.startsWith('temp-') ? 'border-blue-200 ring-1 ring-blue-100' : 'border-slate-200'}`}>
+                {editingId === dyehouse.id && editForm ? (
                 // Edit Mode
                 <div className="p-4 space-y-4">
                   <div className="flex justify-between items-center mb-2">
@@ -310,16 +393,30 @@ export const DyehouseDirectoryPage: React.FC = () => {
                     
                     {dyehouse.machines && dyehouse.machines.length > 0 ? (
                       <div className="flex flex-wrap gap-2">
-                        {dyehouse.machines.map((machine, idx) => (
-                          <div key={idx} className="flex items-center bg-white border border-slate-200 rounded-lg px-3 py-1.5 shadow-sm">
-                            <span className="font-mono font-bold text-slate-700">{machine.capacity}kg</span>
-                            {machine.count > 1 && (
-                              <span className="ml-2 px-1.5 py-0.5 bg-slate-100 text-slate-500 text-xs rounded-full font-medium">
-                                x{machine.count}
+                        {dyehouse.machines.map((machine, idx) => {
+                          const countKey = `${dyehouse.name}-${machine.capacity}`;
+                          const itemCount = machineCounts[countKey] || 0;
+                          
+                          return (
+                            <button 
+                              key={idx} 
+                              onClick={() => setSelectedMachine({ dyehouse: dyehouse.name, capacity: machine.capacity })}
+                              className="flex items-center bg-white border border-slate-200 rounded-lg px-3 py-1.5 shadow-sm hover:border-purple-300 hover:ring-1 hover:ring-purple-200 transition-all"
+                            >
+                              <span className="font-mono font-bold text-slate-700">
+                                {machine.capacity}kg
+                                {itemCount > 0 && (
+                                  <span className="ml-1 text-purple-600">({itemCount})</span>
+                                )}
                               </span>
-                            )}
-                          </div>
-                        ))}
+                              {machine.count > 1 && (
+                                <span className="ml-2 px-1.5 py-0.5 bg-slate-100 text-slate-500 text-xs rounded-full font-medium">
+                                  x{machine.count}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
                       </div>
                     ) : (
                       <div className="text-slate-400 text-sm italic py-2">
@@ -347,7 +444,18 @@ export const DyehouseDirectoryPage: React.FC = () => {
             </div>
           )}
         </div>
+        )}
       </div>
+
+      {/* Machine Details Modal */}
+      {selectedMachine && (
+        <DyehouseMachineDetails
+          isOpen={!!selectedMachine}
+          onClose={() => setSelectedMachine(null)}
+          dyehouseName={selectedMachine.dyehouse}
+          machineCapacity={selectedMachine.capacity}
+        />
+      )}
     </div>
   );
 };

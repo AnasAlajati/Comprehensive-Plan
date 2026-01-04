@@ -509,7 +509,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
        console.warn('Machine missing Firestore ID (falling back to numeric):', machine.name, machineNumericId);
     }
 
-    return {
+    const machineObj: PlanningMachine = {
       id: machineNumericId,
       machineSSId,
       scheduleIndex: machine.scheduleIndex !== undefined ? machine.scheduleIndex : 9999,
@@ -537,6 +537,11 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
         client: effectiveLog.client || ''
       } : undefined
     };
+
+    // Recalculate schedule to ensure dates are dynamic based on current status
+    machineObj.futurePlans = recalculateSchedule(machineObj.futurePlans, machineObj);
+
+    return machineObj;
   }, []);
 
   const sanitizePlans = useCallback((plans: PlanItem[]): PlanItem[] => (

@@ -165,7 +165,9 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
               </div>
               <div className="border-b border-slate-200 pb-1">
                 <span className="text-xs font-bold text-slate-500 uppercase block mb-1">Machine</span>
-                <div className="text-base font-bold">{selectedMachine || 'Not Assigned'}</div>
+                <div className={`text-base font-bold ${!selectedMachine ? 'text-red-600' : ''}`}>
+                  {selectedMachine || 'Not Assigned'}
+                </div>
               </div>
               <div className="border-b border-slate-200 pb-1">
                 <span className="text-xs font-bold text-slate-500 uppercase block mb-1">Fabric Name</span>
@@ -175,7 +177,9 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
               </div>
               <div className="border-b border-slate-200 pb-1">
                 <span className="text-xs font-bold text-slate-500 uppercase block mb-1">Order Quantity</span>
-                <div className="text-base font-bold">{order.requiredQty} kg</div>
+                <div className={`text-base font-bold ${!order.requiredQty ? 'text-red-600' : ''}`}>
+                  {order.requiredQty ? `${order.requiredQty} kg` : 'Not Assigned'}
+                </div>
               </div>
             </div>
 
@@ -187,11 +191,15 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <span className="text-[10px] text-slate-500 block">Required GSM</span>
-                  <span className="font-bold text-base">{order.requiredGsm || '-'}</span>
+                  <span className={`font-bold text-base ${!order.requiredGsm ? 'text-red-600' : ''}`}>
+                    {order.requiredGsm || 'Missing'}
+                  </span>
                 </div>
                 <div>
                   <span className="text-[10px] text-slate-500 block">Required Width</span>
-                  <span className="font-bold text-base">{order.requiredWidth || '-'}</span>
+                  <span className={`font-bold text-base ${!order.requiredWidth ? 'text-red-600' : ''}`}>
+                    {order.requiredWidth || 'Missing'}
+                  </span>
                 </div>
                 <div>
                   <span className="text-[10px] text-slate-500 block">Accessories</span>
@@ -240,7 +248,7 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={3} className="py-2 text-center text-slate-400 italic">
+                      <td colSpan={3} className="py-2 text-center text-red-600 font-bold italic">
                         No specific yarn lots allocated.
                       </td>
                     </tr>
@@ -257,7 +265,9 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
               <div className="grid grid-cols-2 gap-8">
                 <div>
                   <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Dyehouse</span>
-                  <div className="text-base font-bold">{order.dyehouse || 'Not Specified'}</div>
+                  <div className={`text-base font-bold ${!order.dyehouse ? 'text-red-600' : ''}`}>
+                    {order.dyehouse || 'Not Specified'}
+                  </div>
                 </div>
                 <div>
                   <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Machines</span>

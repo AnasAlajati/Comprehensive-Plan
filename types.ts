@@ -1,5 +1,13 @@
 import { Timestamp } from 'firebase/firestore';
 
+export interface Season {
+  id: string;
+  name: string;
+  startDate?: string;
+  endDate?: string;
+  isActive?: boolean;
+}
+
 export interface DemoItem {
   id: string;
   title: string;
@@ -151,14 +159,15 @@ export interface MachineRow {
 export interface DyeingBatch {
   id: string;
   color: string;
-  quantity: number;
+  quantity: number;        // Customer Demand (e.g., 380kg)
+  plannedCapacity?: number; // NEW: Vessel Size (e.g., 400kg)
   machine: string;
   notes: string;
   dispatchNumber?: string; // رقم الازن
   dateSent?: string;       // تاريخ بعت المصبغة
   formationDate?: string;  // تاريخ التشكيل
-  quantitySent?: number;   // الكمية المبعوتة
-  receivedQuantity?: number; // المستلم
+  quantitySent?: number;   // الكمية المبعوتة (Actual Sent e.g., 388.5kg)
+  receivedQuantity?: number; // المستلم (Received e.g., 379kg)
 }
 
 export interface YarnAllocationItem {
@@ -199,12 +208,14 @@ export interface OrderRow {
   requiredWidth?: number; // NEW: Required Width
   isPrinted?: boolean; // NEW: Track if production order has been printed
   printedAt?: string; // NEW: Date when the order was printed
+  seasonId?: string; // NEW: Season ID
 }
 
 export interface CustomerSheet {
   id: string;
   name: string;
   orders: OrderRow[];
+  createdSeasonId?: string; // NEW: Season where client was created
 }
 
 // --- NEW ADVANCED STRUCTURE TYPES ---

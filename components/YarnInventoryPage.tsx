@@ -32,7 +32,7 @@ import {
 } from 'lucide-react';
 
 import { YarnService } from '../services/yarnService';
-import { YarnInventoryItem } from '../types';
+import { YarnInventoryItem, Yarn } from '../types';
 
 interface GroupedYarn {
   name: string;
@@ -45,6 +45,7 @@ interface GroupedYarn {
 
 export const YarnInventoryPage: React.FC = () => {
   const [inventory, setInventory] = useState<YarnInventoryItem[]>([]);
+  const [masterYarns, setMasterYarns] = useState<Yarn[]>([]); // NEW: To check for unlinked items
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -200,8 +201,12 @@ export const YarnInventoryPage: React.FC = () => {
   const fetchInventory = async () => {
     setLoading(true);
     try {
-      const items = await YarnService.getAllInventory();
+      const [items, yarns] = await Promise.all([
+          YarnService.getAllInventory(),
+          YarnService.getAllYarns()
+      ]);
       setInventory(items);
+      setMasterYarns(yarns);
     } catch (error) {
       console.error("Error fetching inventory:", error);
     } finally {
@@ -514,6 +519,48 @@ export const YarnInventoryPage: React.FC = () => {
       }
   };
 
+  // Identify Unlinked Yarns
+  const unlinkedYarns = useMemo(() => {
+      if (inventory.length === 0 || masterYarns.length === 0) return [];
+      
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
+      const masterNames = new Set(masterYarns.map(y => normalize(y.name)));
+      
+      const missing = new Set<string>();
+      inventory.forEach(item => {
+          const normName = normalize(item.yarnName);
+          if (!masterNames.has(normName)) {
+              missing.add(item.yarnName); // Keep original name for creation
+          }
+      });
+      
+      return Array.from(missing).sort();
+  }, [inventory, masterYarns]);
+
+  const handleLinkAll = async () => {
+      if (!confirm(`This will create ${unlinkedYarns.length} new Master Yarns. Continue?`)) return;
+      
+      setLoading(true);
+      try {
+          let createdCount = 0;
+          for (const name of unlinkedYarns) {
+              await YarnService.addYarn(name);
+              createdCount++;
+          }
+          
+          // Refresh Master List
+          const yarns = await YarnService.getAllYarns();
+          setMasterYarns(yarns);
+          
+          alert(`Successfully created ${createdCount} new Master Yarns!`);
+      } catch (e) {
+          console.error(e);
+          alert("Error creating yarns: " + e);
+      } finally {
+          setLoading(false);
+      }
+  };
+
   return (
     <div className="w-full h-full flex flex-col bg-slate-50/50">
       
@@ -691,6 +738,43 @@ export const YarnInventoryPage: React.FC = () => {
       <div className="flex-1 overflow-auto p-6">
         <div className="max-w-7xl mx-auto w-full">
             
+            {/* Unlinked Yarns Banner */}
+            {unlinkedYarns.length > 0 && (
+                <div className="mb-6 bg-amber-50 border border-amber-200 rounded-lg p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between shadow-sm gap-4">
+                    <div className="flex items-start gap-3">
+                        <div className="p-2 bg-amber-100 rounded-full text-amber-600 mt-0.5">
+                            <AlertCircle className="w-5 h-5" />
+                        </div>
+                        <div>
+                            <h3 className="font-bold text-amber-800">Missing Master Definitions</h3>
+                            <p className="text-sm text-amber-700 mt-1">
+                                Found <span className="font-bold">{unlinkedYarns.length}</span> yarn types in inventory that are not in the Master Yarn List.
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-1">
+                                {unlinkedYarns.slice(0, 5).map(name => (
+                                    <span key={name} className="text-[10px] px-2 py-0.5 bg-amber-100 text-amber-800 rounded-full border border-amber-200">
+                                        {name}
+                                    </span>
+                                ))}
+                                {unlinkedYarns.length > 5 && (
+                                    <span className="text-[10px] px-2 py-0.5 text-amber-600">
+                                        +{unlinkedYarns.length - 5} more...
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                    <button 
+                        onClick={handleLinkAll}
+                        disabled={loading}
+                        className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-md font-medium text-sm shadow-sm flex items-center gap-2 whitespace-nowrap transition-colors"
+                    >
+                        {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                        Link All ({unlinkedYarns.length})
+                    </button>
+                </div>
+            )}
+
             {viewType === 'grid' ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                     {groupedInventory.map((group) => (
