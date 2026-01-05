@@ -7,7 +7,7 @@
  * 3. Make sure you have sent a "Hello" message to your bot in Telegram first!
  */
 
-const BOT_TOKEN = '8215277484:AAGzAzovToD9_YRRCIH6HXo_w1_DDhP8G1g'; 
+const BOT_TOKEN = import.meta.env.VITE_TELEGRAM_BOT_TOKEN; 
 // Add multiple Chat IDs here. Each user must start a chat with the bot first!
 const CHAT_IDS = [
   '8403312728', // Main Admin
