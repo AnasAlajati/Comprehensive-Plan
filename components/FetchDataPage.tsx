@@ -554,22 +554,25 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       );
 
       const date = new Date().toLocaleDateString('en-GB');
-      let message = `📅 <b>تقرير الإنتاج اليومي: ${date}</b>\n\n`;
+      let message = `📅 <b>Daily Report: ${date}</b>\n\n`;
 
       // Section 1: Finished Machines
       if (finishedMachines.length > 0) {
-        message += `🏁 <b>ماكينات انتهت اليوم:</b>\n`;
-        finishedMachines.forEach((m, idx) => {
-           // Use m.material (mapped from App.tsx) or fallback to m.fabric if available
-           const fabricName = m.material || m.fabric || 'غير معروف';
-           message += `${idx + 1}. <b>${m.machineName}</b> (${fabricName})\n`;
+        message += `🏁 <b>FINISHED PRODUCTION</b>\n`;
+        finishedMachines.forEach((m) => {
+           const fabricName = m.material || m.fabric || 'Unknown';
+           const { shortName } = parseFabricName(fabricName);
+           
+           message += `\n🔹 <b>${m.machineName}</b> (${m.brand || ''})\n`;
+           message += `📦 <b>Done:</b> ${shortName} (${m.client || '-'})\n`;
            
            const hasPlans = m.futurePlans && m.futurePlans.length > 0;
            if (hasPlans) {
              const nextPlan = m.futurePlans[0];
-             message += `   ↳ 📅 التالي: ${nextPlan.fabric} (${nextPlan.client})\n`;
+             const { shortName: nextFabric } = parseFabricName(nextPlan.fabric);
+             message += `📅 <b>Next:</b> ${nextFabric} (${nextPlan.client})\n`;
            } else {
-             message += `   ↳ 🛑 لا توجد خطط مستقبلية.\n`;
+             message += `🛑 <b>Next:</b> No Plan!\n`;
            }
         });
         message += `\n`;
@@ -577,24 +580,26 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
       // Section 2: Low Stock
       if (lowStockMachines.length > 0) {
-        message += `⚠️ <b>تنبيهات انخفاض المخزون (&lt;100kg):</b>\n`;
+        message += `⚠️ <b>LOW STOCK ALERTS</b>\n`;
         
-        lowStockMachines.forEach((m, idx) => {
-          message += `${idx + 1}. <b>${m.machineName}</b> (متبقي: ${m.remainingMfg} كجم)\n`;
+        lowStockMachines.forEach((m) => {
+          message += `\n🔸 <b>${m.machineName}</b> (${m.brand || ''})\n`;
+          message += `📉 <b>Rem:</b> ${m.remainingMfg}kg\n`;
           
           const hasPlans = m.futurePlans && m.futurePlans.length > 0;
           if (hasPlans) {
             const nextPlan = m.futurePlans[0];
-            message += `   ↳ 📅 التالي: ${nextPlan.fabric} (${nextPlan.client})\n`;
+            const { shortName: nextFabric } = parseFabricName(nextPlan.fabric);
+            message += `📅 <b>Next:</b> ${nextFabric} (${nextPlan.client})\n`;
           } else {
-            message += `   ↳ 🛑 لا توجد خطط مستقبلية.\n`;
+            message += `🛑 <b>Next:</b> No Plan!\n`;
           }
-          message += `\n`;
         });
+        message += `\n`;
       }
 
       if (lowStockMachines.length === 0 && finishedMachines.length === 0) {
-        message += `✅ <b>الوضع تمام!</b>\nلا توجد تنبيهات مخزون منخفض أو ماكينات انتهت.`;
+        message += `✅ <b>All Good!</b>\nNo low stock alerts or finished machines.`;
       }
 
       await TelegramService.send(message);
@@ -662,6 +667,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [activeCell, setActiveCell] = useState<{ rowIndex: number; field: string } | null>(null);
   const [draggedRowIndex, setDraggedRowIndex] = useState<number | null>(null);
   const [externalProduction, setExternalProduction] = useState<number>(0);
+  const [hallScrap, setHallScrap] = useState<number>(0);
+  const [labScrap, setLabScrap] = useState<number>(0);
   const [showExternalSheet, setShowExternalSheet] = useState(false); // Toggle for External Sheet
   
   const handleSaveFabric = async (formData: any) => {
@@ -1555,17 +1562,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     // Check if we have ANY real logs for this date
     const hasRealLogs = machines.some(m => (m.dailyLogs || []).some((l: any) => l.date === date));
     
-    if (!hasRealLogs && machines.length > 0 && !reportStarted) {
-       setIsNewDay(true);
-       setAllLogs([]); // Clear logs to hide table
-       
-       // Set default source date to yesterday
-       const d = new Date(date);
-       d.setDate(d.getDate() - 1);
-       setSourceDate(d.toISOString().split('T')[0]);
-       return; 
-    }
-    
+    // Auto-start report (skip modal)
     setIsNewDay(false);
     setLastValidDate(date);
 
@@ -1628,6 +1625,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     try {
       const dailySummary = await DataService.getDailySummary(date);
       setExternalProduction(dailySummary?.externalProduction || 0);
+      setHallScrap(dailySummary?.hallScrap || 0);
+      setLabScrap(dailySummary?.labScrap || 0);
     } catch (e) {
       console.warn("Failed to fetch daily summary", e);
     }
@@ -1714,6 +1713,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       // Fetch daily summary (external production)
       const dailySummary = await DataService.getDailySummary(date);
       setExternalProduction(dailySummary?.externalProduction || 0);
+      setHallScrap(dailySummary?.hallScrap || 0);
+      setLabScrap(dailySummary?.labScrap || 0);
       
       setAllLogs(flattenedLogs);
       setFilteredLogs(flattenedLogs);
@@ -2217,7 +2218,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const bousProduction = bousMachines.reduce((sum, m) => sum + (Number(m.dayProduction) || 0), 0);
   const wideProduction = wideMachines.reduce((sum, m) => sum + (Number(m.dayProduction) || 0), 0);
   const totalProduction = wideProduction + bousProduction + Number(externalProduction);
-  const totalScrap = filteredLogs.reduce((sum, m) => sum + (Number(m.scrap) || 0), 0);
+  const totalScrap = filteredLogs.reduce((sum, m) => sum + (Number(m.scrap) || 0), 0) + Number(hallScrap) + Number(labScrap);
   const scrapPercentage = totalProduction > 0 ? (totalScrap / totalProduction) * 100 : 0;
   
   const statusCounts = filteredLogs.reduce((acc, m) => {
@@ -2233,6 +2234,26 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     } catch (error) {
       console.error('Error saving external production:', error);
       showMessage('❌ Error saving external production', true);
+    }
+  };
+
+  const handleHallScrapBlur = async () => {
+    try {
+      await DataService.updateDailySummary(selectedDate, { hallScrap });
+      showMessage('✅ Hall scrap saved');
+    } catch (error) {
+      console.error('Error saving hall scrap:', error);
+      showMessage('❌ Error saving hall scrap', true);
+    }
+  };
+
+  const handleLabScrapBlur = async () => {
+    try {
+      await DataService.updateDailySummary(selectedDate, { labScrap });
+      showMessage('✅ Lab scrap saved');
+    } catch (error) {
+      console.error('Error saving lab scrap:', error);
+      showMessage('❌ Error saving lab scrap', true);
     }
   };
 
@@ -2473,85 +2494,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 >
                   <span>Fetch Data</span>
                   <ArrowRight size={18} />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Start New Report Modal */}
-      {isNewDay && !loading && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-200">
-            <div className="bg-blue-600 px-6 py-4 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="bg-white/20 p-2 rounded-lg">
-                  <FileSpreadsheet className="text-white" size={24} />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-white">Start New Report</h3>
-                  <p className="text-blue-100 text-xs">No data found for {selectedDate}</p>
-                </div>
-              </div>
-              <button 
-                onClick={() => {
-                  if (lastValidDate) {
-                    setSelectedDate(lastValidDate);
-                    handleFetchLogs(lastValidDate);
-                  } else {
-                    // Fallback if no history (e.g. first load on empty day)
-                    setReportStarted(true);
-                  }
-                }}
-                className="text-white/70 hover:text-white hover:bg-white/10 p-1 rounded-full transition-colors"
-                title="Close"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            
-            <div className="p-6 space-y-6">
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-slate-700">
-                  Fetch previous data from:
-                </label>
-                <div className="relative">
-                  <input 
-                    type="date" 
-                    value={sourceDate}
-                    onChange={(e) => setSourceDate(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                  />
-                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
-                    <History size={18} />
-                  </div>
-                </div>
-                <p className="text-xs text-slate-500">
-                  This will copy machine status, fabric, and client from the selected date and calculate the new remaining quantity.
-                </p>
-              </div>
-
-              <div className="flex flex-col gap-3">
-                <button
-                  onClick={() => handleFetchFromPreviousDay(sourceDate)}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-lg shadow-blue-200 transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
-                >
-                  <span>Create & Fetch Data</span>
-                  <ArrowRight size={18} />
-                </button>
-                
-                <div className="relative flex items-center py-2">
-                  <div className="flex-grow border-t border-slate-200"></div>
-                  <span className="flex-shrink-0 mx-4 text-slate-400 text-xs uppercase font-bold">Or</span>
-                  <div className="flex-grow border-t border-slate-200"></div>
-                </div>
-
-                <button
-                  onClick={() => setReportStarted(true)}
-                  className="w-full bg-white hover:bg-slate-50 text-slate-600 font-semibold py-2.5 rounded-xl border border-slate-200 transition-all text-sm"
-                >
-                  Start with Empty Report
                 </button>
               </div>
             </div>
@@ -3277,6 +3219,31 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                       </span>
                    </div>
                  ))}
+              </div>
+
+              {/* Scrap Inputs Column */}
+              <div className="md:w-32 border-r border-slate-200 bg-red-50/30 p-2 flex flex-col justify-center gap-2">
+                 <div className="flex flex-col items-center">
+                    <span className="text-[10px] text-red-900/60 font-bold mb-0.5">سقط الصالة</span>
+                    <input 
+                       type="number" 
+                       value={hallScrap}
+                       onChange={(e) => setHallScrap(Number(e.target.value))}
+                       onBlur={handleHallScrapBlur}
+                       className="w-full text-center bg-white/50 rounded border border-red-100 font-bold text-sm text-red-700 outline-none focus:border-red-300 py-1"
+                    />
+                 </div>
+                 <div className="w-full h-px bg-red-100"></div>
+                 <div className="flex flex-col items-center">
+                    <span className="text-[10px] text-red-900/60 font-bold mb-0.5">سقط المعمل</span>
+                    <input 
+                       type="number" 
+                       value={labScrap}
+                       onChange={(e) => setLabScrap(Number(e.target.value))}
+                       onBlur={handleLabScrapBlur}
+                       className="w-full text-center bg-white/50 rounded border border-red-100 font-bold text-sm text-red-700 outline-none focus:border-red-300 py-1"
+                    />
+                 </div>
               </div>
 
               <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-slate-200">

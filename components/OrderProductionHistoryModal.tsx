@@ -15,6 +15,7 @@ interface ProductionLog {
   date: string;
   machineName: string;
   dayProduction: number;
+  remaining: number; // NEW: Remaining quantity for that day
   scrap: number;
   reason?: string;
 }
@@ -25,6 +26,15 @@ interface Insight {
   date?: string;
   details?: string;
 }
+
+// Helper for "13-Jan" format
+const formatDate = (dateStr: string) => {
+  if (!dateStr) return '-';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return dateStr;
+  const str = date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  return str.replace(' ', '-');
+};
 
 export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalProps> = ({
   isOpen,
@@ -78,6 +88,7 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
                       date: log.date,
                       machineName: machine.name,
                       dayProduction: Number(log.dayProduction) || 0,
+                      remaining: Number(log.remainingMfg) || 0, // Capture remaining
                       scrap: Number(log.scrap) || 0,
                       reason: log.note || ''
                   });
@@ -102,6 +113,71 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
       setLoading(false);
     }
   };
+
+  // Group Logs by Production Run (Gap > 14 days)
+  const groupedLogs = useMemo(() => {
+    if (logs.length === 0) return [];
+    
+    const groups: { title: string; logs: ProductionLog[] }[] = [];
+    let currentGroup: ProductionLog[] = [];
+    
+    // Logs are already sorted descending (Newest first)
+    for (let i = 0; i < logs.length; i++) {
+      const currentLog = logs[i];
+      
+      if (currentGroup.length === 0) {
+        currentGroup.push(currentLog);
+      } else {
+        const prevLog = currentGroup[currentGroup.length - 1];
+        const prevDate = new Date(prevLog.date);
+        const currDate = new Date(currentLog.date);
+        const diffTime = Math.abs(prevDate.getTime() - currDate.getTime());
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        
+        // If gap is large, start a new group (Previous Run)
+        if (diffDays > 14) {
+           // Close current group
+           const startDate = currentGroup[currentGroup.length - 1].date;
+           const endDate = currentGroup[0].date;
+           const year = new Date(endDate).getFullYear();
+           const month = new Date(endDate).toLocaleString('default', { month: 'short' });
+           
+           groups.push({
+             title: groups.length === 0 ? 'Current Production Run' : `Previous Run (${month} ${year})`,
+             logs: currentGroup
+           });
+           
+           // Start new group
+           currentGroup = [currentLog];
+        } else {
+           currentGroup.push(currentLog);
+        }
+      }
+    }
+    
+    // Push the last group
+    if (currentGroup.length > 0) {
+        const endDate = currentGroup[0].date;
+        const year = new Date(endDate).getFullYear();
+        const month = new Date(endDate).toLocaleString('default', { month: 'short' });
+        groups.push({
+            title: groups.length === 0 ? 'Current Production Run' : `Previous Run (${month} ${year})`,
+            logs: currentGroup
+        });
+    }
+    
+    return groups;
+  }, [logs]);
+
+  // Last Working Date Info
+  const lastWorkingInfo = useMemo(() => {
+      if (logs.length === 0) return null;
+      const latestLog = logs[0]; // Already sorted descending
+      return {
+          date: formatDate(latestLog.date),
+          remaining: latestLog.remaining
+      };
+  }, [logs]);
 
   // Analyze Abnormalities
   const insights = useMemo(() => {
@@ -254,10 +330,20 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
                     {totalProduction.toLocaleString()} <span className="text-sm font-normal text-blue-600/70">kg</span>
                   </div>
                 </div>
-                <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-                  <div className="text-xs text-slate-500 font-medium uppercase tracking-wider">Days Active</div>
-                  <div className="text-2xl font-bold text-slate-700 mt-1">{logs.length}</div>
+                
+                {/* Last Working Date Header */}
+                <div className="bg-purple-50 border border-purple-100 rounded-lg p-4">
+                  <div className="text-xs text-purple-600 font-medium uppercase tracking-wider">Last Working Date</div>
+                  <div className="flex flex-col">
+                      <div className="text-xl font-bold text-purple-900 mt-1">
+                        {lastWorkingInfo?.date || '-'}
+                      </div>
+                      <div className="text-xs text-purple-700 mt-0.5">
+                        Remaining: <span className="font-bold">{lastWorkingInfo?.remaining?.toLocaleString() || 0} kg</span>
+                      </div>
+                  </div>
                 </div>
+
                 <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-4">
                   <div className="text-xs text-emerald-600 font-medium uppercase tracking-wider">Avg / Day</div>
                   <div className="text-2xl font-bold text-emerald-900 mt-1">
@@ -306,7 +392,7 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
                       <div>
                         <div className="font-bold text-sm">{insight.message}</div>
                         <div className="text-xs opacity-80 mt-0.5">
-                          {insight.date && <span className="font-mono mr-2">{insight.date}:</span>}
+                          {insight.date && <span className="font-mono mr-2">{formatDate(insight.date)}:</span>}
                           {insight.details}
                         </div>
                       </div>
@@ -315,43 +401,54 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
                 </div>
               </div>
 
-              {/* Detailed Logs Table */}
-              <div>
-                <h3 className="text-sm font-bold text-slate-800 mb-3">Daily Log Details</h3>
-                <div className="border border-slate-200 rounded-lg overflow-hidden">
-                  <table className="w-full text-sm text-left">
-                    <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
-                      <tr>
-                        <th className="px-4 py-3 w-32">Date</th>
-                        <th className="px-4 py-3">Machine</th>
-                        <th className="px-4 py-3 text-right">Production</th>
-                        <th className="px-4 py-3 text-right">Scrap</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {logs.map((log) => (
-                        <tr key={log.id} className="hover:bg-slate-50 transition-colors">
-                          <td className="px-4 py-3 font-mono text-slate-600 flex items-center gap-2">
-                            <Calendar className="w-3 h-3 text-slate-400" />
-                            {log.date}
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <Factory className="w-3 h-3 text-slate-400" />
-                              <span className="font-medium text-slate-700">{log.machineName}</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-right font-mono font-bold text-emerald-600">
-                            {log.dayProduction.toLocaleString()}
-                          </td>
-                          <td className="px-4 py-3 text-right font-mono text-red-500">
-                            {log.scrap > 0 ? log.scrap : '-'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+              {/* Detailed Logs Table (Grouped) */}
+              <div className="space-y-6">
+                {groupedLogs.map((group, groupIdx) => (
+                    <div key={groupIdx}>
+                        <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
+                            <History className="w-4 h-4 text-slate-400" />
+                            {group.title}
+                        </h3>
+                        <div className="border border-slate-200 rounded-lg overflow-hidden">
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+                            <tr>
+                                <th className="px-4 py-3 w-32">Date</th>
+                                <th className="px-4 py-3">Machine</th>
+                                <th className="px-4 py-3 text-right">Production</th>
+                                <th className="px-4 py-3 text-right">Remaining</th>
+                                <th className="px-4 py-3 text-right">Scrap</th>
+                            </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                            {group.logs.map((log) => (
+                                <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                                <td className="px-4 py-3 font-mono text-slate-600 flex items-center gap-2">
+                                    <Calendar className="w-3 h-3 text-slate-400" />
+                                    {formatDate(log.date)}
+                                </td>
+                                <td className="px-4 py-3">
+                                    <div className="flex items-center gap-2">
+                                    <Factory className="w-3 h-3 text-slate-400" />
+                                    <span className="font-medium text-slate-700">{log.machineName}</span>
+                                    </div>
+                                </td>
+                                <td className="px-4 py-3 text-right font-mono font-bold text-emerald-600">
+                                    {log.dayProduction.toLocaleString()}
+                                </td>
+                                <td className="px-4 py-3 text-right font-mono text-slate-600">
+                                    {log.remaining.toLocaleString()}
+                                </td>
+                                <td className="px-4 py-3 text-right font-mono text-red-500">
+                                    {log.scrap > 0 ? log.scrap : '-'}
+                                </td>
+                                </tr>
+                            ))}
+                            </tbody>
+                        </table>
+                        </div>
+                    </div>
+                ))}
               </div>
             </>
           )}

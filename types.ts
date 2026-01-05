@@ -154,20 +154,29 @@ export interface MachineRow {
     client: string;
     lowStockAlertSent?: boolean; // NEW
   };
+
+  // Audit Info
+  lastUpdatedBy?: string;
+  lastUpdatedByEmail?: string;
+  lastUpdated?: string;
 }
 
 export interface DyeingBatch {
   id: string;
   color: string;
-  quantity: number;        // Customer Demand (e.g., 380kg)
-  plannedCapacity?: number; // NEW: Vessel Size (e.g., 400kg)
+  colorHex?: string; // NEW: Color Approval Hex Code
+  colorApproval?: string; // NEW: Color Approval Text
+  quantity: number;
   machine: string;
   notes: string;
   dispatchNumber?: string; // رقم الازن
   dateSent?: string;       // تاريخ بعت المصبغة
   formationDate?: string;  // تاريخ التشكيل
-  quantitySent?: number;   // الكمية المبعوتة (Actual Sent e.g., 388.5kg)
-  receivedQuantity?: number; // المستلم (Received e.g., 379kg)
+  quantitySent?: number;   // الكمية المبعوتة
+  receivedQuantity?: number; // المستلم
+  plannedCapacity?: number; // NEW: Planned Machine Capacity
+  dyehouse?: string; // NEW: Selected Dyehouse
+  status?: string; // NEW: Manual Status Override
 }
 
 export interface YarnAllocationItem {
@@ -209,6 +218,11 @@ export interface OrderRow {
   isPrinted?: boolean; // NEW: Track if production order has been printed
   printedAt?: string; // NEW: Date when the order was printed
   seasonId?: string; // NEW: Season ID
+  
+  // Audit Info
+  lastUpdatedBy?: string;
+  lastUpdatedByEmail?: string;
+  lastUpdated?: string;
 }
 
 export interface CustomerSheet {

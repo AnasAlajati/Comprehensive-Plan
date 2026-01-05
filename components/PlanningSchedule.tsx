@@ -209,10 +209,11 @@ interface PlanningScheduleProps {
   machines?: MachineRow[];
   onUpdate?: (machine: MachineRow) => Promise<void>;
   initialViewMode?: 'INTERNAL' | 'EXTERNAL';
+  userRole?: 'admin' | 'editor' | 'viewer' | null;
 }
 type PlanningMachine = MachineRow & { machineSSId: string; scheduleIndex?: number };
 
-export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, initialViewMode = 'INTERNAL' }) => {
+export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, initialViewMode = 'INTERNAL', userRole }) => {
   const [smartAddMachineId, setSmartAddMachineId] = useState<string | null>(null);
   const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean; machine: any; plan?: any; isCurrent?: boolean; } | null>(null);
   const [draggedPlan, setDraggedPlan] = useState<{machineId: string, index: number} | null>(null);
@@ -1460,6 +1461,17 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                   <span className="uppercase tracking-wider text-xs">{machine.brand}</span>
                   <span className="w-1 h-1 bg-slate-500 rounded-full"></span>
                   <span className="uppercase tracking-wider text-xs">{machine.type}</span>
+                  
+                  {/* Audit Info */}
+                  {userRole === 'admin' && machine.lastUpdatedBy && (
+                    <>
+                      <span className="w-1 h-1 bg-slate-500 rounded-full"></span>
+                      <span className="text-[10px] text-slate-400 flex items-center gap-1" title={`Updated by ${machine.lastUpdatedByEmail} at ${new Date(machine.lastUpdated || '').toLocaleString()}`}>
+                        <span className="opacity-50">By:</span> {machine.lastUpdatedBy.split(' ')[0]}
+                      </span>
+                    </>
+                  )}
+
                   <div className="cursor-move p-1 hover:bg-slate-700 rounded" title="Drag to reorder">
                     <GripVertical size={20} className="text-slate-400" />
                   </div>
@@ -1673,9 +1685,6 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                         </button>
                         <button onClick={() => addPlan(machine, 'SETTINGS')} className="px-4 py-2 border border-dashed border-amber-300 rounded-lg text-amber-600 hover:text-amber-700 hover:bg-amber-50 hover:border-amber-400 transition-all text-xs font-medium">
                           + Add Settings
-                        </button>
-                        <button onClick={() => setSmartAddMachineId(machine.machineSSId)} className="flex items-center justify-center gap-2 px-4 py-2 border border-dashed border-indigo-200 rounded-lg text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 hover:border-indigo-300 transition-all text-xs font-medium bg-indigo-50/30">
-                          Smart Add (AI)
                         </button>
                       </div>
                     </td>

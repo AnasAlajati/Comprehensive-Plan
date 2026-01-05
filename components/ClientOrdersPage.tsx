@@ -15,7 +15,7 @@ import {
   writeBatch,
   deleteField
 } from 'firebase/firestore';
-import { db } from '../services/firebase';
+import { db, auth } from '../services/firebase';
 import { DataService } from '../services/dataService';
 import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem, FabricDefinition, Dyehouse, DyehouseMachine, Season } from '../types';
 import { FabricDetailsModal } from './FabricDetailsModal';
@@ -49,7 +49,8 @@ import {
   Factory,
   FileText,
   History,
-  Trophy
+  Trophy,
+  Info
 } from 'lucide-react';
 
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
@@ -613,7 +614,8 @@ const MemoizedOrderRow = React.memo(({
   onOpenHistory,
   hasHistory,
   onFilterMachine,
-  allOrders
+  allOrders,
+  userRole
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -637,6 +639,7 @@ const MemoizedOrderRow = React.memo(({
   hasHistory: boolean;
   onFilterMachine?: (capacity: string) => void;
   allOrders: OrderRow[];
+  userRole?: 'admin' | 'editor' | 'viewer' | null;
 }) => {
   const [showMachineDetails, setShowMachineDetails] = useState<{ capacity: number; batches: any[] } | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -1366,12 +1369,24 @@ const MemoizedOrderRow = React.memo(({
 
       {/* Actions */}
       <td className="p-0 text-center">
-        <button 
-          onClick={() => handleDeleteRow(row.id)}
-          className="p-2 text-slate-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
+        <div className="flex items-center justify-center gap-1 h-full">
+            {userRole === 'admin' && row.lastUpdatedBy && (
+                <div className="group/audit relative">
+                    <Info className="w-3 h-3 text-slate-300 hover:text-blue-400 cursor-help" />
+                    <div className="absolute bottom-full right-0 mb-2 hidden group-hover/audit:block z-50 w-max max-w-[200px] bg-slate-800 text-white text-xs rounded p-2 shadow-lg text-left">
+                        <div className="font-semibold border-b border-slate-700 pb-1 mb-1">Last Updated</div>
+                        <div><span className="text-slate-400">By:</span> {row.lastUpdatedBy}</div>
+                        <div className="text-[10px] text-slate-400 mt-1">{new Date(row.lastUpdated || '').toLocaleString()}</div>
+                    </div>
+                </div>
+            )}
+            <button 
+            onClick={() => handleDeleteRow(row.id)}
+            className="p-2 text-slate-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+            >
+            <Trash2 className="w-4 h-4" />
+            </button>
+        </div>
       </td>
     </tr>
     
@@ -1385,6 +1400,7 @@ const MemoizedOrderRow = React.memo(({
                 <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                   <tr>
                     <th className="px-3 py-2 text-right min-w-[120px]">اللون</th>
+                    <th className="px-3 py-2 text-right w-24">موافقة اللون</th>
                     <th className="px-3 py-2 text-right w-24">رقم الازن</th>
                     <th className="px-3 py-2 text-right w-32">تاريخ التشكيل</th>
                     <th className="px-3 py-2 text-center w-16 text-[10px] text-slate-400">ايام</th>
@@ -1404,16 +1420,44 @@ const MemoizedOrderRow = React.memo(({
                   {(row.dyeingPlan || []).map((batch, idx) => (
                     <tr key={batch.id || idx} className="group/batch hover:bg-blue-50/30">
                       <td className="p-0">
+                        <div className="flex items-center h-full">
+                            <div className="relative overflow-hidden w-5 h-5 ml-2 rounded-full border border-slate-200 shadow-sm cursor-pointer shrink-0 hover:scale-110 transition-transform">
+                                <input 
+                                    type="color" 
+                                    value={batch.colorHex || '#ffffff'}
+                                    onChange={(e) => {
+                                        const newPlan = [...(row.dyeingPlan || [])];
+                                        newPlan[idx] = { ...batch, colorHex: e.target.value };
+                                        handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                                    }}
+                                    className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[150%] h-[150%] p-0 m-0 border-none cursor-pointer"
+                                    title="Select Color"
+                                />
+                            </div>
+                            <input
+                            type="text"
+                            className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right"
+                            value={batch.color}
+                            onChange={(e) => {
+                                const newPlan = [...(row.dyeingPlan || [])];
+                                newPlan[idx] = { ...batch, color: e.target.value };
+                                handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                            }}
+                            placeholder="اللون..."
+                            />
+                        </div>
+                      </td>
+                      <td className="p-0">
                         <input
                           type="text"
                           className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right"
-                          value={batch.color}
+                          value={batch.colorApproval || ''}
                           onChange={(e) => {
                             const newPlan = [...(row.dyeingPlan || [])];
-                            newPlan[idx] = { ...batch, color: e.target.value };
+                            newPlan[idx] = { ...batch, colorApproval: e.target.value };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                           }}
-                          placeholder="اللون..."
+                          placeholder="..."
                         />
                       </td>
                       <td className="p-0">
@@ -1568,7 +1612,7 @@ const MemoizedOrderRow = React.memo(({
                         />
                       </td>
                       {/* Received */}
-                      <td className="p-0">
+                      <td className="p-0 relative">
                         <input
                           type="number"
                           className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono font-medium text-emerald-600"
@@ -1580,16 +1624,48 @@ const MemoizedOrderRow = React.memo(({
                           }}
                           placeholder="0"
                         />
+                        {batch.quantitySent && batch.quantitySent > 0 && (
+                            <div className="absolute right-1 top-1/2 -translate-y-1/2 text-[9px] text-slate-400 font-mono pointer-events-none bg-white/80 px-0.5 rounded">
+                                {Math.round(((batch.receivedQuantity || 0) / batch.quantitySent) * 100)}%
+                            </div>
+                        )}
                       </td>
-                      <td className="p-0 text-center align-middle">
+                      <td className="p-0 text-center align-middle relative group/status">
                         {(() => {
-                           if (batch.receivedQuantity && batch.receivedQuantity > 0) {
-                             return <span className="inline-block text-[10px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded border border-emerald-200 font-medium">تم الاستلام</span>;
-                           }
-                           if (batch.dispatchNumber) {
-                             return <span className="inline-block text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded border border-blue-200 font-medium">تم الارسال</span>;
-                           }
-                           return <span className="inline-block text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded border border-slate-200 font-medium">مخطط</span>;
+                           const sent = batch.quantitySent || 0;
+                           const received = batch.receivedQuantity || 0;
+                           const percentage = sent > 0 ? (received / sent) : 0;
+
+                           // Determine calculated status
+                           let calculatedStatus = 'planned';
+                           if (percentage >= 0.89) calculatedStatus = 'received';
+                           else if (batch.dispatchNumber) calculatedStatus = 'sent';
+                           
+                           // Use manual override if present, otherwise calculated
+                           const currentStatus = batch.status || calculatedStatus;
+
+                           const styles = {
+                               'planned': 'bg-slate-100 text-slate-500 border-slate-200',
+                               'sent': 'bg-blue-100 text-blue-700 border-blue-200',
+                               'received': 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                           };
+                           
+                           return (
+                               <select 
+                                    className={`appearance-none inline-block w-[calc(100%-8px)] mx-auto text-[10px] py-1 rounded border font-medium outline-none cursor-pointer text-center ${styles[currentStatus as keyof typeof styles] || styles.planned}`}
+                                    style={{ textAlignLast: 'center' }}
+                                    value={currentStatus}
+                                    onChange={(e) => {
+                                        const newPlan = [...(row.dyeingPlan || [])];
+                                        newPlan[idx] = { ...batch, status: e.target.value };
+                                        handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                                    }}
+                               >
+                                   <option value="planned">مخطط</option>
+                                   <option value="sent">تم الارسال</option>
+                                   <option value="received">تم الاستلام</option>
+                               </select>
+                           );
                         })()}
                       </td>
                       <td className="p-0">
@@ -1683,10 +1759,36 @@ const MemoizedOrderRow = React.memo(({
   );
 });
 
-export const ClientOrdersPage: React.FC = () => {
+interface ClientOrdersPageProps {
+  userRole?: 'admin' | 'editor' | 'viewer' | null;
+}
+
+export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) => {
   const [customers, setCustomers] = useState<CustomerSheet[]>([]);
   const [rawCustomers, setRawCustomers] = useState<CustomerSheet[]>([]);
   const [flatOrders, setFlatOrders] = useState<OrderRow[]>([]);
+  const [userName, setUserName] = useState<string>(''); // NEW: Store display name from Firestore
+
+  // Fetch User Name
+  useEffect(() => {
+    const fetchUserName = async () => {
+      const user = auth.currentUser;
+      if (user?.email) {
+        try {
+          const userDoc = await getDocs(query(collection(db, 'users'), where('email', '==', user.email)));
+          if (!userDoc.empty) {
+            setUserName(userDoc.docs[0].data().displayName || user.displayName || user.email.split('@')[0]);
+          } else {
+            setUserName(user.displayName || user.email.split('@')[0]);
+          }
+        } catch (e) {
+          console.error("Error fetching user name:", e);
+          setUserName(user.displayName || user.email.split('@')[0]);
+        }
+      }
+    };
+    fetchUserName();
+  }, []);
   
   // Initialize from localStorage if available
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(() => {
@@ -2326,10 +2428,14 @@ export const ClientOrdersPage: React.FC = () => {
   const handleAddCustomer = async () => {
     if (!newCustomerName.trim()) return;
     try {
+      const user = auth.currentUser;
       const docRef = await addDoc(collection(db, 'CustomerSheets'), {
         name: newCustomerName.trim(),
         orders: [],
-        createdSeasonId: selectedSeasonId || '2025-summer' // Tag with current season
+        createdSeasonId: selectedSeasonId || '2025-summer', // Tag with current season
+        createdBy: userName || user?.displayName || 'Unknown',
+        createdByEmail: user?.email || 'Unknown',
+        createdAt: new Date().toISOString()
       });
       setNewCustomerName('');
       setIsAddingCustomer(false);
@@ -2383,13 +2489,26 @@ export const ClientOrdersPage: React.FC = () => {
     const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
     const hasLegacyData = selectedCustomer.orders && selectedCustomer.orders.length > 0 && !hasSubCollectionData;
 
+    const user = auth.currentUser;
+    const auditInfo = {
+        lastUpdatedBy: userName || user?.displayName || 'Unknown',
+        lastUpdatedByEmail: user?.email || 'Unknown',
+        lastUpdated: new Date().toISOString()
+    };
+
     if (hasLegacyData) {
         // Legacy Mode: Append to array
         const updatedOrders = [...selectedCustomer.orders, newRow];
-        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { 
+            orders: updatedOrders,
+            ...auditInfo
+        });
     } else {
         // Optimized Mode: Add to sub-collection
-        await setDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', newRow.id), newRow);
+        await setDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', newRow.id), {
+            ...newRow,
+            ...auditInfo
+        });
     }
   };
 
@@ -2444,12 +2563,25 @@ export const ClientOrdersPage: React.FC = () => {
     // Send to Firestore
     const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
     
+    const user = auth.currentUser;
+    const auditInfo = {
+        lastUpdatedBy: userName || user?.displayName || 'Unknown',
+        lastUpdatedByEmail: user?.email || 'Unknown',
+        lastUpdated: new Date().toISOString()
+    };
+
     if (hasSubCollectionData) {
         // Optimized Mode
-        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', rowId), finalUpdates);
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', rowId), {
+            ...finalUpdates,
+            ...auditInfo
+        });
     } else {
         // Legacy Mode
-        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { 
+            orders: updatedOrders,
+            ...auditInfo
+        });
     }
   };
 
@@ -2517,13 +2649,25 @@ export const ClientOrdersPage: React.FC = () => {
     
     const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
 
+    const user = auth.currentUser;
+    const auditInfo = {
+        lastUpdatedBy: userName || user?.displayName || 'Unknown',
+        lastUpdatedByEmail: user?.email || 'Unknown',
+        lastUpdated: new Date().toISOString()
+    };
+
     if (hasSubCollectionData) {
         // Optimized Mode
         await deleteDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', rowId));
+        // Update parent to show activity
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), auditInfo);
     } else {
         // Legacy Mode
         const updatedOrders = selectedCustomer.orders.filter(o => o.id !== rowId);
-        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { 
+            orders: updatedOrders,
+            ...auditInfo
+        });
     }
   };
 
@@ -2672,10 +2816,24 @@ export const ClientOrdersPage: React.FC = () => {
     }));
 
     const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
+    
+    const user = auth.currentUser;
+    const auditInfo = {
+        lastUpdatedBy: userName || user?.displayName || 'Unknown',
+        lastUpdatedByEmail: user?.email || 'Unknown',
+        lastUpdated: new Date().toISOString()
+    };
+
     if (hasSubCollectionData) {
-        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', orderId), { yarnAllocations: allocations });
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', orderId), { 
+            yarnAllocations: allocations,
+            ...auditInfo
+        });
     } else {
-        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders });
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { 
+            orders: updatedOrders,
+            ...auditInfo
+        });
     }
   };
 
@@ -3247,6 +3405,7 @@ export const ClientOrdersPage: React.FC = () => {
                               machines={machines}
                               externalFactories={externalFactories}
                               allOrders={flatOrders}
+                              userRole={userRole}
                               onOpenProductionOrder={(order, active, planned) => {
                                 setProductionOrderModal({
                                   isOpen: true,

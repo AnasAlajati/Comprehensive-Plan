@@ -12,9 +12,11 @@ import {
   setDoc,
   getDoc,
   collectionGroup,
-  where
+  where,
+  serverTimestamp
 } from 'firebase/firestore';
-import { db } from './services/firebase';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { db, auth } from './services/firebase';
 import { DataService } from './services/dataService';
 import { MachineRow } from './types';
 import { StatusBadge } from './components/StatusBadge';
@@ -35,6 +37,8 @@ import { FabricsPage } from './components/FabricsPage';
 import { MachinesPage } from './components/MachinesPage';
 import { InstallPWA } from './components/InstallPWA';
 import { GlobalFabricButton } from './components/GlobalFabricButton';
+import { LoginPage } from './components/LoginPage';
+import { UserManagementPage } from './components/UserManagementPage';
 import ConnectivityStatus from './components/ConnectivityStatus';
 import { 
   Send, 
@@ -55,11 +59,18 @@ import {
   Layers,
   FileSpreadsheet,
   Settings,
-  Building
+  Building,
+  LogOut,
+  Users
 } from 'lucide-react';
 import { MachineStatus } from './types';
 
 const App: React.FC = () => {
+  const [user, setUser] = useState<User | null>(null);
+  const [userName, setUserName] = useState<string>(''); // NEW: Store display name from Firestore
+  const [userRole, setUserRole] = useState<'admin' | 'editor' | 'viewer' | null>(null);
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [rawMachines, setRawMachines] = useState<any[]>([]);
   const [todaysLogs, setTodaysLogs] = useState<any[]>([]); // NEW: Store logs from sub-collection
   const [machines, setMachines] = useState<MachineRow[]>([]);
@@ -76,7 +87,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'fabrics' | 'machines'>('excel'); 
+  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'fabrics' | 'machines' | 'users'>('excel'); 
   const [planningInitialViewMode, setPlanningInitialViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
 
   const handleNavigateToPlanning = (mode: 'INTERNAL' | 'EXTERNAL') => {
@@ -87,8 +98,83 @@ const App: React.FC = () => {
   // External Production State
   const [externalProduction, setExternalProduction] = useState<number>(0);
 
+  // 0. Auth Listener & Role Check
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      
+      if (currentUser) {
+        try {
+          const email = currentUser.email?.toLowerCase();
+          if (!email) {
+             setIsAuthorized(false);
+             setAuthLoading(false);
+             return;
+          }
+
+          // Check if ANY users exist (Bootstrap first admin)
+          const usersRef = collection(db, 'users');
+          const snapshot = await getDocs(query(usersRef, limit(1)));
+          
+          if (snapshot.empty) {
+            // First user ever! Make them Admin.
+            const name = currentUser.displayName || email.split('@')[0];
+            await setDoc(doc(db, 'users', email), {
+              email: email,
+              displayName: name,
+              role: 'admin',
+              createdAt: serverTimestamp()
+            });
+            setUserRole('admin');
+            setUserName(name);
+            setIsAuthorized(true);
+          } else {
+            // Check if THIS user is authorized
+            const q = query(usersRef, where('email', '==', email));
+            const userSnap = await getDocs(q);
+            
+            if (!userSnap.empty) {
+              const userData = userSnap.docs[0].data();
+              // If role is 'pending', they are NOT authorized yet
+              if (userData.role === 'pending') {
+                setIsAuthorized(false);
+              } else {
+                setUserRole(userData.role);
+                setUserName(userData.displayName || email.split('@')[0]);
+                setIsAuthorized(true);
+              }
+            } else {
+              // User signed up but is not in the list.
+              // Create a 'pending' entry for them so Admin can see them.
+              const name = currentUser.displayName || email.split('@')[0];
+              await setDoc(doc(db, 'users', email), {
+                email: email,
+                displayName: name,
+                role: 'pending',
+                createdAt: serverTimestamp()
+              });
+              setIsAuthorized(false);
+            }
+          }
+        } catch (err) {
+          console.error("Auth check failed:", err);
+          setIsAuthorized(false);
+        }
+      } else {
+        setUserRole(null);
+        setUserName('');
+        setIsAuthorized(null);
+      }
+
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
   // 1. Test Connection on Mount & Monitor Network Status
   useEffect(() => {
+    if (!user) return; // Don't fetch if not logged in
+
     // Network Status Handlers
     const handleOnline = () => {
       console.log("Network Status: Online");
@@ -321,7 +407,9 @@ const App: React.FC = () => {
         reason: updatedMachine.reason || '',
         customStatusNote: updatedMachine.customStatusNote || '',
         orderReference: updatedMachine.orderReference || '',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        lastUpdatedBy: userName || user?.displayName || 'Unknown',
+        lastUpdatedByEmail: user?.email || 'Unknown'
       };
 
       // 4. Write to Sub-collection
@@ -336,7 +424,9 @@ const App: React.FC = () => {
         avgProduction: updatedMachine.avgProduction,
         futurePlans: updatedMachine.futurePlans || [],
         orderIndex: updatedMachine.orderIndex,
-        lastUpdated: new Date().toISOString()
+        lastUpdated: new Date().toISOString(),
+        lastUpdatedBy: userName || user?.displayName || 'Unknown',
+        lastUpdatedByEmail: user?.email || 'Unknown'
       };
 
       // 6. Update lastLogData if this is the latest log
@@ -379,7 +469,12 @@ const App: React.FC = () => {
   // 7. Update External Production
   const handleUpdateExternalProduction = async (value: number) => {
     try {
-      await setDoc(doc(db, 'factory_stats', 'daily_production'), { external: value }, { merge: true });
+      await setDoc(doc(db, 'factory_stats', 'daily_production'), { 
+        external: value,
+        lastUpdatedBy: userName || user?.displayName || 'Unknown',
+        lastUpdatedByEmail: user?.email || 'Unknown',
+        lastUpdated: new Date().toISOString()
+      }, { merge: true });
     } catch (error) {
       console.error("Error updating external production:", error);
     }
@@ -395,42 +490,102 @@ const App: React.FC = () => {
     setShowInsights(true);
   };
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginPage onBypass={() => {
+      // Dev Bypass: Mock a user
+      setIsAuthorized(true);
+      setUserRole('admin');
+      setUserName('Dev Admin');
+      // We can't set 'user' to a real Firebase User object easily, 
+      // but we can mock the check in the render.
+      // However, 'user' state is typed as User | null.
+      // Let's just force the UI to render by setting a dummy user object if possible, 
+      // OR change the condition.
+      // Easier: Just set a dummy user object casted as User.
+      setUser({ email: 'dev@admin.com', displayName: 'Dev Admin', uid: 'dev-bypass' } as any);
+    }} />;
+  }
+
+  if (isAuthorized === false) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="bg-white p-8 rounded-xl shadow-lg max-w-md w-full text-center space-y-4">
+          <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto">
+            <AlertCircle size={32} />
+          </div>
+          <h2 className="text-2xl font-bold text-slate-800">Access Denied</h2>
+          <p className="text-slate-600">
+            Your account ({user.email}) is currently <strong>Pending Approval</strong>.
+          </p>
+          <p className="text-sm text-slate-500">
+            An administrator has been notified and will review your access request shortly.
+          </p>
+          <button
+            onClick={() => auth.signOut()}
+            className="px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-900 transition-colors"
+          >
+            Sign Out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-slate-50 pb-20">
+    <div className="min-h-screen bg-slate-50 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-teal-100 via-slate-50 to-slate-50 pb-20">
       <ConnectivityStatus isDbConnected={isConnected} />
       {/* Header */}
-      <div className="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
+      <div className="bg-white/80 backdrop-blur-md border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div className="max-w-[98%] mx-auto px-4 min-h-[64px] py-2 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-             <div className="bg-slate-800 p-2 rounded-lg hidden sm:block shadow-sm">
-                <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+             <div className="bg-slate-900 p-2 rounded-lg hidden sm:block shadow-lg shadow-slate-900/20">
+                <svg className="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                 </svg>
              </div>
              <div>
-               <h1 className="text-xl font-bold text-slate-800 tracking-tight">Production Planning</h1>
-               <p className="text-xs text-slate-400 font-medium hidden sm:block">Real-time Factory Management</p>
+               <h1 className="text-xl font-black text-slate-900 tracking-tight">JATI</h1>
+               <p className="text-xs text-slate-500 font-medium hidden sm:block">Seamless Operations</p>
              </div>
           </div>
           
           <div className="flex items-center gap-3 ml-auto sm:ml-0">
-             <button
-                onClick={handleAnalyze}
-                disabled={isAnalyzing || machines.length === 0}
-                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-             >
-                {isAnalyzing ? (
-                   <span className="flex items-center gap-2">Analyzing...</span>
-                ) : (
-                   <>
-                     <Sparkles size={16} />
-                     <span className="hidden sm:inline">AI Analyst</span>
-                   </>
-                )}
-             </button>
              <div className="hidden sm:block">
                <StatusBadge isConnected={isConnected} error={connectionError} />
              </div>
+             
+             {userRole === 'admin' && (
+               <button
+                 onClick={() => setViewMode('users')}
+                 className={`p-2 rounded-lg transition-colors ${viewMode === 'users' ? 'bg-teal-50 text-teal-700' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}`}
+                 title="User Management"
+               >
+                 <Users size={20} />
+               </button>
+             )}
+             
+             <div className="flex items-center gap-3 pl-3 border-l border-slate-200">
+                <div className="hidden md:flex flex-col items-end">
+                    <span className="text-xs font-semibold text-slate-700">{userName || user?.displayName || 'User'}</span>
+                    <span className="text-[10px] text-slate-400">{user?.email}</span>
+                </div>
+                <button
+                  onClick={() => auth.signOut()}
+                  className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                  title="Sign Out"
+                >
+                  <LogOut size={20} />
+                </button>
+             </div>
+
              <InstallPWA />
           </div>
         </div>
@@ -532,7 +687,7 @@ const App: React.FC = () => {
                   <button 
                     onClick={() => setViewMode('dyehouse-inventory')}
                     title="Dyehouse Inventory"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'dyehouse-inventory' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'dyehouse-inventory' ? 'bg-teal-50 text-teal-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
                   >
                     <Layers size={20} />
                   </button>
@@ -584,6 +739,7 @@ const App: React.FC = () => {
                  machines={machines}
                  onUpdate={handleUpdateMachine}
                  initialViewMode={planningInitialViewMode}
+                 userRole={userRole}
               />
             )}
 
@@ -606,7 +762,7 @@ const App: React.FC = () => {
             )}
 
             {viewMode === 'orders' && (
-              <ClientOrdersPage />
+              <ClientOrdersPage userRole={userRole} />
             )}
 
             {viewMode === 'yarn-inventory' && (
@@ -638,6 +794,10 @@ const App: React.FC = () => {
 
             {viewMode === 'machines' && (
               <MachinesPage machines={machines} />
+            )}
+
+            {viewMode === 'users' && (
+              <UserManagementPage />
             )}
         </div>
       </main>

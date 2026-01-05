@@ -15,6 +15,7 @@ import { db } from '../services/firebase';
 import { Dyehouse, DyehouseMachine, CustomerSheet } from '../types';
 import { DyehouseMachineDetails } from './DyehouseMachineDetails';
 import { DyehouseGlobalSchedule } from './DyehouseGlobalSchedule';
+import { DyehouseBalanceReport } from './DyehouseBalanceReport';
 import { 
   Plus, 
   Trash2, 
@@ -27,7 +28,8 @@ import {
   ChevronDown,
   ChevronUp,
   LayoutGrid,
-  List
+  List,
+  FileBarChart
 } from 'lucide-react';
 
 export const DyehouseDirectoryPage: React.FC = () => {
@@ -41,7 +43,7 @@ export const DyehouseDirectoryPage: React.FC = () => {
   const [editForm, setEditForm] = useState<Dyehouse | null>(null);
   
   // New State
-  const [viewMode, setViewMode] = useState<'directory' | 'global'>('directory');
+  const [viewMode, setViewMode] = useState<'directory' | 'global' | 'balance'>('directory');
   const [selectedMachine, setSelectedMachine] = useState<{ dyehouse: string, capacity: number } | null>(null);
   const [machineCounts, setMachineCounts] = useState<Record<string, number>>({});
 
@@ -240,6 +242,13 @@ export const DyehouseDirectoryPage: React.FC = () => {
               <List size={16} />
               Global Schedule
             </button>
+            <button 
+              onClick={() => setViewMode('balance')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'balance' ? 'bg-white shadow text-purple-600' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              <FileBarChart size={16} />
+              Balance Report
+            </button>
           </div>
 
           {viewMode === 'directory' && (
@@ -287,6 +296,8 @@ export const DyehouseDirectoryPage: React.FC = () => {
       <div className="flex-1 overflow-auto p-6">
         {viewMode === 'global' ? (
           <DyehouseGlobalSchedule />
+        ) : viewMode === 'balance' ? (
+          <DyehouseBalanceReport />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {allDyehouses.map((dyehouse) => (

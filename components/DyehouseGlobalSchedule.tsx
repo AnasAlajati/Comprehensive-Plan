@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { collection, getDocs, collectionGroup, query } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { parseFabricName } from '../services/data';
 import { CustomerSheet, OrderRow, DyeingBatch } from '../types';
 import { 
   Search, 
@@ -24,12 +23,10 @@ interface GlobalBatchItem {
   orderReference?: string;
   fabric: string;
   color: string;
-  quantity: number;        // Customer Demand
-  plannedCapacity?: number; // Vessel Size
-  quantitySent?: number;   // Actual Sent
+  quantity: number;
   receivedQuantity?: number;
   dyehouse: string;
-  machine: string; // Used for grouping (Vessel Capacity)
+  machine: string; // Capacity
   dispatchNumber?: string;
   dateSent?: string;
   formationDate?: string;
@@ -73,17 +70,8 @@ export const DyehouseGlobalSchedule: React.FC = () => {
 
         if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
             order.dyeingPlan.forEach((batch, idx) => {
-              // Prefer batch-level dyehouse, fallback to order-level
-              const dyehouseName = batch.dyehouse || order.dyehouse || 'Unassigned';
-              
-              // Use plannedCapacity as machine/vessel name if available, else batch.machine
-              let machineName = batch.machine || '';
-              if (!machineName && batch.plannedCapacity) {
-                  machineName = `${batch.plannedCapacity}kg`;
-              } else if (!machineName && batch.quantity) {
-                  // Fallback for legacy data where quantity was vessel size
-                  machineName = `${batch.quantity}kg`;
-              }
+              const dyehouseName = order.dyehouse || 'Unassigned';
+              const machineName = batch.machine || order.dyehouseMachine || '';
               
               allBatches.push({
                 id: `${order.id}-${idx}`,
@@ -94,8 +82,6 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                 fabric: order.material,
                 color: batch.color,
                 quantity: batch.quantity,
-                plannedCapacity: batch.plannedCapacity,
-                quantitySent: batch.quantitySent,
                 receivedQuantity: batch.receivedQuantity,
                 dyehouse: dyehouseName,
                 machine: machineName,
@@ -302,25 +288,24 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                                         {m}
                                     </th>
                                 ))}
-                                <th className="px-4 py-3 w-20 text-center">نسبة الهالك</th>
-                                <th className="px-4 py-3 w-24 text-right">الفرق</th>
-                                <th className="px-4 py-3 w-24 text-right">مستلم</th>
-                                <th className="px-4 py-3 w-32 text-right">التفاصيل (مطلوب/سعة/مرسل)</th>
-                                <th className="px-4 py-3 w-32">العميل</th>
-                                <th className="px-4 py-3 w-32">اللون</th>
-                                <th className="px-4 py-3 w-48">الصنف</th>
-                                <th className="px-4 py-3 w-24 text-center">أيام (تشكيل)</th>
-                                <th className="px-4 py-3 w-24 text-center">تاريخ التشكيل</th>
-                                <th className="px-4 py-3 w-24 text-center">أيام (صباغة)</th>
-                                <th className="px-4 py-3 w-24 text-center">تاريخ الإرسال</th>
-                                <th className="px-4 py-3 w-32 text-right">رقم الإذن</th>
+                                <th className="px-4 py-3 w-20 text-center">Waste %</th>
+                                <th className="px-4 py-3 w-24 text-right">Remaining</th>
+                                <th className="px-4 py-3 w-24 text-right">Received</th>
+                                <th className="px-4 py-3 w-24 text-right">Quantity</th>
+                                <th className="px-4 py-3 w-32">Customer</th>
+                                <th className="px-4 py-3 w-32">Color</th>
+                                <th className="px-4 py-3 w-48">Item</th>
+                                <th className="px-4 py-3 w-24 text-center">Days (Form)</th>
+                                <th className="px-4 py-3 w-24 text-center">Formation</th>
+                                <th className="px-4 py-3 w-24 text-center">Days (Dye)</th>
+                                <th className="px-4 py-3 w-24 text-center">Date</th>
+                                <th className="px-4 py-3 w-32 text-right">Dispatch #</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {dyehouseBatches.map((batch) => {
                                 const daysInDye = batch.dateSent ? Math.floor((new Date().getTime() - new Date(batch.dateSent).getTime()) / (1000 * 3600 * 24)) : 0;
                                 const remaining = batch.quantity - (batch.receivedQuantity || 0);
-                                const { shortName } = parseFabricName(batch.fabric || '');
                                 
                                 return (
                                 <tr key={batch.id} className="hover:bg-slate-50/80 transition-colors">
@@ -334,33 +319,10 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                                     ))}
                                     
                                     {/* Data Columns */}
-                                    <td className="px-4 py-3 text-center text-slate-400">
-                                      {batch.quantitySent && batch.receivedQuantity ? 
-                                        `${(((batch.quantitySent - batch.receivedQuantity) / batch.quantitySent) * 100).toFixed(1)}%` : '-'}
-                                    </td>
-                                    <td className="px-4 py-3 text-right font-mono text-slate-600">
-                                      {batch.quantitySent && batch.receivedQuantity ? 
-                                        (batch.quantitySent - batch.receivedQuantity).toLocaleString() : '-'}
-                                    </td>
-                                    <td className="px-4 py-3 text-right font-mono text-emerald-600 font-bold">
-                                      {batch.receivedQuantity ? batch.receivedQuantity.toLocaleString() : '-'}
-                                    </td>
-                                    <td className="px-4 py-3 text-right">
-                                      <div className="flex flex-col items-end gap-0.5">
-                                        <div className="flex items-center gap-1 text-[10px] text-slate-400">
-                                          <span>مطلوب:</span>
-                                          <span className="font-mono">{batch.quantity.toLocaleString()}</span>
-                                        </div>
-                                        <div className="flex items-center gap-1 text-xs font-bold text-slate-800">
-                                          <span>سعة:</span>
-                                          <span className="font-mono">{batch.plannedCapacity ? batch.plannedCapacity.toLocaleString() : '-'}</span>
-                                        </div>
-                                        <div className="flex items-center gap-1 text-[10px] text-blue-600 font-medium">
-                                          <span>مرسل:</span>
-                                          <span className="font-mono">{batch.quantitySent ? batch.quantitySent.toLocaleString() : '-'}</span>
-                                        </div>
-                                      </div>
-                                    </td>
+                                    <td className="px-4 py-3 text-center text-slate-400">-</td>
+                                    <td className="px-4 py-3 text-right font-mono text-slate-600">{remaining > 0 ? remaining.toLocaleString() : '-'}</td>
+                                    <td className="px-4 py-3 text-right font-mono text-emerald-600">{batch.receivedQuantity ? batch.receivedQuantity.toLocaleString() : '-'}</td>
+                                    <td className="px-4 py-3 text-right font-mono font-bold text-slate-700">{batch.quantity.toLocaleString()}</td>
                                     <td className="px-4 py-3 font-medium text-slate-700">{batch.clientName}</td>
                                     <td className="px-4 py-3">
                                         <div className="flex items-center gap-2">
@@ -368,7 +330,7 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                                             <span className="text-slate-700">{batch.color}</span>
                                         </div>
                                     </td>
-                                    <td className="px-4 py-3 text-slate-600 text-xs" title={batch.fabric}>{shortName || '-'}</td>
+                                    <td className="px-4 py-3 text-slate-600 text-xs">{batch.fabric}</td>
                                     <td className="px-4 py-3 text-center text-slate-500">-</td>
                                     <td className="px-4 py-3 text-center text-slate-500 text-xs">{batch.formationDate || '-'}</td>
                                     <td className="px-4 py-3 text-center font-mono text-slate-600">{daysInDye > 0 ? daysInDye : '-'}</td>
