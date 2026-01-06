@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { writeBatch, doc, getDoc, onSnapshot, collection } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
@@ -622,7 +622,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
   const [rawMachines, setRawMachines] = useState<any[]>([]);
   const [allLogs, setAllLogs] = useState<any[]>([]);
-  const [filteredLogs, setFilteredLogs] = useState<any[]>([]);
+  // filteredLogs is derived via useMemo below
+
 
   const availableTypes = React.useMemo(() => {
     const types = new Set(allLogs.map(m => m.machineType));
@@ -737,7 +738,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   }, [selectedDate]);
 
   // Filter logs when searchTerm or allLogs changes
-  useEffect(() => {
+  const filteredLogs = useMemo(() => {
     let filtered = [...allLogs];
 
     if (filterType !== 'ALL' && filterType.trim()) {
@@ -763,8 +764,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         (log.machineType && log.machineType.toLowerCase().includes(lowerTerm))
       );
     }
-    setFilteredLogs(filtered);
-  }, [searchTerm, filterClient, filterFabric, allLogs]);
+    return filtered;
+  }, [searchTerm, filterClient, filterFabric, allLogs, filterType]);
 
   const handleMarkActiveDay = async () => {
     try {
@@ -1320,9 +1321,14 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     const [draggedItem] = newLogs.splice(draggedRowIndex, 1);
     newLogs.splice(targetIndex, 0, draggedItem);
 
-    setFilteredLogs(newLogs);
-    // Also update main list order if possible, or just refresh
-    // For simplicity in filtered view, we just update the order in DB
+    // If no filter is active, we can swap in allLogs.
+    if (!searchTerm && filterType === 'ALL' && !filterClient && !filterFabric) {
+        setAllLogs(newLogs); 
+    } else {
+        alert("Drag and drop is only available when no filters are active.");
+        return;
+    }
+
     setDraggedRowIndex(null);
 
     try {
@@ -1563,7 +1569,12 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     const hasRealLogs = machines.some(m => (m.dailyLogs || []).some((l: any) => l.date === date));
     
     // Auto-start report (skip modal)
-    setIsNewDay(false);
+    // setIsNewDay(false);
+    if (!hasRealLogs) {
+      setIsNewDay(true);
+    } else {
+      setIsNewDay(false);
+    }
     setLastValidDate(date);
 
     // Check if any machine is missing a log for this date and create it
@@ -1632,7 +1643,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     }
     
     setAllLogs(flattenedLogs);
-    setFilteredLogs(flattenedLogs);
+    // setFilteredLogs(flattenedLogs); // Derived
     
     const endTime = performance.now();
     const timeTaken = (endTime - startTime).toFixed(2);
@@ -1717,7 +1728,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       setLabScrap(dailySummary?.labScrap || 0);
       
       setAllLogs(flattenedLogs);
-      setFilteredLogs(flattenedLogs);
+      // setFilteredLogs(flattenedLogs); // Derived
       
       const endTime = performance.now();
       const timeTaken = (endTime - startTime).toFixed(2);
@@ -1752,7 +1763,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     showMessage(`✅ Linked to Order ${orderReference}`);
   };
 
-  const handleUpdateLog = async (machineId: string, logId: string, field: string, newValue: any) => {
+  const handleUpdateLog = async (machineId: string, logId: string, field: string, newValue: any, onlyLocal = false) => {
     // Get current values from local state to ensure we don't overwrite recent changes
     // that might not be in Firestore yet (Race Condition Fix)
     const currentLog = allLogs.find(l => l.machineId === machineId && l.id === logId);
@@ -1769,7 +1780,14 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       if (log.machineId === machineId && log.id === logId) {
         const updatedLog = { ...log, [field]: newValue };
         
-        if (field === 'dayProduction') {
+        // When user manually edits remaining, mark it as overridden
+        // This prevents dayProduction changes from auto-calculating remaining
+        if (field === 'remainingMfg') {
+           updatedLog.remainingOverride = true;
+        }
+        
+        // Only auto-calculate remaining if it wasn't manually overridden
+        if (field === 'dayProduction' && !log.remainingOverride) {
            const oldRemaining = Number(log.remainingMfg) || 0;
            const oldProduction = Number(log.dayProduction) || 0;
            // Reconstruct the "start of day" remaining
@@ -1783,6 +1801,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       }
       return log;
     }));
+
+    if (onlyLocal) return;
 
     try {
       const machines = await DataService.getMachinesFromMachineSS();
@@ -1829,6 +1849,23 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       // Trigger Smart Link Check if Client or Fabric changed
       if (field === 'client' || field === 'fabric') {
          checkSmartLink(machineId, logId, currentClient, currentFabric);
+      }
+
+      // Sanitize Numeric Fields for Firestore (keep UI state flexible for typing)
+      const sanitizedLog = { ...updatedLogs[logIndex] };
+      if (['remainingMfg', 'dayProduction', 'avgProduction', 'scrap'].includes(field)) {
+          sanitizedLog[field] = Number(newValue) || 0;
+          // Apply to the log in array
+          updatedLogs[logIndex][field] = Number(newValue) || 0;
+      }
+      
+      // Persist the remainingOverride flag to Firestore when remaining is manually edited
+      if (field === 'remainingMfg') {
+          updatedLogs[logIndex].remainingOverride = true;
+      }
+      // Also ensure remainingMfg is number if it was recalculated
+      if (calculatedRemaining !== undefined) {
+          updatedLogs[logIndex].remainingMfg = Number(calculatedRemaining);
       }
 
       const updatePayload: any = {
@@ -2964,13 +3001,14 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                           <input
                             id={getCellId(log.machineId, 'avgProduction')}
                             type="number"
-                            defaultValue={log.avgProduction || 0}
+                            value={log.avgProduction ?? ''}
                             data-force-nav="true"
                             onFocus={() => {
                               handleCellFocus(idx, 'avgProduction');
                               window.dispatchEvent(new Event('searchdropdown:forceclose'));
                             }}
-                            onBlur={(e) => handleBlur(e, log.machineId, log.id, 'avgProduction')}
+                            onChange={(e) => handleUpdateLog(log.machineId, log.id, 'avgProduction', e.target.value, true)}
+                            onBlur={(e) => handleUpdateLog(log.machineId, log.id, 'avgProduction', Number(e.target.value), false)}
                             onKeyDown={(e) => handleKeyDown(e, idx, 'avgProduction')}
                             className="w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none"
                           />
@@ -2981,13 +3019,14 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                           <input
                             id={getCellId(log.machineId, 'dayProduction')}
                             type="number"
-                            defaultValue={log.dayProduction || 0}
+                            value={log.dayProduction ?? ''}
                             data-force-nav="true"
                             onFocus={() => {
                               handleCellFocus(idx, 'dayProduction');
                               window.dispatchEvent(new Event('searchdropdown:forceclose'));
                             }}
-                            onBlur={(e) => handleBlur(e, log.machineId, log.id, 'dayProduction')}
+                            onChange={(e) => handleUpdateLog(log.machineId, log.id, 'dayProduction', e.target.value, true)}
+                            onBlur={(e) => handleUpdateLog(log.machineId, log.id, 'dayProduction', Number(e.target.value), false)}
                             onKeyDown={(e) => handleKeyDown(e, idx, 'dayProduction')}
                             className="w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none font-semibold text-slate-800"
                           />
@@ -3075,37 +3114,21 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         {/* Remaining */}
                         <td className="border border-slate-200 p-0">
                           <input
-                            key={`${log.machineId}-remaining-${log.remainingMfg}`}
                             id={getCellId(log.machineId, 'remainingMfg')}
                             type="text"
-                            defaultValue={(() => {
-                              const r = Number(log.remainingMfg) || 0;
-                              const p = Number(log.dayProduction) || 0;
-                              const isNotWorking = log.status !== 'Working';
-                              
-                              if (r === 0) {
-                                if (p > 0) return "خلصت";
-                                if (isNotWorking) return "-";
-                                return "0";
-                              }
-                              return r;
-                            })()}
+                            value={log.remainingMfg ?? ''}
+                            onChange={(e) => handleUpdateLog(log.machineId, log.id, 'remainingMfg', e.target.value, true)}
                             data-force-nav="true"
                             onFocus={(e) => {
-                              const val = e.target.value;
-                              if (val === "خلصت" || val === "-") e.target.value = "0";
                               e.target.select();
                               handleCellFocus(idx, 'remainingMfg');
                               window.dispatchEvent(new Event('searchdropdown:forceclose'));
                             }}
                             onBlur={(e) => {
-                                let val = e.target.value;
-                                if (val === "خلصت" || val === "-") val = "0";
+                                const val = e.target.value;
                                 const numVal = Number(val);
                                 const finalVal = isNaN(numVal) ? 0 : numVal;
-                                if (log.remainingMfg !== finalVal) {
-                                    handleUpdateLog(log.machineId, log.id, 'remainingMfg', finalVal);
-                                }
+                                handleUpdateLog(log.machineId, log.id, 'remainingMfg', finalVal, false);
                             }}
                             onKeyDown={(e) => handleKeyDown(e, idx, 'remainingMfg')}
                             className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none ${
@@ -4422,6 +4445,90 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                     Confirm & Apply
                   </button>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* New Day Modal */}
+      {isNewDay && (
+        <div className="fixed inset-0 z-[60] bg-slate-900/50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in duration-200 border border-slate-200 relative">
+            <button
+                onClick={() => {
+                    setIsNewDay(false);
+                    if (activeDay) {
+                        setSelectedDate(activeDay);
+                    } else {
+                        // Fallback if no active day is set
+                        setSelectedDate(new Date().toISOString().split('T')[0]);
+                    }
+                }}
+                className="absolute top-3 right-3 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
+            >
+                <X size={20} />
+            </button>
+            <div className="p-6 text-center">
+              <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4 text-blue-600 shadow-sm border border-blue-200">
+                <Calendar size={32} />
+              </div>
+              <h2 className="text-xl font-bold text-slate-800 mb-2">Daily Machine Plan</h2>
+              <p className="text-slate-500 mb-6 text-sm">
+                No production data found for <span className="font-semibold text-slate-700">{new Date(selectedDate).toLocaleDateString('en-GB')}</span>.<br/>
+                How would you like to start?
+              </p>
+              
+              <div className="flex flex-col gap-3">
+                <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 mb-2">
+                   <label className="block text-xs font-bold text-slate-500 mb-1 text-left uppercase tracking-wider">Source Date</label>
+                   <input
+                     type="date"
+                     className="w-full text-sm border-slate-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                     defaultValue={(() => {
+                        const d = new Date(selectedDate);
+                        d.setDate(d.getDate() - 1);
+                        return d.toISOString().split('T')[0];
+                     })()}
+                     id="sourceDateInput"
+                   />
+                </div>
+
+                <button
+                  onClick={() => {
+                    const input = document.getElementById('sourceDateInput') as HTMLInputElement;
+                    const sourceDate = input?.value;
+                    if (sourceDate) {
+                        handleFetchFromPreviousDay(sourceDate);
+                    }
+                    setIsNewDay(false);
+                  }}
+                  className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-sm transition-colors flex items-center justify-center gap-2"
+                >
+                  <History size={18} />
+                  Fetch Data
+                </button>
+                
+                <button
+                  onClick={() => {
+                     // Clear the auto-cloned data to start fresh
+                     const blankLogs = allLogs.map(log => ({
+                        ...log,
+                        fabric: '',
+                        client: '',
+                        status: 'Planned',
+                        remainingMfg: 0,
+                        targetProduction: 0, 
+                        dayProduction: 0,
+                        scrap: 0
+                     }));
+                     setAllLogs(blankLogs);
+                     // setFilteredLogs(blankLogs); // Derived
+                     setIsNewDay(false);
+                  }}
+                  className="w-full py-2 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold rounded-lg transition-colors"
+                >
+                  Start Fresh (Empty)
+                </button>
               </div>
             </div>
           </div>
