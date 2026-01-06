@@ -8,12 +8,13 @@ import {
   query, 
   orderBy,
   serverTimestamp,
-  setDoc
+  setDoc,
+  onSnapshot
 } from 'firebase/firestore';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, firebaseConfig } from '../services/firebase';
-import { Trash2, UserPlus, Shield, ShieldAlert, Mail, User as UserIcon, Copy, Check, Key } from 'lucide-react';
+import { Trash2, UserPlus, Shield, ShieldAlert, Mail, User as UserIcon, Copy, Check, Key, Circle, Clock } from 'lucide-react';
 
 interface UserData {
   id: string;
@@ -22,6 +23,8 @@ interface UserData {
   role: 'admin' | 'editor' | 'viewer' | 'pending';
   createdAt: any;
   password?: string; // Optional: Only for initial display if requested
+  isOnline?: boolean;
+  lastSeen?: any;
 }
 
 export const UserManagementPage: React.FC = () => {
@@ -36,7 +39,22 @@ export const UserManagementPage: React.FC = () => {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    fetchUsers();
+    // Real-time listener for users (to get live online status)
+    const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const fetchedUsers = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as UserData[];
+      setUsers(fetchedUsers);
+      setLoading(false);
+    }, (err) => {
+      console.error("Error fetching users:", err);
+      setError("Failed to load users.");
+      setLoading(false);
+    });
+    
+    return () => unsubscribe();
   }, []);
 
   const fetchUsers = async () => {
@@ -293,6 +311,7 @@ export const UserManagementPage: React.FC = () => {
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
                 <th className="px-6 py-4 font-semibold text-slate-700">User</th>
+                <th className="px-6 py-4 font-semibold text-slate-700">Status</th>
                 <th className="px-6 py-4 font-semibold text-slate-700">Role</th>
                 <th className="px-6 py-4 font-semibold text-slate-700">Password</th>
                 <th className="px-6 py-4 font-semibold text-slate-700">Added</th>
@@ -302,7 +321,7 @@ export const UserManagementPage: React.FC = () => {
             <tbody className="divide-y divide-slate-100">
               {users.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-6 py-8 text-center text-slate-500">
+                  <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
                     No users found. Add the first user above.
                   </td>
                 </tr>
@@ -311,14 +330,52 @@ export const UserManagementPage: React.FC = () => {
                   <tr key={user.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold">
-                          {user.displayName.charAt(0).toUpperCase()}
+                        <div className="relative">
+                          <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold">
+                            {user.displayName.charAt(0).toUpperCase()}
+                          </div>
+                          {/* Online indicator dot */}
+                          <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${user.isOnline ? 'bg-green-500' : 'bg-slate-300'}`} />
                         </div>
                         <div>
                           <div className="font-medium text-slate-900">{user.displayName}</div>
                           <div className="text-slate-500 text-xs">{user.email}</div>
                         </div>
                       </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      {user.isOnline ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                          <Circle className="w-2 h-2 fill-current" />
+                          Online
+                        </span>
+                      ) : (
+                        <div className="flex flex-col">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-500 w-fit">
+                            <Circle className="w-2 h-2" />
+                            Offline
+                          </span>
+                          {user.lastSeen && (
+                            <span className="text-xs text-slate-400 mt-1 flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              {(() => {
+                                const lastSeen = user.lastSeen?.toDate ? user.lastSeen.toDate() : new Date(user.lastSeen);
+                                const now = new Date();
+                                const diffMs = now.getTime() - lastSeen.getTime();
+                                const diffMins = Math.floor(diffMs / 60000);
+                                const diffHours = Math.floor(diffMins / 60);
+                                const diffDays = Math.floor(diffHours / 24);
+                                
+                                if (diffMins < 1) return 'Just now';
+                                if (diffMins < 60) return `${diffMins}m ago`;
+                                if (diffHours < 24) return `${diffHours}h ago`;
+                                if (diffDays < 7) return `${diffDays}d ago`;
+                                return lastSeen.toLocaleDateString();
+                              })()}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <select

@@ -176,7 +176,9 @@ export interface DyeingBatch {
   receivedQuantity?: number; // المستلم
   plannedCapacity?: number; // NEW: Planned Machine Capacity
   dyehouse?: string; // NEW: Selected Dyehouse
-  status?: string; // NEW: Manual Status Override
+  status?: 'draft' | 'pending' | 'sent' | 'received'; // Batch workflow status
+  plannedAt?: string; // ISO date when batch was planned (all required fields filled)
+  plannedBy?: string; // User email who planned it
 }
 
 export interface YarnAllocationItem {

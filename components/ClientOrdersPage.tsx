@@ -50,7 +50,12 @@ import {
   FileText,
   History,
   Trophy,
-  Info
+  Info,
+  Download,
+  Upload,
+  Eye,
+  Check,
+  AlertTriangle
 } from 'lucide-react';
 
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
@@ -615,7 +620,8 @@ const MemoizedOrderRow = React.memo(({
   hasHistory,
   onFilterMachine,
   allOrders,
-  userRole
+  userRole,
+  userName
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -640,6 +646,7 @@ const MemoizedOrderRow = React.memo(({
   onFilterMachine?: (capacity: string) => void;
   allOrders: OrderRow[];
   userRole?: 'admin' | 'editor' | 'viewer' | null;
+  userName?: string;
 }) => {
   const [showMachineDetails, setShowMachineDetails] = useState<{ capacity: number; batches: any[] } | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -1403,9 +1410,9 @@ const MemoizedOrderRow = React.memo(({
                     <th className="px-3 py-2 text-right w-24">موافقة اللون</th>
                     <th className="px-3 py-2 text-right w-24">رقم الازن</th>
                     <th className="px-3 py-2 text-right w-32">تاريخ التشكيل</th>
-                    <th className="px-3 py-2 text-center w-16 text-[10px] text-slate-400">ايام</th>
+                    <th className="px-3 py-2 text-center w-20 text-[9px] text-slate-400">ايام بعد التشكيل</th>
                     <th className="px-3 py-2 text-right w-32">تاريخ الارسال</th>
-                    <th className="px-3 py-2 text-center w-16 text-[10px] text-slate-400">ايام</th>
+                    <th className="px-3 py-2 text-center w-20 text-[9px] text-slate-400">ايام بعد الارسال</th>
                     <th className="px-3 py-2 text-right w-32">المصبغة</th>
                     <th className="px-3 py-2 text-center w-20" title="Customer Demand">مطلوب</th>
                     <th className="px-3 py-2 text-center w-24" title="Vessel Capacity">ماكنة الصباغة</th>
@@ -1417,28 +1424,57 @@ const MemoizedOrderRow = React.memo(({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {(row.dyeingPlan || []).map((batch, idx) => (
-                    <tr key={batch.id || idx} className="group/batch hover:bg-blue-50/30">
-                      <td className="p-0">
+                  {(row.dyeingPlan || []).map((batch, idx) => {
+                    // Determine if batch is locked (not draft)
+                    const batchStatus = batch.status || 'draft';
+                    const isLocked = batchStatus !== 'draft';
+                    const rowBgClass = isLocked 
+                        ? 'bg-slate-50/80 border-r-2 border-r-indigo-300' 
+                        : 'hover:bg-blue-50/30';
+                    
+                    return (
+                    <tr key={batch.id || idx} className={`group/batch ${rowBgClass}`}>
+                      {/* Planned Info Tooltip for locked batches */}
+                      <td className="p-0 relative">
                         <div className="flex items-center h-full">
+                            {/* Status indicator dot */}
+                            {isLocked && (
+                                <div className="absolute -right-1 top-1/2 -translate-y-1/2 group/info">
+                                    <div className={`w-2 h-2 rounded-full ${
+                                        batchStatus === 'pending' ? 'bg-indigo-500' :
+                                        batchStatus === 'sent' ? 'bg-blue-500' :
+                                        'bg-emerald-500'
+                                    }`} />
+                                    {batch.plannedAt && (
+                                        <div className="absolute bottom-full left-0 mb-2 hidden group-hover/info:block z-50 w-max bg-slate-800 text-white text-[10px] rounded p-2 shadow-lg">
+                                            <div>خطط بواسطة: {batch.plannedBy || 'غير معروف'}</div>
+                                            <div>التاريخ: {new Date(batch.plannedAt).toLocaleString('ar-EG')}</div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                             <div className="relative overflow-hidden w-5 h-5 ml-2 rounded-full border border-slate-200 shadow-sm cursor-pointer shrink-0 hover:scale-110 transition-transform">
                                 <input 
                                     type="color" 
                                     value={batch.colorHex || '#ffffff'}
                                     onChange={(e) => {
+                                        if (isLocked) return;
                                         const newPlan = [...(row.dyeingPlan || [])];
                                         newPlan[idx] = { ...batch, colorHex: e.target.value };
                                         handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                                     }}
-                                    className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[150%] h-[150%] p-0 m-0 border-none cursor-pointer"
-                                    title="Select Color"
+                                    disabled={isLocked}
+                                    className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[150%] h-[150%] p-0 m-0 border-none ${isLocked ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                                    title={isLocked ? 'مقفل - لا يمكن التعديل' : 'Select Color'}
                                 />
                             </div>
                             <input
                             type="text"
-                            className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right"
+                            className={`w-full px-3 py-2 bg-transparent outline-none text-right ${isLocked ? 'cursor-not-allowed text-slate-500' : 'focus:bg-blue-50'}`}
                             value={batch.color}
+                            readOnly={isLocked}
                             onChange={(e) => {
+                                if (isLocked) return;
                                 const newPlan = [...(row.dyeingPlan || [])];
                                 newPlan[idx] = { ...batch, color: e.target.value };
                                 handleUpdateOrder(row.id, { dyeingPlan: newPlan });
@@ -1519,11 +1555,17 @@ const MemoizedOrderRow = React.memo(({
                           onChange={(val) => {
                             const newPlan = [...(row.dyeingPlan || [])];
                             // Auto-calculate vessel size if dyehouse is selected
-                            const recommended = recommendMachine(val, batch.quantity || 0);
+                            const selectedDh = dyehouses.find((d: any) => d.name === val);
+                            let recommended = batch.plannedCapacity;
+                            if (selectedDh && selectedDh.machines && selectedDh.machines.length > 0) {
+                                const sorted = [...selectedDh.machines].sort((a: any, b: any) => a.capacity - b.capacity);
+                                const best = sorted.find((m: any) => m.capacity >= (batch.quantity || 0));
+                                recommended = best ? best.capacity : sorted[sorted.length - 1].capacity;
+                            }
                             newPlan[idx] = { 
                                 ...batch, 
                                 dyehouse: val,
-                                plannedCapacity: recommended || batch.plannedCapacity 
+                                plannedCapacity: recommended 
                             };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                           }}
@@ -1636,32 +1678,48 @@ const MemoizedOrderRow = React.memo(({
                            const received = batch.receivedQuantity || 0;
                            const percentage = sent > 0 ? (received / sent) : 0;
 
-                           // Determine calculated status
-                           let calculatedStatus = 'planned';
+                           // Determine calculated status (for legacy batches without status)
+                           let calculatedStatus: 'draft' | 'pending' | 'sent' | 'received' = 'draft';
                            if (percentage >= 0.89) calculatedStatus = 'received';
-                           else if (batch.dispatchNumber) calculatedStatus = 'sent';
+                           else if (batch.dispatchNumber && batch.dateSent) calculatedStatus = 'sent';
+                           else if (batch.color && batch.quantity && batch.dyehouse && batch.plannedCapacity) calculatedStatus = 'pending';
                            
-                           // Use manual override if present, otherwise calculated
+                           // Use stored status if present, otherwise calculated
                            const currentStatus = batch.status || calculatedStatus;
 
+                           // Check if batch is editable (draft status)
+                           const isEditable = currentStatus === 'draft';
+                           const isLocked = currentStatus !== 'draft';
+
                            const styles = {
-                               'planned': 'bg-slate-100 text-slate-500 border-slate-200',
+                               'draft': 'bg-amber-50 text-amber-600 border-amber-200',
+                               'pending': 'bg-indigo-100 text-indigo-700 border-indigo-200',
                                'sent': 'bg-blue-100 text-blue-700 border-blue-200',
                                'received': 'bg-emerald-100 text-emerald-700 border-emerald-200'
                            };
                            
                            return (
                                <select 
-                                    className={`appearance-none inline-block w-[calc(100%-8px)] mx-auto text-[10px] py-1 rounded border font-medium outline-none cursor-pointer text-center ${styles[currentStatus as keyof typeof styles] || styles.planned}`}
+                                    className={`appearance-none inline-block w-[calc(100%-8px)] mx-auto text-[10px] py-1 rounded border font-medium outline-none cursor-pointer text-center ${styles[currentStatus as keyof typeof styles] || styles.draft}`}
                                     style={{ textAlignLast: 'center' }}
                                     value={currentStatus}
                                     onChange={(e) => {
+                                        const newStatus = e.target.value as 'draft' | 'pending' | 'sent' | 'received';
                                         const newPlan = [...(row.dyeingPlan || [])];
-                                        newPlan[idx] = { ...batch, status: e.target.value };
+                                        const updates: Partial<typeof batch> = { status: newStatus };
+                                        
+                                        // Add plannedAt and plannedBy when moving from draft to pending
+                                        if (currentStatus === 'draft' && newStatus === 'pending') {
+                                            updates.plannedAt = new Date().toISOString();
+                                            updates.plannedBy = auth.currentUser?.email || userName || 'Unknown';
+                                        }
+                                        
+                                        newPlan[idx] = { ...batch, ...updates };
                                         handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                                     }}
                                >
-                                   <option value="planned">مخطط</option>
+                                   <option value="draft">مسودة</option>
+                                   <option value="pending">مخطط</option>
                                    <option value="sent">تم الارسال</option>
                                    <option value="received">تم الاستلام</option>
                                </select>
@@ -1684,16 +1742,23 @@ const MemoizedOrderRow = React.memo(({
                       <td className="p-0 text-center">
                         <button
                           onClick={() => {
+                            // Prevent deletion of locked batches
+                            const batchStatus = batch.status || 'draft';
+                            if (batchStatus !== 'draft') {
+                                alert('لا يمكن حذف لون مؤكد. غير الحالة إلى مسودة أولاً.');
+                                return;
+                            }
                             const newPlan = row.dyeingPlan?.filter((_, i) => i !== idx);
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                           }}
-                          className="p-2 text-slate-400 hover:text-red-500 opacity-0 group-hover/batch:opacity-100 transition-opacity"
+                          className={`p-2 text-slate-400 hover:text-red-500 opacity-0 group-hover/batch:opacity-100 transition-opacity ${isLocked ? 'cursor-not-allowed opacity-30' : ''}`}
                         >
                           <X className="w-3 h-3" />
                         </button>
                       </td>
                     </tr>
-                  ))}
+                  );
+                  })}
                   {/* Add Button Row */}
                   <tr>
                     <td colSpan={13} className="p-2">
@@ -1705,7 +1770,8 @@ const MemoizedOrderRow = React.memo(({
                             quantity: 0,
                             dyehouse: '',
                             machine: '',
-                            notes: ''
+                            notes: '',
+                            status: 'draft' as const // New batches start as draft
                           };
                           handleUpdateOrder(row.id, { 
                             dyeingPlan: [...(row.dyeingPlan || []), newBatch] 
@@ -1721,21 +1787,25 @@ const MemoizedOrderRow = React.memo(({
                 </tbody>
               </table>
               
-              {/* Smart Allocation Recommendation */}
-              {row.dyeingPlan && row.dyeingPlan.length > 0 && (
+              {/* Smart Allocation Recommendation - Only show if there are draft batches */}
+              {row.dyeingPlan && row.dyeingPlan.length > 0 && row.dyeingPlan.some(b => !b.status || b.status === 'draft') && (
                 <SmartAllocationPanel 
-                  plan={row.dyeingPlan} 
+                  plan={row.dyeingPlan.filter(b => !b.status || b.status === 'draft')} 
                   dyehouses={dyehouses} 
                   allOrders={allOrders}
                   context={{
                       customer: selectedCustomerName,
                       fabric: fabrics.find(f => f.name === row.material)?.shortName || row.material,
                       qty: row.requiredQty,
-                      requiredColors: row.dyeingPlan.length
+                      requiredColors: row.dyeingPlan.filter(b => !b.status || b.status === 'draft').length
                   }}
                   onApply={(dyehouseName) => {
                      const selectedDyehouse = dyehouses.find(d => d.name === dyehouseName);
                      const newPlan = row.dyeingPlan?.map(batch => {
+                         // Only update draft batches
+                         if (batch.status && batch.status !== 'draft') {
+                             return batch;
+                         }
                          let capacity = batch.plannedCapacity;
                          // Auto-assign machine capacity if available in the selected dyehouse
                          if (selectedDyehouse && selectedDyehouse.machines && selectedDyehouse.machines.length > 0) {
@@ -1750,6 +1820,64 @@ const MemoizedOrderRow = React.memo(({
                      handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                   }}
                 />
+              )}
+              
+              {/* Confirm All Plans Button - Only show when all draft batches have required fields */}
+              {row.dyeingPlan && row.dyeingPlan.length > 0 && row.dyeingPlan.some(b => !b.status || b.status === 'draft') && (
+                (() => {
+                    const draftBatches = row.dyeingPlan?.filter(b => !b.status || b.status === 'draft') || [];
+                    const allReady = draftBatches.every(b => 
+                        b.color && 
+                        b.quantity && b.quantity > 0 && 
+                        b.dyehouse && 
+                        b.plannedCapacity && b.plannedCapacity > 0
+                    );
+                    
+                    if (!allReady) {
+                        const missingInfo = draftBatches.filter(b => 
+                            !b.color || !b.quantity || !b.dyehouse || !b.plannedCapacity
+                        ).length;
+                        return (
+                            <div className="px-3 py-2 bg-amber-50 border-t border-amber-200 flex items-center justify-between">
+                                <div className="flex items-center gap-2 text-amber-600 text-xs">
+                                    <AlertTriangle className="w-4 h-4" />
+                                    <span>{missingInfo} لون/ألوان تحتاج معلومات (اللون، الكمية، المصبغة، الماكينة)</span>
+                                </div>
+                            </div>
+                        );
+                    }
+                    
+                    return (
+                        <div className="px-3 py-2 bg-indigo-50 border-t border-indigo-200 flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-indigo-600 text-xs">
+                                <CheckCircle2 className="w-4 h-4" />
+                                <span>جميع الألوان جاهزة للتأكيد ({draftBatches.length} لون)</span>
+                            </div>
+                            <button
+                                onClick={() => {
+                                    const userEmail = auth.currentUser?.email || userName || 'Unknown';
+                                    const now = new Date().toISOString();
+                                    const newPlan = row.dyeingPlan?.map(batch => {
+                                        if (!batch.status || batch.status === 'draft') {
+                                            return {
+                                                ...batch,
+                                                status: 'pending' as const,
+                                                plannedAt: now,
+                                                plannedBy: userEmail
+                                            };
+                                        }
+                                        return batch;
+                                    });
+                                    handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                                }}
+                                className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700 transition-colors"
+                            >
+                                <Check className="w-3 h-3" />
+                                تأكيد جميع الخطط
+                            </button>
+                        </div>
+                    );
+                })()
               )}
         </div>
         </td>
@@ -1941,6 +2069,22 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
     isOpen: boolean;
     initialName?: string;
   }>({ isOpen: false });
+
+  // Import/Export State
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importData, setImportData] = useState<{
+    customerName: string;
+    exportedAt: string;
+    orders: OrderRow[];
+  } | null>(null);
+  const [importDiff, setImportDiff] = useState<{
+    orderId: string;
+    orderMaterial: string;
+    changes: { field: string; oldValue: any; newValue: any }[];
+    isNew: boolean;
+    hasServerConflict: boolean;
+  }[]>([]);
+  const [selectedImportItems, setSelectedImportItems] = useState<Set<string>>(new Set());
 
   // Fetch Data
   useEffect(() => {
@@ -2585,6 +2729,186 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
     }
   };
 
+  // === EXPORT CUSTOMER DATA ===
+  const handleExportCustomer = () => {
+    if (!selectedCustomer || !selectedCustomerId) return;
+
+    const exportPayload = {
+      version: '1.0',
+      exportedAt: new Date().toISOString(),
+      customerId: selectedCustomerId,
+      customerName: selectedCustomer.name,
+      seasonId: selectedSeasonId,
+      orders: selectedCustomer.orders.map(order => ({
+        ...order,
+        // Include lastUpdated for conflict detection
+        lastUpdated: order.lastUpdated || new Date().toISOString()
+      }))
+    };
+
+    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const date = new Date().toISOString().split('T')[0];
+    a.download = `${selectedCustomer.name.replace(/\s+/g, '_')}_orders_${date}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // === IMPORT CUSTOMER DATA ===
+  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const parsed = JSON.parse(evt.target?.result as string);
+        
+        if (!parsed.customerName || !parsed.orders) {
+          alert('Invalid file format. Please select a valid customer export file.');
+          return;
+        }
+
+        setImportData(parsed);
+
+        // Find matching customer
+        const matchingCustomer = customers.find(c => 
+          c.name.toLowerCase() === parsed.customerName.toLowerCase() ||
+          c.id === parsed.customerId
+        );
+
+        if (!matchingCustomer) {
+          // New customer import
+          const allNew = parsed.orders.map((order: OrderRow) => ({
+            orderId: order.id,
+            orderMaterial: order.material,
+            changes: [],
+            isNew: true,
+            hasServerConflict: false
+          }));
+          setImportDiff(allNew);
+          setSelectedImportItems(new Set(parsed.orders.map((o: OrderRow) => o.id)));
+        } else {
+          // Existing customer - calculate diff
+          const diff: typeof importDiff = [];
+          
+          for (const importedOrder of parsed.orders) {
+            const existingOrder = matchingCustomer.orders.find(o => o.id === importedOrder.id);
+            
+            if (!existingOrder) {
+              // New order
+              diff.push({
+                orderId: importedOrder.id,
+                orderMaterial: importedOrder.material,
+                changes: [],
+                isNew: true,
+                hasServerConflict: false
+              });
+            } else {
+              // Compare fields
+              const changes: { field: string; oldValue: any; newValue: any }[] = [];
+              const fieldsToCompare = ['material', 'requiredQty', 'remainingQty', 'fabricColor', 'notes', 'dyeingPlan'];
+              
+              for (const field of fieldsToCompare) {
+                const oldVal = existingOrder[field as keyof OrderRow];
+                const newVal = importedOrder[field as keyof OrderRow];
+                
+                // Deep compare for dyeingPlan
+                if (field === 'dyeingPlan') {
+                  const oldPlan = JSON.stringify(oldVal || []);
+                  const newPlan = JSON.stringify(newVal || []);
+                  if (oldPlan !== newPlan) {
+                    changes.push({ field: 'dyeingPlan (Colors)', oldValue: `${(oldVal as any[])?.length || 0} batches`, newValue: `${(newVal as any[])?.length || 0} batches` });
+                  }
+                } else if (oldVal !== newVal) {
+                  changes.push({ field, oldValue: oldVal, newValue: newVal });
+                }
+              }
+
+              // Check for server conflict (server updated after export)
+              const serverUpdated = existingOrder.lastUpdated ? new Date(existingOrder.lastUpdated) : new Date(0);
+              const exportedAt = new Date(parsed.exportedAt);
+              const hasConflict = serverUpdated > exportedAt;
+
+              if (changes.length > 0) {
+                diff.push({
+                  orderId: importedOrder.id,
+                  orderMaterial: importedOrder.material,
+                  changes,
+                  isNew: false,
+                  hasServerConflict: hasConflict
+                });
+              }
+            }
+          }
+
+          setImportDiff(diff);
+          setSelectedImportItems(new Set(diff.filter(d => !d.hasServerConflict).map(d => d.orderId)));
+        }
+
+        setShowImportModal(true);
+      } catch (err) {
+        console.error('Import error:', err);
+        alert('Failed to parse import file. Please check the file format.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = ''; // Reset input
+  };
+
+  // === APPLY IMPORT ===
+  const handleApplyImport = async () => {
+    if (!importData || selectedImportItems.size === 0) return;
+
+    // Find or create customer
+    let targetCustomerId = customers.find(c => 
+      c.name.toLowerCase() === importData.customerName.toLowerCase()
+    )?.id;
+
+    if (!targetCustomerId) {
+      // Create new customer
+      const newCustomerRef = await addDoc(collection(db, 'CustomerSheets'), {
+        name: importData.customerName,
+        orders: [],
+        createdSeasonId: selectedSeasonId
+      });
+      targetCustomerId = newCustomerRef.id;
+    }
+
+    const batch = writeBatch(db);
+    const user = auth.currentUser;
+    const auditInfo = {
+      lastUpdatedBy: userName || user?.displayName || 'Unknown',
+      lastUpdatedByEmail: user?.email || 'Unknown',
+      lastUpdated: new Date().toISOString()
+    };
+
+    // Apply selected changes
+    for (const orderId of selectedImportItems) {
+      const importedOrder = importData.orders.find(o => o.id === orderId);
+      if (!importedOrder) continue;
+
+      const orderRef = doc(db, 'CustomerSheets', targetCustomerId, 'orders', orderId);
+      batch.set(orderRef, {
+        ...importedOrder,
+        customerId: targetCustomerId,
+        ...auditInfo
+      }, { merge: true });
+    }
+
+    await batch.commit();
+
+    // Reset state
+    setShowImportModal(false);
+    setImportData(null);
+    setImportDiff([]);
+    setSelectedImportItems(new Set());
+    
+    alert(`✅ Successfully imported ${selectedImportItems.size} orders!`);
+  };
+
   const toggleSelectAll = () => {
     if (!selectedCustomer) return;
     if (selectedRows.size === selectedCustomer.orders.length) {
@@ -3140,6 +3464,31 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
             {/* Right: Client Actions */}
             {selectedCustomer && (
                 <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                    {/* Export/Import Buttons */}
+                    <div className="flex items-center gap-1 border-r border-slate-200 pr-3">
+                        <button 
+                            onClick={handleExportCustomer}
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 border border-transparent hover:border-emerald-100 rounded-md transition-colors text-xs font-medium"
+                            title="Export for Offline Use"
+                        >
+                            <Download className="w-3.5 h-3.5" />
+                            <span className="hidden lg:inline">Export</span>
+                        </button>
+                        <label 
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 rounded-md transition-colors text-xs font-medium cursor-pointer"
+                            title="Import Offline Changes"
+                        >
+                            <Upload className="w-3.5 h-3.5" />
+                            <span className="hidden lg:inline">Import</span>
+                            <input
+                                type="file"
+                                accept=".json"
+                                onChange={handleImportFile}
+                                className="hidden"
+                            />
+                        </label>
+                    </div>
+
                     {/* Migration Button */}
                     {(() => {
                         const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
@@ -3406,6 +3755,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                               externalFactories={externalFactories}
                               allOrders={flatOrders}
                               userRole={userRole}
+                              userName={userName}
                               onOpenProductionOrder={(order, active, planned) => {
                                 setProductionOrderModal({
                                   isOpen: true,
@@ -3990,6 +4340,39 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
             </div>
           </div>
         )}
+
+        {/* Import Preview Modal */}
+        <ImportPreviewModal
+          isOpen={showImportModal}
+          onClose={() => {
+            setShowImportModal(false);
+            setImportData(null);
+            setImportDiff([]);
+            setSelectedImportItems(new Set());
+          }}
+          importData={importData}
+          diff={importDiff}
+          selectedItems={selectedImportItems}
+          onToggleItem={(id: string) => {
+            setSelectedImportItems(prev => {
+              const next = new Set(prev);
+              if (next.has(id)) {
+                next.delete(id);
+              } else {
+                next.add(id);
+              }
+              return next;
+            });
+          }}
+          onToggleAll={() => {
+            if (selectedImportItems.size === importDiff.length) {
+              setSelectedImportItems(new Set());
+            } else {
+              setSelectedImportItems(new Set(importDiff.map(d => d.orderId)));
+            }
+          }}
+          onApply={handleApplyImport}
+        />
       </div>
     </div>
   );
@@ -4403,6 +4786,187 @@ const FabricDictionaryModal: React.FC<{
           >
             Close
           </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Import Preview Modal Component
+const ImportPreviewModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  importData: { customerName: string; exportedAt: string; orders: OrderRow[] } | null;
+  diff: { orderId: string; orderMaterial: string; changes: { field: string; oldValue: any; newValue: any }[]; isNew: boolean; hasServerConflict: boolean }[];
+  selectedItems: Set<string>;
+  onToggleItem: (id: string) => void;
+  onToggleAll: () => void;
+  onApply: () => void;
+}> = ({ isOpen, onClose, importData, diff, selectedItems, onToggleItem, onToggleAll, onApply }) => {
+  if (!isOpen || !importData) return null;
+
+  const newOrders = diff.filter(d => d.isNew);
+  const modifiedOrders = diff.filter(d => !d.isNew);
+  const conflictOrders = diff.filter(d => d.hasServerConflict);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-blue-50 to-white flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+              <Eye className="w-5 h-5 text-blue-600" />
+              Import Preview
+            </h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Importing data for <span className="font-semibold text-slate-700">{importData.customerName}</span>
+              <span className="mx-2">•</span>
+              Exported: {new Date(importData.exportedAt).toLocaleString()}
+            </p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+            <X className="w-5 h-5 text-slate-400" />
+          </button>
+        </div>
+
+        {/* Summary Stats */}
+        <div className="px-6 py-3 bg-slate-50 border-b border-slate-200 flex items-center gap-6">
+          <div className="flex items-center gap-2 text-sm">
+            <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+            <span className="text-slate-600">{newOrders.length} New Orders</span>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <div className="w-3 h-3 rounded-full bg-amber-500"></div>
+            <span className="text-slate-600">{modifiedOrders.length} Modified</span>
+          </div>
+          {conflictOrders.length > 0 && (
+            <div className="flex items-center gap-2 text-sm">
+              <div className="w-3 h-3 rounded-full bg-red-500"></div>
+              <span className="text-red-600 font-medium">{conflictOrders.length} Conflicts</span>
+            </div>
+          )}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-auto p-6">
+          {diff.length === 0 ? (
+            <div className="text-center py-12 text-slate-500">
+              <CheckCircle2 className="w-12 h-12 mx-auto mb-4 text-emerald-500" />
+              <p className="font-medium">No changes detected</p>
+              <p className="text-sm">The imported data matches the current data.</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Select All */}
+              <div className="flex items-center gap-2 pb-3 border-b border-slate-200">
+                <button
+                  onClick={onToggleAll}
+                  className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-800"
+                >
+                  {selectedItems.size === diff.length ? (
+                    <CheckSquare className="w-4 h-4 text-blue-600" />
+                  ) : (
+                    <Square className="w-4 h-4" />
+                  )}
+                  Select All ({selectedItems.size}/{diff.length})
+                </button>
+              </div>
+
+              {/* Changes List */}
+              {diff.map((item) => (
+                <div 
+                  key={item.orderId}
+                  className={`border rounded-lg overflow-hidden transition-all ${
+                    item.hasServerConflict 
+                      ? 'border-red-200 bg-red-50/50' 
+                      : item.isNew 
+                        ? 'border-emerald-200 bg-emerald-50/50' 
+                        : 'border-amber-200 bg-amber-50/50'
+                  }`}
+                >
+                  <div className="px-4 py-3 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => onToggleItem(item.orderId)}>
+                        {selectedItems.has(item.orderId) ? (
+                          <CheckSquare className="w-5 h-5 text-blue-600" />
+                        ) : (
+                          <Square className="w-5 h-5 text-slate-400" />
+                        )}
+                      </button>
+                      <div>
+                        <div className="font-semibold text-slate-800">{item.orderMaterial}</div>
+                        <div className="text-xs text-slate-500">Order ID: {item.orderId}</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {item.isNew && (
+                        <span className="px-2 py-1 bg-emerald-100 text-emerald-700 text-xs font-bold rounded">NEW</span>
+                      )}
+                      {item.hasServerConflict && (
+                        <span className="px-2 py-1 bg-red-100 text-red-700 text-xs font-bold rounded flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3" /> CONFLICT
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Changes Detail */}
+                  {item.changes.length > 0 && (
+                    <div className="px-4 py-2 bg-white/50 border-t border-slate-200/50">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-slate-500 text-xs">
+                            <th className="text-left py-1 font-medium">Field</th>
+                            <th className="text-left py-1 font-medium">Current</th>
+                            <th className="text-left py-1 font-medium">Imported</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {item.changes.map((change, idx) => (
+                            <tr key={idx} className="border-t border-slate-100">
+                              <td className="py-1.5 font-medium text-slate-600">{change.field}</td>
+                              <td className="py-1.5 text-red-600 line-through">{String(change.oldValue || '-')}</td>
+                              <td className="py-1.5 text-emerald-600 font-medium">{String(change.newValue || '-')}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {item.hasServerConflict && (
+                    <div className="px-4 py-2 bg-red-100 border-t border-red-200 text-xs text-red-700">
+                      ⚠️ Server data was modified after your export. Importing may overwrite recent changes.
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
+          <div className="text-sm text-slate-500">
+            {selectedItems.size} items selected for import
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={onApply}
+              disabled={selectedItems.size === 0}
+              className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold rounded-lg shadow-sm transition-colors flex items-center gap-2"
+            >
+              <Check className="w-4 h-4" />
+              Apply {selectedItems.size} Changes
+            </button>
+          </div>
         </div>
       </div>
     </div>

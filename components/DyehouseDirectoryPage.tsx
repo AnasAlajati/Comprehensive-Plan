@@ -88,28 +88,29 @@ export const DyehouseDirectoryPage: React.FC = () => {
 
         if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
             order.dyeingPlan.forEach((batch: any) => {
+              // Skip drafts - only count pending, sent, received
+              const batchStatus = batch.status || 'draft';
+              if (batchStatus === 'draft') return;
+              
               // Determine Dyehouse (Batch override > Order default)
               const dyehouseName = batch.dyehouse || order.dyehouse || '';
               if (!dyehouseName) return;
 
               // Determine Machine Capacities this batch belongs to
-              // We match based on Planned Capacity (Machine) > Machine Name > Quantity
+              // Primary: plannedCapacity (explicit machine selection)
               const capacitiesToIncrement = new Set<string>();
 
-              // 1. Planned Capacity (Explicit Machine Selection)
+              // 1. Planned Capacity (Explicit Machine Selection) - Primary
               if (batch.plannedCapacity) {
                   capacitiesToIncrement.add(String(batch.plannedCapacity));
               }
-              // 2. Machine Name Match (Legacy)
+              // 2. Machine Name Match (Legacy fallback)
               else {
                   const rawMachine = batch.machine || order.dyehouseMachine || '';
                   const machineCapacityFromText = String(rawMachine).replace(/[^0-9]/g, '');
                   
                   if (machineCapacityFromText) {
                       capacitiesToIncrement.add(machineCapacityFromText);
-                  } else if (batch.quantity) {
-                      // 3. Fallback to Quantity (Legacy)
-                      capacitiesToIncrement.add(String(batch.quantity));
                   }
               }
               

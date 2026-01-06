@@ -142,6 +142,12 @@ const App: React.FC = () => {
                 setUserRole(userData.role);
                 setUserName(userData.displayName || email.split('@')[0]);
                 setIsAuthorized(true);
+                
+                // Update presence on login
+                await setDoc(doc(db, 'users', email), {
+                  isOnline: true,
+                  lastSeen: serverTimestamp()
+                }, { merge: true });
               }
             } else {
               // User signed up but is not in the list.
@@ -170,6 +176,66 @@ const App: React.FC = () => {
     });
     return () => unsubscribe();
   }, []);
+
+  // Presence tracking - heartbeat every 60 seconds
+  useEffect(() => {
+    if (!user?.email || !isAuthorized) return;
+    
+    const email = user.email.toLowerCase();
+    const userDocRef = doc(db, 'users', email);
+    
+    // Set online immediately
+    const setOnline = async () => {
+      try {
+        await setDoc(userDocRef, {
+          isOnline: true,
+          lastSeen: serverTimestamp()
+        }, { merge: true });
+      } catch (err) {
+        console.error('Failed to update presence:', err);
+      }
+    };
+    
+    setOnline();
+    
+    // Heartbeat every 60 seconds
+    const heartbeatInterval = setInterval(setOnline, 60000);
+    
+    // Set offline on page close/unload
+    const setOffline = async () => {
+      try {
+        await setDoc(userDocRef, {
+          isOnline: false,
+          lastSeen: serverTimestamp()
+        }, { merge: true });
+      } catch (err) {
+        console.error('Failed to set offline:', err);
+      }
+    };
+    
+    // Handle tab visibility change
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        setOnline();
+      }
+    };
+    
+    // Handle beforeunload to set offline
+    const handleBeforeUnload = () => {
+      // Use sendBeacon for reliable offline status
+      navigator.sendBeacon && setOffline();
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibility);
+    
+    return () => {
+      clearInterval(heartbeatInterval);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      setOffline(); // Set offline on cleanup
+    };
+  }, [user?.email, isAuthorized]);
 
   // 1. Test Connection on Mount & Monitor Network Status
   useEffect(() => {
@@ -499,19 +565,7 @@ const App: React.FC = () => {
   }
 
   if (!user) {
-    return <LoginPage onBypass={() => {
-      // Dev Bypass: Mock a user
-      setIsAuthorized(true);
-      setUserRole('admin');
-      setUserName('Dev Admin');
-      // We can't set 'user' to a real Firebase User object easily, 
-      // but we can mock the check in the render.
-      // However, 'user' state is typed as User | null.
-      // Let's just force the UI to render by setting a dummy user object if possible, 
-      // OR change the condition.
-      // Easier: Just set a dummy user object casted as User.
-      setUser({ email: 'dev@admin.com', displayName: 'Dev Admin', uid: 'dev-bypass' } as any);
-    }} />;
+    return <LoginPage />;
   }
 
   if (isAuthorized === false) {

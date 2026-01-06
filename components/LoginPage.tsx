@@ -1,14 +1,9 @@
 import React, { useState } from 'react';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../services/firebase';
 import { Lock, AlertCircle, ShieldCheck, Mail, Key } from 'lucide-react';
 
-interface LoginPageProps {
-  onBypass?: () => void;
-}
-
-export const LoginPage: React.FC<LoginPageProps> = ({ onBypass }) => {
-  const [isSignUp, setIsSignUp] = useState(false);
+export const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -20,17 +15,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onBypass }) => {
     setError('');
     
     try {
-      if (isSignUp) {
-        await createUserWithEmailAndPassword(auth, email, password);
-      } else {
-        await signInWithEmailAndPassword(auth, email, password);
-      }
+      await signInWithEmailAndPassword(auth, email, password);
     } catch (err: any) {
       console.error("Auth failed", err);
       let msg = "Authentication failed";
       if (err.code === 'auth/invalid-credential') msg = "Invalid email or password.";
-      if (err.code === 'auth/email-already-in-use') msg = "Email already in use.";
-      if (err.code === 'auth/weak-password') msg = "Password should be at least 6 characters.";
       setError(msg);
     } finally {
       setLoading(false);
@@ -112,33 +101,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onBypass }) => {
             </button>
           </form>
 
-          <div className="mt-6 text-center space-y-4">
-            {/* Removed Sign Up Option */}
-            {/* 
-            <button
-              onClick={() => {
-                setIsSignUp(!isSignUp);
-                setError('');
-              }}
-              className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
-            >
-              {isSignUp 
-                ? 'Already have an account? Sign In' 
-                : 'Need an account? Create one'}
-            </button>
-            */}
-            
-            {onBypass && (
-              <button
-                onClick={onBypass}
-                className="text-xs text-slate-400 hover:text-slate-600 underline"
-              >
-                Dev Mode: Bypass Login
-              </button>
-            )}
-          </div>
-
-          <div className="mt-8 pt-6 border-t border-slate-100">
+          <div className="mt-6 pt-6 border-t border-slate-100">
             <div className="flex items-center justify-center gap-2 text-xs text-slate-400">
               <ShieldCheck className="w-4 h-4 text-emerald-500" />
               <span>Protected by Firebase Security</span>

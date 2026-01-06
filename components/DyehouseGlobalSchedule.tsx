@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { collection, getDocs, collectionGroup, query } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { CustomerSheet, OrderRow, DyeingBatch } from '../types';
+import { CustomerSheet, OrderRow, DyeingBatch, FabricDefinition } from '../types';
 import { 
   Search, 
   Filter, 
@@ -22,15 +22,18 @@ interface GlobalBatchItem {
   orderId: string;
   orderReference?: string;
   fabric: string;
+  fabricShortName?: string;
   color: string;
   quantity: number;
+  quantitySent?: number;
   receivedQuantity?: number;
   dyehouse: string;
   machine: string; // Capacity
   dispatchNumber?: string;
   dateSent?: string;
   formationDate?: string;
-  status: 'Pending' | 'Sent' | 'Received';
+  status: 'Draft' | 'Pending' | 'Sent' | 'Received';
+  rawStatus?: 'draft' | 'pending' | 'sent' | 'received';
   notes?: string;
 }
 
@@ -42,7 +45,8 @@ export const DyehouseGlobalSchedule: React.FC = () => {
   // Filters
   const [filterDyehouse, setFilterDyehouse] = useState('All');
   const [filterClient, setFilterClient] = useState('All');
-  const [filterStatus, setFilterStatus] = useState('All');
+  const [filterStatus, setFilterStatus] = useState('Sent');
+  const [includeDrafts, setIncludeDrafts] = useState(false);
 
   useEffect(() => {
     fetchGlobalData();
@@ -59,6 +63,14 @@ export const DyehouseGlobalSchedule: React.FC = () => {
         clientMap[doc.id] = data.name || 'Unknown Client';
       });
 
+      // 1b. Fetch Fabrics for shortName Lookup
+      const fabricsSnapshot = await getDocs(collection(db, 'fabrics'));
+      const fabricMap: Record<string, string> = {};
+      fabricsSnapshot.docs.forEach(doc => {
+        const data = doc.data() as FabricDefinition;
+        fabricMap[data.name] = data.shortName || data.name;
+      });
+
       // 2. Fetch All Orders (Subcollection)
       const ordersSnapshot = await getDocs(query(collectionGroup(db, 'orders')));
       const allBatches: GlobalBatchItem[] = [];
@@ -70,8 +82,14 @@ export const DyehouseGlobalSchedule: React.FC = () => {
 
         if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
             order.dyeingPlan.forEach((batch, idx) => {
-              const dyehouseName = order.dyehouse || 'Unassigned';
-              const machineName = batch.machine || order.dyehouseMachine || '';
+              // Determine batch status (use stored status or calculate)
+              const batchStatus = batch.status || 
+                (batch.receivedQuantity ? 'received' : 
+                 (batch.dateSent ? 'sent' : 
+                  (batch.color && batch.quantity && batch.dyehouse && batch.plannedCapacity ? 'pending' : 'draft')));
+              
+              const dyehouseName = batch.dyehouse || order.dyehouse || 'Unassigned';
+              const machineName = batch.plannedCapacity ? `${batch.plannedCapacity}kg` : (batch.machine || order.dyehouseMachine || '');
               
               allBatches.push({
                 id: `${order.id}-${idx}`,
@@ -80,16 +98,21 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                 orderId: order.id,
                 orderReference: order.orderReference,
                 fabric: order.material,
+                fabricShortName: fabricMap[order.material] || order.material,
                 color: batch.color,
                 quantity: batch.quantity,
+                quantitySent: batch.quantitySent,
                 receivedQuantity: batch.receivedQuantity,
                 dyehouse: dyehouseName,
                 machine: machineName,
                 dispatchNumber: batch.dispatchNumber,
                 dateSent: batch.dateSent,
                 formationDate: batch.formationDate,
-                status: batch.receivedQuantity ? 'Received' : (batch.dateSent ? 'Sent' : 'Pending'),
-                notes: batch.notes
+                status: batchStatus === 'received' ? 'Received' : 
+                        batchStatus === 'sent' ? 'Sent' : 
+                        batchStatus === 'pending' ? 'Pending' : 'Draft' as any,
+                notes: batch.notes,
+                rawStatus: batchStatus // Keep original status for filtering
               });
             });
           }
@@ -107,9 +130,14 @@ export const DyehouseGlobalSchedule: React.FC = () => {
   const uniqueDyehouses = useMemo(() => Array.from(new Set(batches.map(b => b.dyehouse))).sort(), [batches]);
   const uniqueClients = useMemo(() => Array.from(new Set(batches.map(b => b.clientName))).sort(), [batches]);
 
-  // Filtered Data
+  // Filtered Data - Exclude drafts by default unless includeDrafts is true
   const filteredBatches = useMemo(() => {
     return batches.filter(batch => {
+      // Filter out drafts unless explicitly included
+      if (!includeDrafts && (batch.rawStatus === 'draft' || batch.status === 'Draft')) {
+        return false;
+      }
+      
       const matchesSearch = 
         batch.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         batch.fabric.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -122,7 +150,7 @@ export const DyehouseGlobalSchedule: React.FC = () => {
 
       return matchesSearch && matchesDyehouse && matchesClient && matchesStatus;
     });
-  }, [batches, searchTerm, filterDyehouse, filterClient, filterStatus]);
+  }, [batches, searchTerm, filterDyehouse, filterClient, filterStatus, includeDrafts]);
 
   // Group by Dyehouse
   const groupedBatches = useMemo(() => {
@@ -204,10 +232,22 @@ export const DyehouseGlobalSchedule: React.FC = () => {
             className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white outline-none"
           >
             <option value="All">All Statuses</option>
+            <option value="Draft">Draft</option>
             <option value="Pending">Pending</option>
             <option value="Sent">Sent</option>
             <option value="Received">Received</option>
           </select>
+
+          {/* Include Drafts Toggle */}
+          <label className="flex items-center gap-2 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 cursor-pointer hover:bg-slate-100 transition-colors">
+            <input
+              type="checkbox"
+              checked={includeDrafts}
+              onChange={(e) => setIncludeDrafts(e.target.checked)}
+              className="w-4 h-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500"
+            />
+            <span className="text-slate-600">اظهار المسودات</span>
+          </label>
 
           <button 
             onClick={exportToExcel}
@@ -279,36 +319,57 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                                         <span className="text-xs font-bold text-indigo-600">{machineCounts[m]}</span>
                                     </th>
                                 ))}
-                                <th colSpan={11} className="px-4 py-2 bg-slate-50"></th>
+                                <th colSpan={12} className="px-4 py-2 bg-slate-50"></th>
                             </tr>
                             {/* Row 2: Headers */}
-                            <tr className="bg-slate-50 border-b border-slate-200 text-xs uppercase text-slate-500 font-semibold">
+                            <tr className="bg-slate-50 border-b border-slate-200 text-xs uppercase text-slate-500 font-semibold" dir="rtl">
                                 {sortedMachines.map(m => (
                                     <th key={m} className="px-2 py-3 text-center border-r border-slate-200 w-16 bg-indigo-50 text-indigo-700">
                                         {m}
                                     </th>
                                 ))}
-                                <th className="px-4 py-3 w-20 text-center">Waste %</th>
-                                <th className="px-4 py-3 w-24 text-right">Remaining</th>
-                                <th className="px-4 py-3 w-24 text-right">Received</th>
-                                <th className="px-4 py-3 w-24 text-right">Quantity</th>
-                                <th className="px-4 py-3 w-32">Customer</th>
-                                <th className="px-4 py-3 w-32">Color</th>
-                                <th className="px-4 py-3 w-48">Item</th>
-                                <th className="px-4 py-3 w-24 text-center">Days (Form)</th>
-                                <th className="px-4 py-3 w-24 text-center">Formation</th>
-                                <th className="px-4 py-3 w-24 text-center">Days (Dye)</th>
-                                <th className="px-4 py-3 w-24 text-center">Date</th>
-                                <th className="px-4 py-3 w-32 text-right">Dispatch #</th>
+                                <th className="px-4 py-3 w-20 text-center">الحالة</th>
+                                <th className="px-4 py-3 w-20 text-center">هالك %</th>
+                                <th className="px-4 py-3 w-24 text-center">متبقي</th>
+                                <th className="px-4 py-3 w-24 text-center">مستلم</th>
+                                <th className="px-4 py-3 w-24 text-center">مرسل</th>
+                                <th className="px-4 py-3 w-32 text-right">العميل</th>
+                                <th className="px-4 py-3 w-32 text-right">اللون</th>
+                                <th className="px-4 py-3 w-48 text-right">الصنف</th>
+                                <th className="px-4 py-3 w-28 text-center">ايام بعد التشكيل</th>
+                                <th className="px-4 py-3 w-24 text-center">تاريخ التشكيل</th>
+                                <th className="px-4 py-3 w-28 text-center">ايام بعد الارسال</th>
+                                <th className="px-4 py-3 w-24 text-center">تاريخ الارسال</th>
+                                <th className="px-4 py-3 w-32 text-center">رقم الاذن</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {dyehouseBatches.map((batch) => {
-                                const daysInDye = batch.dateSent ? Math.floor((new Date().getTime() - new Date(batch.dateSent).getTime()) / (1000 * 3600 * 24)) : 0;
-                                const remaining = batch.quantity - (batch.receivedQuantity || 0);
+                                const daysAfterSent = batch.dateSent ? Math.floor((new Date().getTime() - new Date(batch.dateSent).getTime()) / (1000 * 3600 * 24)) : 0;
+                                const daysAfterFormation = batch.formationDate ? Math.floor((new Date().getTime() - new Date(batch.formationDate).getTime()) / (1000 * 3600 * 24)) : 0;
+                                const sentQty = batch.quantitySent || 0;
+                                const remaining = sentQty - (batch.receivedQuantity || 0);
+                                
+                                // Format date to "12-Jan" format
+                                const formatDate = (dateStr?: string) => {
+                                    if (!dateStr) return '-';
+                                    const date = new Date(dateStr);
+                                    const day = date.getDate();
+                                    const month = date.toLocaleString('en-US', { month: 'short' });
+                                    return `${day}-${month}`;
+                                };
+                                
+                                // Status styling
+                                const statusConfig = {
+                                    'Draft': { label: 'مسودة', bg: 'bg-amber-100', text: 'text-amber-700', border: 'border-amber-200' },
+                                    'Pending': { label: 'مخطط', bg: 'bg-indigo-100', text: 'text-indigo-700', border: 'border-indigo-200' },
+                                    'Sent': { label: 'مرسل', bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-200' },
+                                    'Received': { label: 'مستلم', bg: 'bg-emerald-100', text: 'text-emerald-700', border: 'border-emerald-200' }
+                                };
+                                const statusStyle = statusConfig[batch.status] || statusConfig['Pending'];
                                 
                                 return (
-                                <tr key={batch.id} className="hover:bg-slate-50/80 transition-colors">
+                                <tr key={batch.id} className="hover:bg-slate-50/80 transition-colors" dir="rtl">
                                     {/* Machine Columns */}
                                     {sortedMachines.map(m => (
                                         <td key={m} className="px-2 py-3 text-center border-r border-slate-100 bg-indigo-50/10">
@@ -318,24 +379,31 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                                         </td>
                                     ))}
                                     
+                                    {/* Status Column */}
+                                    <td className="px-2 py-3 text-center">
+                                        <span className={`inline-block px-2 py-1 rounded text-[10px] font-bold border ${statusStyle.bg} ${statusStyle.text} ${statusStyle.border}`}>
+                                            {statusStyle.label}
+                                        </span>
+                                    </td>
+                                    
                                     {/* Data Columns */}
                                     <td className="px-4 py-3 text-center text-slate-400">-</td>
-                                    <td className="px-4 py-3 text-right font-mono text-slate-600">{remaining > 0 ? remaining.toLocaleString() : '-'}</td>
-                                    <td className="px-4 py-3 text-right font-mono text-emerald-600">{batch.receivedQuantity ? batch.receivedQuantity.toLocaleString() : '-'}</td>
-                                    <td className="px-4 py-3 text-right font-mono font-bold text-slate-700">{batch.quantity.toLocaleString()}</td>
-                                    <td className="px-4 py-3 font-medium text-slate-700">{batch.clientName}</td>
-                                    <td className="px-4 py-3">
-                                        <div className="flex items-center gap-2">
-                                            <div className="w-3 h-3 rounded-full bg-slate-200 border border-slate-300"></div>
+                                    <td className="px-4 py-3 text-center font-mono text-slate-600">{remaining > 0 ? remaining.toLocaleString() : '-'}</td>
+                                    <td className="px-4 py-3 text-center font-mono text-emerald-600">{batch.receivedQuantity ? batch.receivedQuantity.toLocaleString() : '-'}</td>
+                                    <td className="px-4 py-3 text-center font-mono font-bold text-blue-600">{sentQty > 0 ? sentQty.toLocaleString() : '-'}</td>
+                                    <td className="px-4 py-3 font-medium text-slate-700 text-right">{batch.clientName}</td>
+                                    <td className="px-4 py-3 text-right">
+                                        <div className="flex items-center justify-end gap-2">
                                             <span className="text-slate-700">{batch.color}</span>
+                                            <div className="w-3 h-3 rounded-full bg-slate-200 border border-slate-300"></div>
                                         </div>
                                     </td>
-                                    <td className="px-4 py-3 text-slate-600 text-xs">{batch.fabric}</td>
-                                    <td className="px-4 py-3 text-center text-slate-500">-</td>
-                                    <td className="px-4 py-3 text-center text-slate-500 text-xs">{batch.formationDate || '-'}</td>
-                                    <td className="px-4 py-3 text-center font-mono text-slate-600">{daysInDye > 0 ? daysInDye : '-'}</td>
-                                    <td className="px-4 py-3 text-center text-slate-500 text-xs">{batch.dateSent || '-'}</td>
-                                    <td className="px-4 py-3 text-right">
+                                    <td className="px-4 py-3 text-slate-600 text-xs font-medium text-right">{batch.fabricShortName || batch.fabric}</td>
+                                    <td className="px-4 py-3 text-center font-mono text-amber-600">{daysAfterFormation > 0 ? daysAfterFormation : '-'}</td>
+                                    <td className="px-4 py-3 text-center text-slate-500 text-xs">{formatDate(batch.formationDate)}</td>
+                                    <td className="px-4 py-3 text-center font-mono text-slate-600">{daysAfterSent > 0 ? daysAfterSent : '-'}</td>
+                                    <td className="px-4 py-3 text-center text-slate-500 text-xs">{formatDate(batch.dateSent)}</td>
+                                    <td className="px-4 py-3 text-center">
                                         {batch.dispatchNumber ? (
                                             <span className="font-mono font-bold text-slate-700 bg-slate-100 px-2 py-1 rounded text-xs">
                                                 {batch.dispatchNumber}

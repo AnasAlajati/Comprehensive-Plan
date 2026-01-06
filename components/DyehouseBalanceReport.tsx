@@ -1,15 +1,35 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { collection, getDocs, collectionGroup, query } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { OrderRow, CustomerSheet } from '../types';
+import { OrderRow, CustomerSheet, FabricDefinition } from '../types';
 import { 
   Search, 
   Download, 
   RefreshCw,
   FileBarChart,
-  Filter
+  Filter,
+  X,
+  Package,
+  Calendar,
+  User,
+  ArrowRight
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+
+// Detail item for breakdown
+interface BalanceDetailItem {
+  clientName: string;
+  orderId: string;
+  fabric: string;
+  fabricShortName: string;
+  color: string;
+  dyehouse: string;
+  sent: number;
+  received: number;
+  remaining: number;
+  dateSent?: string;
+  dispatchNumber?: string;
+}
 
 interface BalanceEntry {
   clientName: string;
@@ -23,6 +43,17 @@ export const DyehouseBalanceReport: React.FC = () => {
   const [dyehouses, setDyehouses] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [hideZeroRows, setHideZeroRows] = useState(true);
+  
+  // Store all detail items for drill-down
+  const [allDetails, setAllDetails] = useState<BalanceDetailItem[]>([]);
+  
+  // Modal state for showing breakdown
+  const [detailModal, setDetailModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    items: BalanceDetailItem[];
+    type: 'cell' | 'clientTotal' | 'dyehouseTotal' | 'grandTotal';
+  } | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -39,11 +70,20 @@ export const DyehouseBalanceReport: React.FC = () => {
         clientMap[doc.id] = d.name || 'Unknown Client';
       });
 
+      // 1b. Fetch Fabrics for shortName Lookup
+      const fabricsSnapshot = await getDocs(collection(db, 'fabrics'));
+      const fabricMap: Record<string, string> = {};
+      fabricsSnapshot.docs.forEach(doc => {
+        const data = doc.data() as FabricDefinition;
+        fabricMap[data.name] = data.shortName || data.name;
+      });
+
       // 2. Fetch All Orders
       const ordersSnapshot = await getDocs(query(collectionGroup(db, 'orders')));
       
       const balances: Record<string, Record<string, number>> = {}; // Client -> Dyehouse -> Amount
       const allDyehouses = new Set<string>();
+      const detailItems: BalanceDetailItem[] = [];
 
       ordersSnapshot.docs.forEach(doc => {
         const order = doc.data() as OrderRow;
@@ -65,13 +105,26 @@ export const DyehouseBalanceReport: React.FC = () => {
               const received = batch.receivedQuantity || 0;
               
               // Calculate remaining balance in dyehouse
-              // Logic: If I sent 100 and received 80, 20 is still there.
-              // If I sent 100 and received 100, 0 is there.
               let remaining = sent - received;
-              if (remaining < 0) remaining = 0; // Should not happen ideally
+              if (remaining < 0) remaining = 0;
 
               if (remaining > 0) {
                 balances[clientName][dyehouse] = (balances[clientName][dyehouse] || 0) + remaining;
+                
+                // Store detail item
+                detailItems.push({
+                  clientName,
+                  orderId: order.id,
+                  fabric: order.material,
+                  fabricShortName: fabricMap[order.material] || order.material,
+                  color: batch.color,
+                  dyehouse,
+                  sent,
+                  received,
+                  remaining,
+                  dateSent: batch.dateSent,
+                  dispatchNumber: batch.dispatchNumber
+                });
               }
             }
           });
@@ -93,6 +146,7 @@ export const DyehouseBalanceReport: React.FC = () => {
 
       setData(result);
       setDyehouses(sortedDyehouses);
+      setAllDetails(detailItems);
 
     } catch (error) {
       console.error("Error fetching balance report:", error);
@@ -124,6 +178,50 @@ export const DyehouseBalanceReport: React.FC = () => {
 
     return { totals, grandTotal };
   }, [filteredData, dyehouses]);
+
+  // Click handlers for drill-down
+  const handleCellClick = (clientName: string, dyehouse: string, value: number) => {
+    if (value <= 0) return;
+    const items = allDetails.filter(d => d.clientName === clientName && d.dyehouse === dyehouse);
+    setDetailModal({
+      isOpen: true,
+      title: `${clientName} → ${dyehouse}`,
+      items,
+      type: 'cell'
+    });
+  };
+
+  const handleClientTotalClick = (clientName: string, totalValue: number) => {
+    if (totalValue <= 0) return;
+    const items = allDetails.filter(d => d.clientName === clientName);
+    setDetailModal({
+      isOpen: true,
+      title: `${clientName} - Total Balance`,
+      items,
+      type: 'clientTotal'
+    });
+  };
+
+  const handleDyehouseTotalClick = (dyehouse: string, totalValue: number) => {
+    if (totalValue <= 0) return;
+    const items = allDetails.filter(d => d.dyehouse === dyehouse);
+    setDetailModal({
+      isOpen: true,
+      title: `${dyehouse} - Total Balance`,
+      items,
+      type: 'dyehouseTotal'
+    });
+  };
+
+  const handleGrandTotalClick = () => {
+    if (columnTotals.grandTotal <= 0) return;
+    setDetailModal({
+      isOpen: true,
+      title: 'Grand Total - All Balances',
+      items: allDetails,
+      type: 'grandTotal'
+    });
+  };
 
   const exportToExcel = () => {
     const exportData = filteredData.map(row => {
@@ -234,12 +332,23 @@ export const DyehouseBalanceReport: React.FC = () => {
                     {dyehouses.map(dh => {
                       const val = row.dyehouseBalances[dh] || 0;
                       return (
-                        <td key={dh} className={`px-4 py-3 text-center font-mono border-r border-slate-100 ${val > 0 ? 'text-slate-700 font-medium' : 'text-slate-300'}`}>
+                        <td 
+                          key={dh} 
+                          className={`px-4 py-3 text-center font-mono border-r border-slate-100 ${
+                            val > 0 
+                              ? 'text-slate-700 font-medium cursor-pointer hover:bg-indigo-50 hover:text-indigo-700 transition-colors' 
+                              : 'text-slate-300'
+                          }`}
+                          onClick={() => handleCellClick(row.clientName, dh, val)}
+                        >
                           {val > 0 ? val.toLocaleString(undefined, { maximumFractionDigits: 1 }) : '-'}
                         </td>
                       );
                     })}
-                    <td className="px-4 py-3 text-center font-bold font-mono text-slate-800 bg-yellow-50/30 border-l border-yellow-100">
+                    <td 
+                      className="px-4 py-3 text-center font-bold font-mono text-slate-800 bg-yellow-50/30 border-l border-yellow-100 cursor-pointer hover:bg-yellow-100 transition-colors"
+                      onClick={() => handleClientTotalClick(row.clientName, row.totalBalance)}
+                    >
                       {row.totalBalance.toLocaleString(undefined, { maximumFractionDigits: 1 })}
                     </td>
                   </tr>
@@ -251,11 +360,18 @@ export const DyehouseBalanceReport: React.FC = () => {
                     TOTAL
                   </td>
                   {dyehouses.map(dh => (
-                    <td key={dh} className="px-4 py-3 text-center text-slate-800 border-t border-slate-300 font-mono">
+                    <td 
+                      key={dh} 
+                      className="px-4 py-3 text-center text-slate-800 border-t border-slate-300 font-mono cursor-pointer hover:bg-indigo-100 hover:text-indigo-800 transition-colors"
+                      onClick={() => handleDyehouseTotalClick(dh, columnTotals.totals[dh])}
+                    >
                       {columnTotals.totals[dh].toLocaleString(undefined, { maximumFractionDigits: 1 })}
                     </td>
                   ))}
-                  <td className="px-4 py-3 text-center text-slate-900 bg-yellow-100 border-t border-yellow-200 border-l border-yellow-200 font-mono text-base">
+                  <td 
+                    className="px-4 py-3 text-center text-slate-900 bg-yellow-100 border-t border-yellow-200 border-l border-yellow-200 font-mono text-base cursor-pointer hover:bg-yellow-200 transition-colors"
+                    onClick={handleGrandTotalClick}
+                  >
                     {columnTotals.grandTotal.toLocaleString(undefined, { maximumFractionDigits: 1 })}
                   </td>
                 </tr>
@@ -264,6 +380,140 @@ export const DyehouseBalanceReport: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Detail Breakdown Modal */}
+      {detailModal?.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-gradient-to-r from-indigo-50 to-slate-50 rounded-t-xl">
+              <div>
+                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  <Package className="w-5 h-5 text-indigo-600" />
+                  {detailModal.title}
+                </h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  {detailModal.items.length} batch{detailModal.items.length !== 1 ? 'es' : ''} • 
+                  Total: <span className="font-bold text-indigo-600">
+                    {detailModal.items.reduce((sum, i) => sum + i.remaining, 0).toLocaleString()} kg
+                  </span>
+                </p>
+              </div>
+              <button 
+                onClick={() => setDetailModal(null)}
+                className="p-2 hover:bg-slate-200 rounded-full transition-colors"
+              >
+                <X size={20} className="text-slate-500" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="flex-1 overflow-auto p-4">
+              {/* Summary Cards */}
+              {(detailModal.type === 'dyehouseTotal' || detailModal.type === 'grandTotal') && (
+                <div className="mb-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {(() => {
+                    // Group by client for totals
+                    const byClient: Record<string, number> = {};
+                    detailModal.items.forEach(item => {
+                      byClient[item.clientName] = (byClient[item.clientName] || 0) + item.remaining;
+                    });
+                    return Object.entries(byClient)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([client, amount]) => (
+                        <div key={client} className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                          <div className="text-xs text-slate-500 font-medium">{client}</div>
+                          <div className="text-lg font-bold text-slate-800">{amount.toLocaleString()} kg</div>
+                        </div>
+                      ));
+                  })()}
+                </div>
+              )}
+
+              {/* Detail Table */}
+              <table className="w-full text-sm border-collapse">
+                <thead className="bg-slate-50 sticky top-0">
+                  <tr className="text-xs uppercase text-slate-500 font-semibold">
+                    {(detailModal.type === 'dyehouseTotal' || detailModal.type === 'grandTotal') && (
+                      <th className="px-3 py-2 text-left">Client</th>
+                    )}
+                    {(detailModal.type === 'clientTotal' || detailModal.type === 'grandTotal') && (
+                      <th className="px-3 py-2 text-left">Dyehouse</th>
+                    )}
+                    <th className="px-3 py-2 text-left">Fabric</th>
+                    <th className="px-3 py-2 text-left">Color</th>
+                    <th className="px-3 py-2 text-center">Sent</th>
+                    <th className="px-3 py-2 text-center">Received</th>
+                    <th className="px-3 py-2 text-center bg-indigo-50 text-indigo-700">Remaining</th>
+                    <th className="px-3 py-2 text-left">Date Sent</th>
+                    <th className="px-3 py-2 text-left">Dispatch #</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {detailModal.items.map((item, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50">
+                      {(detailModal.type === 'dyehouseTotal' || detailModal.type === 'grandTotal') && (
+                        <td className="px-3 py-2 font-medium text-slate-700">{item.clientName}</td>
+                      )}
+                      {(detailModal.type === 'clientTotal' || detailModal.type === 'grandTotal') && (
+                        <td className="px-3 py-2 text-slate-600">{item.dyehouse}</td>
+                      )}
+                      <td className="px-3 py-2 text-slate-700 font-medium">{item.fabricShortName}</td>
+                      <td className="px-3 py-2">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-xs">
+                          {item.color}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-center font-mono text-blue-600">{item.sent}</td>
+                      <td className="px-3 py-2 text-center font-mono text-emerald-600">{item.received}</td>
+                      <td className="px-3 py-2 text-center font-mono font-bold text-indigo-700 bg-indigo-50/50">
+                        {item.remaining}
+                      </td>
+                      <td className="px-3 py-2 text-slate-500 text-xs">
+                        {item.dateSent || '-'}
+                      </td>
+                      <td className="px-3 py-2">
+                        {item.dispatchNumber ? (
+                          <span className="font-mono text-xs bg-slate-100 px-2 py-0.5 rounded">
+                            {item.dispatchNumber}
+                          </span>
+                        ) : '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-slate-100 font-bold">
+                  <tr>
+                    <td colSpan={(detailModal.type === 'grandTotal' ? 4 : detailModal.type === 'cell' ? 2 : 3)} className="px-3 py-2 text-slate-700">
+                      Total
+                    </td>
+                    <td className="px-3 py-2 text-center font-mono text-blue-700">
+                      {detailModal.items.reduce((sum, i) => sum + i.sent, 0).toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2 text-center font-mono text-emerald-700">
+                      {detailModal.items.reduce((sum, i) => sum + i.received, 0).toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2 text-center font-mono font-bold text-indigo-800 bg-indigo-100">
+                      {detailModal.items.reduce((sum, i) => sum + i.remaining, 0).toLocaleString()}
+                    </td>
+                    <td colSpan={2}></td>
+                  </tr>
+                </tfoot>
+              </table>
+
+              {/* Calculation Explanation */}
+              <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+                <div className="font-semibold mb-1">📊 How is this calculated?</div>
+                <div className="text-amber-700">
+                  <strong>Remaining Balance</strong> = Sent (مرسل) - Received (مستلم)
+                  <br />
+                  <span className="text-xs">Only batches that have been sent to the dyehouse are included.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

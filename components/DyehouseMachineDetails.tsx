@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, getDocs, collectionGroup, query } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { CustomerSheet, OrderRow, DyeingBatch } from '../types';
+import { CustomerSheet, OrderRow, DyeingBatch, FabricDefinition } from '../types';
 import { X, Calendar, Package, User, FileText, Droplets } from 'lucide-react';
 
 interface DyehouseMachineDetailsProps {
@@ -17,8 +17,12 @@ interface LinkedItem {
   orderId: string;
   orderReference?: string; // Order Reference
   fabric: string;
+  fabricShortName?: string;
   color: string;
-  quantity: number; // Batch quantity
+  quantity: number; // Batch quantity (مطلوب)
+  quantitySent?: number; // Actual sent (مرسل)
+  receivedQuantity?: number;
+  plannedCapacity?: number;
   dispatchNumber?: string;
   dateSent?: string;
   formationDate?: string;
@@ -58,6 +62,15 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
       });
       logs.push(`Loaded ${Object.keys(clientMap).length} clients for lookup.`);
 
+      // 1b. Fetch Fabrics for shortName Lookup
+      const fabricsSnapshot = await getDocs(collection(db, 'fabrics'));
+      const fabricMap: Record<string, string> = {};
+      fabricsSnapshot.docs.forEach(doc => {
+        const data = doc.data() as FabricDefinition;
+        fabricMap[data.name] = data.shortName || data.name;
+      });
+      logs.push(`Loaded ${Object.keys(fabricMap).length} fabrics for lookup.`);
+
       // 2. Fetch All Orders (Subcollection)
       const ordersSnapshot = await getDocs(query(collectionGroup(db, 'orders')));
       logs.push(`Fetched ${ordersSnapshot.size} total orders from database.`);
@@ -91,9 +104,8 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
             const effectiveDyehouse = batch.dyehouse || order.dyehouse || '';
             
             // 2. Resolve Machine/Capacity
-            // We want to match if:
-            // A) The batch quantity matches the machine capacity (e.g. 600kg batch -> 600kg machine)
-            // B) The assigned machine name contains the capacity (e.g. "Machine 600" -> 600)
+            // Match using plannedCapacity (the selected machine capacity) primarily
+            const plannedCap = batch.plannedCapacity || 0;
             const batchQty = batch.quantity || 0;
             // Fallback: If batch has no machine, check order-level machine assignment
             const assignedMachine = batch.machine || order.dyehouseMachine || '';
@@ -105,28 +117,36 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
 
             const isDyehouseMatch = normDyehouse === normTargetDyehouse;
             
+            // Primary: match on plannedCapacity (selected machine)
+            const isPlannedCapacityMatch = plannedCap === machineCapacity;
+            // Fallback: quantity match or machine name match (legacy)
             const isQuantityMatch = batchQty === machineCapacity;
             const isMachineNameMatch = assignedMachine.toLowerCase().includes(targetCapacityStr);
             
-            const isMatch = isDyehouseMatch && (isQuantityMatch || isMachineNameMatch);
+            const isMatch = isDyehouseMatch && (isPlannedCapacityMatch || isQuantityMatch || isMachineNameMatch);
 
             // LOG EVERY BATCH
             allScannedBatches.push(
-              `[SCAN] Client: ${clientName} | Order: ${order.orderReference || order.id} | Dyehouse: "${effectiveDyehouse}" (Target: "${dyehouseName}") | Qty: ${batchQty} | Machine: "${assignedMachine}"`
+              `[SCAN] Client: ${clientName} | Order: ${order.orderReference || order.id} | Dyehouse: "${effectiveDyehouse}" (Target: "${dyehouseName}") | PlannedCap: ${plannedCap} | Qty: ${batchQty} | Machine: "${assignedMachine}"`
             );
 
             if (isMatch) {
-              const matchMsg = `[MATCH] Client: ${clientName} | Order: ${order.orderReference || order.id} | Color: ${batch.color} | Qty: ${batch.quantity} | Reason: ${isQuantityMatch ? 'Qty Match' : 'Machine Name Match'}`;
+              const matchReason = isPlannedCapacityMatch ? 'PlannedCapacity Match' : (isQuantityMatch ? 'Qty Match' : 'Machine Name Match');
+              const matchMsg = `[MATCH] Client: ${clientName} | Order: ${order.orderReference || order.id} | Color: ${batch.color} | PlannedCap: ${plannedCap} | Sent: ${batch.quantitySent || 0} | Reason: ${matchReason}`;
               workingMatches.push(matchMsg);
 
               foundItems.push({
                 clientId: clientId,
                 clientName: clientName,
                 orderId: order.id,
-                orderReference: order.orderReference, // Assuming this field exists or we use ID
+                orderReference: order.orderReference,
                 fabric: order.material,
+                fabricShortName: fabricMap[order.material] || order.material,
                 color: batch.color,
                 quantity: batch.quantity,
+                quantitySent: batch.quantitySent,
+                receivedQuantity: batch.receivedQuantity,
+                plannedCapacity: batch.plannedCapacity,
                 dispatchNumber: batch.dispatchNumber,
                 dateSent: batch.dateSent,
                 formationDate: batch.formationDate,
@@ -135,10 +155,10 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
               });
             } else {
                 // Log near misses
-                if (isDyehouseMatch && !isQuantityMatch && !isMachineNameMatch) {
-                   failedMatches.push(`[FAIL-CAPACITY] Client: ${clientName} | Order: ${order.orderReference || order.id} | Dyehouse OK | Qty ${batchQty} != ${machineCapacity} AND Machine "${assignedMachine}" !includes "${machineCapacity}"`);
+                if (isDyehouseMatch && !isPlannedCapacityMatch && !isQuantityMatch && !isMachineNameMatch) {
+                   failedMatches.push(`[FAIL-CAPACITY] Client: ${clientName} | Order: ${order.orderReference || order.id} | Dyehouse OK | PlannedCap ${plannedCap} != ${machineCapacity} AND Qty ${batchQty} != ${machineCapacity}`);
                 }
-                if (!isDyehouseMatch && (isQuantityMatch || isMachineNameMatch)) {
+                if (!isDyehouseMatch && (isPlannedCapacityMatch || isQuantityMatch || isMachineNameMatch)) {
                    failedMatches.push(`[FAIL-DYEHOUSE] Client: ${clientName} | Order: ${order.orderReference || order.id} | Capacity OK | Dyehouse "${effectiveDyehouse}" != "${dyehouseName}"`);
                 }
             }
@@ -180,7 +200,6 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
       setLoading(false);
     }
   };
-
   if (!isOpen) return null;
 
   return (
@@ -241,7 +260,8 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
                   <tr>
                     <th className="px-4 py-3">Client / Order</th>
                     <th className="px-4 py-3">Fabric / Color</th>
-                    <th className="px-4 py-3 text-center">Batch Qty</th>
+                    <th className="px-4 py-3 text-center">Sent</th>
+                    <th className="px-4 py-3 text-center">Received</th>
                     <th className="px-4 py-3">Dispatch Info</th>
                     <th className="px-4 py-3">Dates</th>
                     <th className="px-4 py-3 text-center">Status</th>
@@ -258,14 +278,17 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="text-slate-700">{item.fabric}</div>
+                        <div className="text-slate-700 font-medium">{item.fabricShortName || item.fabric}</div>
                         <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-xs font-medium mt-1">
                           <div className="w-2 h-2 rounded-full bg-indigo-500"></div>
                           {item.color}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-center font-mono font-bold text-slate-700">
-                        {item.quantity} kg
+                      <td className="px-4 py-3 text-center font-mono font-bold text-blue-600">
+                        {item.quantitySent ? `${item.quantitySent} kg` : '-'}
+                      </td>
+                      <td className="px-4 py-3 text-center font-mono font-medium text-emerald-600">
+                        {item.receivedQuantity ? `${item.receivedQuantity} kg` : '-'}
                       </td>
                       <td className="px-4 py-3">
                         {item.dispatchNumber ? (
