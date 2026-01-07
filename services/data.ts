@@ -1,4 +1,50 @@
-import { MachineRow, MachineStatus, PlanItem } from '../types';
+import { MachineRow, MachineStatus, PlanItem, FabricDefinition } from '../types';
+
+/**
+ * Get the production rate (kg/day) for a fabric on a specific machine.
+ * Uses fabric-based rates with machine overrides for exceptions.
+ * 
+ * Priority:
+ * 1. Machine-specific override (if fabric has one for this machine)
+ * 2. Fabric's default avgProductionPerDay
+ * 3. Machine's avgProduction (legacy fallback)
+ * 4. Machine's dayProduction (if actively working)
+ * 5. Default of 100 kg/day
+ */
+export const getFabricProductionRate = (
+  fabricName: string,
+  machineId: string | number,
+  fabricDefinitions: FabricDefinition[],
+  machineFallbackRate: number = 100
+): number => {
+  // Find the fabric definition by name (partial match)
+  const fabric = fabricDefinitions.find(f => 
+    f.name === fabricName || 
+    f.shortName === fabricName ||
+    fabricName?.includes(f.shortName || '') ||
+    fabricName?.includes(f.name || '')
+  );
+  
+  if (!fabric) {
+    // No fabric definition found, use machine fallback
+    return machineFallbackRate;
+  }
+  
+  const machineIdStr = String(machineId);
+  
+  // Check for machine-specific override
+  if (fabric.machineOverrides && fabric.machineOverrides[machineIdStr]) {
+    return fabric.machineOverrides[machineIdStr];
+  }
+  
+  // Use fabric's default rate
+  if (fabric.avgProductionPerDay && fabric.avgProductionPerDay > 0) {
+    return fabric.avgProductionPerDay;
+  }
+  
+  // Fallback to machine rate
+  return machineFallbackRate;
+};
 
 // Helper to parse fabric names
 export const parseFabricName = (fullName: string): { code: string, shortName: string } => {
@@ -51,13 +97,23 @@ export const addDays = (dateStr: string, daysToAdd: number): string => {
 /**
  * Intelligent Scheduling Engine
  * Recalculates start/end dates for a list of plans based on the machine's current status.
+ * Now supports fabric-based production rates when fabricDefinitions are provided.
  */
-export const recalculateSchedule = (plans: PlanItem[], machine: MachineRow): PlanItem[] => {
+export const recalculateSchedule = (
+  plans: PlanItem[], 
+  machine: MachineRow,
+  fabricDefinitions?: FabricDefinition[]
+): PlanItem[] => {
   const updatedPlans = [...plans];
   
   // 1. Calculate when the CURRENT active work finishes
-  // If working, use dayProduction. If 0 (stopped), avoid division by zero (use avgProduction or default 1)
-  const dailyRate = machine.dayProduction > 0 ? machine.dayProduction : (machine.avgProduction || 1);
+  // Use fabric-based rate if available, otherwise fall back to machine rate
+  const machineFallbackRate = machine.dayProduction > 0 ? machine.dayProduction : (machine.avgProduction || 100);
+  const currentFabric = machine.material || '';
+  const dailyRate = fabricDefinitions && currentFabric
+    ? getFabricProductionRate(currentFabric, machine.id, fabricDefinitions, machineFallbackRate)
+    : machineFallbackRate;
+  
   const remaining = typeof machine.remainingMfg === 'number' && isFinite(machine.remainingMfg) ? machine.remainingMfg : 0;
   const daysLeftForCurrent = remaining > 0 && dailyRate > 0 ? remaining / dailyRate : 0;
 
@@ -73,9 +129,14 @@ export const recalculateSchedule = (plans: PlanItem[], machine: MachineRow): Pla
 
     // Calculate Duration (Days) based on Type
     if (plan.type === 'PRODUCTION' || !plan.type) {
-       // Auto-calculate days based on Qty / Rate
-       const rate = plan.productionPerDay > 0 ? plan.productionPerDay : 1;
-       plan.days = Math.ceil(plan.quantity / rate);
+       // Get fabric-based production rate for this plan's fabric
+       const planFabric = plan.fabric || '';
+       const planRate = fabricDefinitions && planFabric
+         ? getFabricProductionRate(planFabric, machine.id, fabricDefinitions, plan.productionPerDay || machineFallbackRate)
+         : (plan.productionPerDay > 0 ? plan.productionPerDay : machineFallbackRate);
+       
+       plan.productionPerDay = planRate; // Update the plan with the calculated rate
+       plan.days = Math.ceil(plan.quantity / planRate);
     } else {
        // Settings: Duration is manual, ensure it's at least 1
        plan.days = plan.days > 0 ? plan.days : 1;

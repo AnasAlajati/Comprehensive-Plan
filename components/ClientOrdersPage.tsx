@@ -17,12 +17,13 @@ import {
 } from 'firebase/firestore';
 import { db, auth } from '../services/firebase';
 import { DataService } from '../services/dataService';
-import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem, FabricDefinition, Dyehouse, DyehouseMachine, Season } from '../types';
+import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem, FabricDefinition, Dyehouse, DyehouseMachine, Season, ReceiveEvent, DyeingBatch, ExternalPlanAssignment } from '../types';
 import { FabricDetailsModal } from './FabricDetailsModal';
 import { FabricFormModal } from './FabricFormModal';
 import { CreatePlanModal } from './CreatePlanModal';
 import { FabricProductionOrderModal } from './FabricProductionOrderModal';
 import { OrderProductionHistoryModal } from './OrderProductionHistoryModal';
+import { SmartSchedulerModal } from './SmartSchedulerModal';
 import { 
   Plus, 
   Trash2, 
@@ -55,7 +56,9 @@ import {
   Upload,
   Eye,
   Check,
-  AlertTriangle
+  AlertTriangle,
+  Split,
+  CalendarRange
 } from 'lucide-react';
 
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
@@ -621,7 +624,9 @@ const MemoizedOrderRow = React.memo(({
   onFilterMachine,
   allOrders,
   userRole,
-  userName
+  userName,
+  onOpenReceiveModal,
+  onOpenSmartScheduler
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -647,6 +652,8 @@ const MemoizedOrderRow = React.memo(({
   allOrders: OrderRow[];
   userRole?: 'admin' | 'editor' | 'viewer' | null;
   userName?: string;
+  onOpenReceiveModal: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
+  onOpenSmartScheduler: (order: OrderRow) => void;
 }) => {
   const [showMachineDetails, setShowMachineDetails] = useState<{ capacity: number; batches: any[] } | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -707,8 +714,12 @@ const MemoizedOrderRow = React.memo(({
         grouped.set(batch.plannedCapacity, list);
       }
       total += batch.quantity || 0;
-      sent += batch.quantitySent || 0;
-      received += batch.receivedQuantity || 0;
+      sent += (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
+      // Calculate received from events
+      const events = batch.receiveEvents || [];
+      const batchReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
+      const batchReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
+      received += batchReceivedRaw + batchReceivedAccessory;
     });
 
     if (machineCounts.size === 0 && total === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0, groupedBatches: new Map() };
@@ -1387,6 +1398,14 @@ const MemoizedOrderRow = React.memo(({
                     </div>
                 </div>
             )}
+            {/* Smart Scheduler Button */}
+            <button 
+              onClick={() => onOpenSmartScheduler(row)}
+              className="p-1.5 text-purple-500 hover:text-purple-700 hover:bg-purple-50 rounded transition-colors opacity-0 group-hover:opacity-100"
+              title="Smart Scheduler - Plan Internal + External"
+            >
+              <CalendarRange className="w-4 h-4" />
+            </button>
             <button 
             onClick={() => handleDeleteRow(row.id)}
             className="p-2 text-slate-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
@@ -1416,8 +1435,10 @@ const MemoizedOrderRow = React.memo(({
                     <th className="px-3 py-2 text-right w-32">المصبغة</th>
                     <th className="px-3 py-2 text-center w-20" title="Customer Demand">مطلوب</th>
                     <th className="px-3 py-2 text-center w-24" title="Vessel Capacity">ماكنة الصباغة</th>
-                    <th className="px-3 py-2 text-center w-20" title="Actual Sent">مرسل</th>
-                    <th className="px-3 py-2 text-center w-20">مستلم</th>
+                    <th className="px-3 py-2 text-center w-16">اكسسوار</th>
+                    <th className="px-3 py-2 text-center w-20" title="Raw Sent">مرسل خام</th>
+                    <th className="px-3 py-2 text-center w-20" title="Accessory Sent">مرسل اكسسوار</th>
+                    <th className="px-3 py-2 text-center w-24" title="Click to add receive">مستلم</th>
                     <th className="px-3 py-2 text-center w-20">الحالة</th>
                     <th className="px-3 py-2 text-right">ملاحظات</th>
                     <th className="px-3 py-2 w-10"></th>
@@ -1638,45 +1659,97 @@ const MemoizedOrderRow = React.memo(({
                             );
                         })()}
                       </td>
-                      {/* Actual Sent */}
+                      {/* Accessory Type */}
+                      <td className="p-0">
+                        <input
+                          type="text"
+                          className="w-full px-2 py-2 text-center bg-transparent outline-none focus:bg-blue-50 text-[10px] text-slate-600"
+                          value={batch.accessoryType || row.accessory || ''}
+                          onChange={(e) => {
+                            const newPlan = [...(row.dyeingPlan || [])];
+                            newPlan[idx] = { ...batch, accessoryType: e.target.value };
+                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                          }}
+                          placeholder="-"
+                          title="Accessory Type"
+                        />
+                      </td>
+                      {/* مرسل خام - Raw Sent */}
                       <td className="p-0">
                         <input
                           type="number"
                           className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono font-medium text-blue-600"
-                          value={batch.quantitySent || ''}
+                          value={batch.quantitySentRaw ?? batch.quantitySent ?? ''}
                           onChange={(e) => {
                             const newPlan = [...(row.dyeingPlan || [])];
-                            newPlan[idx] = { ...batch, quantitySent: Number(e.target.value) };
+                            const val = Number(e.target.value);
+                            newPlan[idx] = { ...batch, quantitySentRaw: val, quantitySent: val + (batch.quantitySentAccessory || 0) };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                           }}
                           placeholder="0"
-                          title="Actual Sent"
+                          title="Raw Sent"
                         />
                       </td>
-                      {/* Received */}
-                      <td className="p-0 relative">
+                      {/* مرسل اكسسوار - Accessory Sent */}
+                      <td className="p-0">
                         <input
                           type="number"
-                          className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono font-medium text-emerald-600"
-                          value={batch.receivedQuantity || ''}
+                          className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono font-medium text-purple-600"
+                          value={batch.quantitySentAccessory || ''}
                           onChange={(e) => {
                             const newPlan = [...(row.dyeingPlan || [])];
-                            newPlan[idx] = { ...batch, receivedQuantity: Number(e.target.value) };
+                            const val = Number(e.target.value);
+                            newPlan[idx] = { ...batch, quantitySentAccessory: val, quantitySent: (batch.quantitySentRaw || 0) + val };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                           }}
                           placeholder="0"
+                          title="Accessory Sent"
                         />
-                        {batch.quantitySent && batch.quantitySent > 0 && (
-                            <div className="absolute right-1 top-1/2 -translate-y-1/2 text-[9px] text-slate-400 font-mono pointer-events-none bg-white/80 px-0.5 rounded">
-                                {Math.round(((batch.receivedQuantity || 0) / batch.quantitySent) * 100)}%
-                            </div>
-                        )}
+                      </td>
+                      {/* مستلم - Received (Clickable for modal) */}
+                      <td className="p-0 relative">
+                        {(() => {
+                          const events = batch.receiveEvents || [];
+                          const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
+                          const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
+                          const totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
+                          const totalReceived = totalReceivedRaw + totalReceivedAccessory;
+                          const remaining = totalSent - totalReceived;
+                          
+                          return (
+                            <button
+                              onClick={() => onOpenReceiveModal(row.id, idx, batch)}
+                              className="w-full px-2 py-1.5 text-center bg-transparent hover:bg-emerald-50 transition-colors group/receive"
+                              title="Click to add/view receives"
+                            >
+                              <div className="flex flex-col items-center gap-0.5">
+                                <span className="font-mono font-medium text-emerald-600">
+                                  {totalReceived > 0 ? totalReceived.toFixed(0) : '-'}
+                                </span>
+                                {events.length > 0 && (
+                                  <span className="text-[8px] text-slate-400">
+                                    {events.length} استلام
+                                  </span>
+                                )}
+                                {totalSent > 0 && remaining > 0 && (
+                                  <span className="text-[8px] text-amber-500 font-medium">
+                                    متبقي: {remaining.toFixed(0)}
+                                  </span>
+                                )}
+                              </div>
+                              <Plus size={10} className="absolute left-1 top-1 text-slate-300 group-hover/receive:text-emerald-500 transition-colors" />
+                            </button>
+                          );
+                        })()}
                       </td>
                       <td className="p-0 text-center align-middle relative group/status">
                         {(() => {
-                           const sent = batch.quantitySent || 0;
-                           const received = batch.receivedQuantity || 0;
-                           const percentage = sent > 0 ? (received / sent) : 0;
+                           const events = batch.receiveEvents || [];
+                           const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
+                           const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
+                           const totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
+                           const totalReceived = totalReceivedRaw + totalReceivedAccessory;
+                           const percentage = totalSent > 0 ? (totalReceived / totalSent) : 0;
 
                            // Determine calculated status (for legacy batches without status)
                            let calculatedStatus: 'draft' | 'pending' | 'sent' | 'received' = 'draft';
@@ -2069,6 +2142,27 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
     isOpen: boolean;
     initialName?: string;
   }>({ isOpen: false });
+
+  // Receive Modal State
+  const [receiveModal, setReceiveModal] = useState<{
+    isOpen: boolean;
+    orderId: string;
+    batchIdx: number;
+    batch: DyeingBatch | null;
+  }>({ isOpen: false, orderId: '', batchIdx: -1, batch: null });
+  const [newReceive, setNewReceive] = useState<{
+    date: string;
+    quantityRaw: number;
+    quantityAccessory: number;
+    notes: string;
+  }>({ date: new Date().toISOString().split('T')[0], quantityRaw: 0, quantityAccessory: 0, notes: '' });
+
+  // Smart Scheduler Modal (Unified Internal + External Planning)
+  const [smartSchedulerModal, setSmartSchedulerModal] = useState<{
+    isOpen: boolean;
+    order: OrderRow | null;
+    customerName: string;
+  }>({ isOpen: false, order: null, customerName: '' });
 
   // Import/Export State
   const [showImportModal, setShowImportModal] = useState(false);
@@ -3767,6 +3861,15 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                               onOpenHistory={(order) => setSelectedOrderForHistory(order)}
                               hasHistory={historySet.has(row.material || '')}
                               onFilterMachine={(cap) => setMachineFilter(cap)}
+                              onOpenReceiveModal={(orderId, batchIdx, batch) => {
+                                setReceiveModal({ isOpen: true, orderId, batchIdx, batch });
+                                setNewReceive({ date: new Date().toISOString().split('T')[0], quantityRaw: 0, quantityAccessory: 0, notes: '' });
+                              }}
+                              onOpenSmartScheduler={(order) => setSmartSchedulerModal({
+                                isOpen: true,
+                                order,
+                                customerName: selectedCustomer.name
+                              })}
                             />
                           );
                         })}
@@ -4062,6 +4165,254 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
           />
         )}
 
+        {/* Receive Modal */}
+        {receiveModal.isOpen && receiveModal.batch && (
+          <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4" onClick={() => setReceiveModal({ isOpen: false, orderId: '', batchIdx: -1, batch: null })}>
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+              {/* Header */}
+              <div className="p-4 border-b border-slate-200 bg-gradient-to-r from-emerald-50 to-slate-50">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-emerald-100 p-2 rounded-lg text-emerald-600">
+                      <Package size={20} />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-800 text-lg">سجل الاستلام</h3>
+                      <div className="text-sm text-slate-500">
+                        {receiveModal.batch.color} • {receiveModal.batch.dyehouse}
+                      </div>
+                    </div>
+                  </div>
+                  <button onClick={() => setReceiveModal({ isOpen: false, orderId: '', batchIdx: -1, batch: null })} className="p-2 hover:bg-slate-100 rounded-full">
+                    <X size={20} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Summary Stats */}
+              <div className="p-4 bg-slate-50 border-b border-slate-200">
+                {(() => {
+                  const batch = receiveModal.batch;
+                  const events = batch?.receiveEvents || [];
+                  const totalSentRaw = batch?.quantitySentRaw || batch?.quantitySent || 0;
+                  const totalSentAccessory = batch?.quantitySentAccessory || 0;
+                  const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch?.receivedQuantity || 0);
+                  const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
+                  const remainingRaw = totalSentRaw - totalReceivedRaw;
+                  const remainingAccessory = totalSentAccessory - totalReceivedAccessory;
+                  
+                  return (
+                    <div className="grid grid-cols-3 gap-4 text-sm" dir="rtl">
+                      <div className="bg-white rounded-lg p-3 border border-slate-200">
+                        <div className="text-slate-500 mb-1">خام</div>
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-xl font-bold text-blue-600">{totalSentRaw}</span>
+                          <span className="text-slate-400">مرسل</span>
+                          <span className="text-emerald-600 font-medium">({totalReceivedRaw} مستلم)</span>
+                        </div>
+                        {remainingRaw > 0 && <div className="text-amber-500 text-xs mt-1">متبقي: {remainingRaw.toFixed(1)}</div>}
+                      </div>
+                      <div className="bg-white rounded-lg p-3 border border-slate-200">
+                        <div className="text-slate-500 mb-1">اكسسوار ({batch?.accessoryType || '-'})</div>
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-xl font-bold text-purple-600">{totalSentAccessory}</span>
+                          <span className="text-slate-400">مرسل</span>
+                          <span className="text-emerald-600 font-medium">({totalReceivedAccessory} مستلم)</span>
+                        </div>
+                        {remainingAccessory > 0 && <div className="text-amber-500 text-xs mt-1">متبقي: {remainingAccessory.toFixed(1)}</div>}
+                      </div>
+                      <div className="bg-white rounded-lg p-3 border border-slate-200">
+                        <div className="text-slate-500 mb-1">الفاقد (Scrap)</div>
+                        {batch?.isComplete ? (
+                          <div className="flex items-baseline gap-2">
+                            <span className="text-red-600 font-bold">{(batch.scrapRaw || 0).toFixed(1)} خام</span>
+                            <span className="text-red-600 font-bold">{(batch.scrapAccessory || 0).toFixed(1)} اكسسوار</span>
+                          </div>
+                        ) : (
+                          <div className="text-slate-400 text-xs">يحسب عند اكتمال الاستلام</div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Receive Events List */}
+              <div className="p-4 max-h-[300px] overflow-y-auto" dir="rtl">
+                <div className="text-sm font-semibold text-slate-600 mb-3">سجل الاستلامات</div>
+                {(receiveModal.batch?.receiveEvents || []).length === 0 && !receiveModal.batch?.receivedQuantity ? (
+                  <div className="text-center text-slate-400 py-8">لا توجد استلامات مسجلة بعد</div>
+                ) : (
+                  <div className="space-y-2">
+                    {/* Legacy receivedQuantity as first event */}
+                    {receiveModal.batch?.receivedQuantity && receiveModal.batch.receivedQuantity > 0 && (
+                      <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+                        <div className="flex items-center gap-3">
+                          <div className="text-slate-400 text-xs">تاريخ غير محدد</div>
+                          <div className="font-medium text-emerald-600">{receiveModal.batch.receivedQuantity} kg خام (قديم)</div>
+                        </div>
+                      </div>
+                    )}
+                    {/* Receive events */}
+                    {(receiveModal.batch?.receiveEvents || []).map((event, i) => (
+                      <div key={event.id} className="flex items-center justify-between p-3 bg-white rounded-lg border border-slate-200 hover:bg-slate-50">
+                        <div className="flex items-center gap-4">
+                          <div className="text-slate-500 text-sm">{new Date(event.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</div>
+                          <div className="flex gap-3">
+                            {event.quantityRaw > 0 && <span className="text-blue-600 font-medium">{event.quantityRaw} kg خام</span>}
+                            {event.quantityAccessory > 0 && <span className="text-purple-600 font-medium">{event.quantityAccessory} kg اكسسوار</span>}
+                          </div>
+                          {event.notes && <span className="text-slate-400 text-xs">({event.notes})</span>}
+                        </div>
+                        <button
+                          onClick={() => {
+                            const currentOrder = flatOrders.find(o => o.id === receiveModal.orderId);
+                            if (!currentOrder) return;
+                            const newPlan = [...(currentOrder.dyeingPlan || [])];
+                            const batch = newPlan[receiveModal.batchIdx];
+                            if (batch) {
+                              batch.receiveEvents = (batch.receiveEvents || []).filter((_, idx) => idx !== i);
+                              handleUpdateOrder(receiveModal.orderId, { dyeingPlan: newPlan });
+                              setReceiveModal({ ...receiveModal, batch: batch });
+                            }
+                          }}
+                          className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Add New Receive Form */}
+              <div className="p-4 border-t border-slate-200 bg-slate-50" dir="rtl">
+                <div className="text-sm font-semibold text-slate-600 mb-3">اضافة استلام جديد</div>
+                <div className="grid grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">التاريخ</label>
+                    <input
+                      type="date"
+                      value={newReceive.date}
+                      onChange={(e) => setNewReceive({ ...newReceive, date: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">مستلم خام (kg)</label>
+                    <input
+                      type="number"
+                      value={newReceive.quantityRaw || ''}
+                      onChange={(e) => setNewReceive({ ...newReceive, quantityRaw: Number(e.target.value) })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">مستلم اكسسوار (kg)</label>
+                    <input
+                      type="number"
+                      value={newReceive.quantityAccessory || ''}
+                      onChange={(e) => setNewReceive({ ...newReceive, quantityAccessory: Number(e.target.value) })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">ملاحظات</label>
+                    <input
+                      type="text"
+                      value={newReceive.notes}
+                      onChange={(e) => setNewReceive({ ...newReceive, notes: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                      placeholder="اختياري"
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center justify-between mt-4">
+                  <button
+                    onClick={() => {
+                      const currentOrder = flatOrders.find(o => o.id === receiveModal.orderId);
+                      if (!currentOrder) return;
+                      const newPlan = [...(currentOrder.dyeingPlan || [])];
+                      const batch = newPlan[receiveModal.batchIdx];
+                      if (batch) {
+                        // Calculate totals to check if complete
+                        const events = [...(batch.receiveEvents || []), {
+                          id: `recv-${Date.now()}`,
+                          date: newReceive.date,
+                          quantityRaw: newReceive.quantityRaw,
+                          quantityAccessory: newReceive.quantityAccessory,
+                          receivedBy: userName || auth.currentUser?.email || 'Unknown',
+                          notes: newReceive.notes
+                        }];
+                        const totalSentRaw = batch.quantitySentRaw || batch.quantitySent || 0;
+                        const totalSentAccessory = batch.quantitySentAccessory || 0;
+                        const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
+                        const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
+                        const totalSent = totalSentRaw + totalSentAccessory;
+                        const totalReceived = totalReceivedRaw + totalReceivedAccessory;
+                        
+                        // Auto-complete if received >= 89% of sent
+                        const isComplete = totalSent > 0 && (totalReceived / totalSent) >= 0.89;
+                        
+                        batch.receiveEvents = events;
+                        if (isComplete && !batch.isComplete) {
+                          batch.isComplete = true;
+                          batch.scrapRaw = Math.max(0, totalSentRaw - totalReceivedRaw);
+                          batch.scrapAccessory = Math.max(0, totalSentAccessory - totalReceivedAccessory);
+                          batch.status = 'received';
+                        }
+                        
+                        handleUpdateOrder(receiveModal.orderId, { dyeingPlan: newPlan });
+                        setReceiveModal({ ...receiveModal, batch: { ...batch } });
+                        setNewReceive({ date: new Date().toISOString().split('T')[0], quantityRaw: 0, quantityAccessory: 0, notes: '' });
+                      }
+                    }}
+                    disabled={!newReceive.quantityRaw && !newReceive.quantityAccessory}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-medium rounded-lg flex items-center gap-2"
+                  >
+                    <Plus size={16} />
+                    اضافة استلام
+                  </button>
+                  
+                  {/* Mark Complete Button */}
+                  {!receiveModal.batch?.isComplete && (
+                    <button
+                      onClick={() => {
+                        const currentOrder = flatOrders.find(o => o.id === receiveModal.orderId);
+                        if (!currentOrder) return;
+                        const newPlan = [...(currentOrder.dyeingPlan || [])];
+                        const batch = newPlan[receiveModal.batchIdx];
+                        if (batch) {
+                          const events = batch.receiveEvents || [];
+                          const totalSentRaw = batch.quantitySentRaw || batch.quantitySent || 0;
+                          const totalSentAccessory = batch.quantitySentAccessory || 0;
+                          const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
+                          const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
+                          
+                          batch.isComplete = true;
+                          batch.scrapRaw = Math.max(0, totalSentRaw - totalReceivedRaw);
+                          batch.scrapAccessory = Math.max(0, totalSentAccessory - totalReceivedAccessory);
+                          batch.status = 'received';
+                          
+                          handleUpdateOrder(receiveModal.orderId, { dyeingPlan: newPlan });
+                          setReceiveModal({ ...receiveModal, batch: { ...batch } });
+                        }
+                      }}
+                      className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-medium rounded-lg flex items-center gap-2"
+                    >
+                      <CheckCircle2 size={16} />
+                      اكتمال واحتساب الفاقد
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Create Plan Modal */}
         {createPlanModal.isOpen && createPlanModal.order && (
           <CreatePlanModal
@@ -4161,6 +4512,79 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
             order={selectedOrderForHistory}
             clientName={selectedCustomer?.name || ''}
             machines={machines}
+          />
+        )}
+
+        {/* Smart Scheduler Modal - Unified Internal + External Planning */}
+        {smartSchedulerModal.isOpen && smartSchedulerModal.order && (
+          <SmartSchedulerModal
+            isOpen={smartSchedulerModal.isOpen}
+            onClose={() => setSmartSchedulerModal({ isOpen: false, order: null, customerName: '' })}
+            order={smartSchedulerModal.order}
+            customerName={smartSchedulerModal.customerName}
+            machines={machines}
+            externalFactories={externalFactories}
+            fabricDefinitions={fabrics}
+            onSave={async (allocations) => {
+              const order = smartSchedulerModal.order!;
+              const customerName = smartSchedulerModal.customerName;
+              
+              // Separate internal and external allocations
+              const internalAllocations = allocations.filter(a => a.type === 'internal');
+              const externalAllocations = allocations.filter(a => a.type === 'external');
+              
+              // Generate a split group ID if we have multiple internal allocations
+              const splitGroupId = internalAllocations.length > 1 
+                ? `split-${order.id}-${Date.now()}` 
+                : undefined;
+              
+              // Process internal allocations - add to machine futurePlans
+              for (let i = 0; i < internalAllocations.length; i++) {
+                const alloc = internalAllocations[i];
+                const machine = machines.find(m => m.id === alloc.machineId || String(m.machineid) === alloc.machineId);
+                if (!machine) continue;
+                
+                const newPlan = {
+                  type: 'PRODUCTION' as const,
+                  fabric: order.material,
+                  client: customerName,
+                  quantity: alloc.quantity,
+                  productionPerDay: alloc.productionRate || 0,
+                  days: alloc.estimatedDays || 0,
+                  remaining: alloc.quantity,
+                  startDate: '',
+                  endDate: '',
+                  orderId: order.id,
+                  orderReference: `${customerName}-${order.material?.substring(0, 10)}`,
+                  ...(splitGroupId && {
+                    splitGroupId,
+                    splitIndex: i + 1,
+                    splitTotal: internalAllocations.length
+                  })
+                };
+                
+                const existingPlans = machine.futurePlans || [];
+                await updateDoc(doc(db, 'MachinesSS', machine.id || String(machine.machineid)), {
+                  futurePlans: [...existingPlans, newPlan]
+                });
+              }
+              
+              // Process external allocations - save to order.externalPlan
+              if (externalAllocations.length > 0) {
+                const externalPlan = externalAllocations.map(alloc => ({
+                  factoryId: alloc.factoryId!,
+                  factoryName: alloc.factoryName!,
+                  quantity: alloc.quantity,
+                  status: 'pending' as const,
+                  createdAt: new Date().toISOString(),
+                  createdBy: userName || 'system'
+                }));
+                await handleUpdateOrder(order.id, { externalPlan });
+              }
+              
+              // Close modal
+              setSmartSchedulerModal({ isOpen: false, order: null, customerName: '' });
+            }}
           />
         )}
 

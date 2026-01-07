@@ -97,15 +97,19 @@ export const DyehouseBalanceReport: React.FC = () => {
         if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
           order.dyeingPlan.forEach(batch => {
             // Only count if sent
-            if (batch.dateSent || batch.quantitySent) {
+            const totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
+            if (batch.dateSent || totalSent > 0) {
               const dyehouse = batch.dyehouse || 'Unassigned';
               allDyehouses.add(dyehouse);
 
-              const sent = batch.quantitySent || 0;
-              const received = batch.receivedQuantity || 0;
+              // Calculate total received from events
+              const events = batch.receiveEvents || [];
+              const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
+              const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
+              const totalReceived = totalReceivedRaw + totalReceivedAccessory;
               
               // Calculate remaining balance in dyehouse
-              let remaining = sent - received;
+              let remaining = totalSent - totalReceived;
               if (remaining < 0) remaining = 0;
 
               if (remaining > 0) {
@@ -119,8 +123,8 @@ export const DyehouseBalanceReport: React.FC = () => {
                   fabricShortName: fabricMap[order.material] || order.material,
                   color: batch.color,
                   dyehouse,
-                  sent,
-                  received,
+                  sent: totalSent,
+                  received: totalReceived,
                   remaining,
                   dateSent: batch.dateSent,
                   dispatchNumber: batch.dispatchNumber

@@ -42,6 +42,11 @@ export interface PlanItem {
   orderReference?: string; // NEW: Generated reference (e.g., OR-Sj)
   orderId?: string;      // NEW: Link to orders collection
   fabricId?: string;     // NEW: Link to fabrics collection
+  
+  // Multi-machine planning
+  splitGroupId?: string;  // Shared ID when same order is split across machines
+  splitIndex?: number;    // Which part of the split (1, 2, 3...)
+  splitTotal?: number;    // Total machines in this split
 }
 
 export interface YarnAllocation {
@@ -88,6 +93,9 @@ export interface FabricDefinition {
     type: string; // 'Single Jersey' | 'Double Jersey'
   };
   originalMachineId?: string; // The machine ID this was created on
+  // Production rate fields (Option 2 - Fabric-based rates)
+  avgProductionPerDay?: number; // Default kg/day for ALL machines
+  machineOverrides?: Record<string, number>; // machineId -> kg/day for exceptions
 }
 
 export interface CustomerOrder {
@@ -161,6 +169,15 @@ export interface MachineRow {
   lastUpdated?: string;
 }
 
+export interface ReceiveEvent {
+  id: string;
+  date: string;                // Date received
+  quantityRaw: number;         // مستلم خام
+  quantityAccessory: number;   // مستلم اكسسوار
+  receivedBy?: string;         // Who recorded the receive
+  notes?: string;
+}
+
 export interface DyeingBatch {
   id: string;
   color: string;
@@ -172,13 +189,41 @@ export interface DyeingBatch {
   dispatchNumber?: string; // رقم الازن
   dateSent?: string;       // تاريخ بعت المصبغة
   formationDate?: string;  // تاريخ التشكيل
-  quantitySent?: number;   // الكمية المبعوتة
-  receivedQuantity?: number; // المستلم
+  
+  // Sent fields - split into raw and accessory
+  quantitySent?: number;        // Legacy: الكمية المبعوتة (for backward compatibility)
+  quantitySentRaw?: number;     // مرسل خام
+  quantitySentAccessory?: number; // مرسل اكسسوار
+  accessoryType?: string;       // نوع الاكسسوار
+  
+  // Receive events array (multiple receives over time)
+  receiveEvents?: ReceiveEvent[];
+  receivedQuantity?: number;    // Legacy: المستلم (for backward compatibility)
+  
+  // Scrap tracking (calculated when batch is complete)
+  isComplete?: boolean;         // Batch fully received
+  scrapRaw?: number;            // فاقد خام
+  scrapAccessory?: number;      // فاقد اكسسوار
+  
   plannedCapacity?: number; // NEW: Planned Machine Capacity
   dyehouse?: string; // NEW: Selected Dyehouse
   status?: 'draft' | 'pending' | 'sent' | 'received'; // Batch workflow status
   plannedAt?: string; // ISO date when batch was planned (all required fields filled)
   plannedBy?: string; // User email who planned it
+}
+
+// External Factory Assignment for outsourcing
+export interface ExternalPlanAssignment {
+  id: string;
+  factoryId: string;       // ID from ExternalPlans collection
+  factoryName: string;     // Name of external factory
+  quantity: number;        // Quantity assigned to this factory
+  status: 'planned' | 'in-progress' | 'completed';
+  startDate?: string;
+  endDate?: string;
+  notes?: string;
+  createdAt: string;
+  createdBy?: string;
 }
 
 export interface YarnAllocationItem {
@@ -213,6 +258,7 @@ export interface OrderRow {
   dyehouseMachine?: string; // NEW: Dyehouse Machine
   fabricColor?: string; // NEW: Fabric Color
   dyeingPlan?: DyeingBatch[]; // NEW: Detailed Dyeing Plan
+  externalPlan?: ExternalPlanAssignment[]; // NEW: External factory assignments
   customerId?: string; // NEW: Link to parent customer for collectionGroup queries
   variantId?: string; // NEW: Selected Fabric Variant ID
   requiredGsm?: number; // NEW: Required GSM

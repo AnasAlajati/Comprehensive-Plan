@@ -26,7 +26,10 @@ interface GlobalBatchItem {
   color: string;
   quantity: number;
   quantitySent?: number;
+  quantitySentRaw?: number;
+  quantitySentAccessory?: number;
   receivedQuantity?: number;
+  totalReceived?: number;
   dyehouse: string;
   machine: string; // Capacity
   dispatchNumber?: string;
@@ -35,6 +38,7 @@ interface GlobalBatchItem {
   status: 'Draft' | 'Pending' | 'Sent' | 'Received';
   rawStatus?: 'draft' | 'pending' | 'sent' | 'received';
   notes?: string;
+  accessoryType?: string;
 }
 
 export const DyehouseGlobalSchedule: React.FC = () => {
@@ -82,9 +86,16 @@ export const DyehouseGlobalSchedule: React.FC = () => {
 
         if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
             order.dyeingPlan.forEach((batch, idx) => {
+              // Calculate total received from events
+              const events = batch.receiveEvents || [];
+              const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
+              const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
+              const totalReceived = totalReceivedRaw + totalReceivedAccessory;
+              const totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
+              
               // Determine batch status (use stored status or calculate)
               const batchStatus = batch.status || 
-                (batch.receivedQuantity ? 'received' : 
+                (totalSent > 0 && totalReceived / totalSent >= 0.89 ? 'received' : 
                  (batch.dateSent ? 'sent' : 
                   (batch.color && batch.quantity && batch.dyehouse && batch.plannedCapacity ? 'pending' : 'draft')));
               
@@ -101,8 +112,11 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                 fabricShortName: fabricMap[order.material] || order.material,
                 color: batch.color,
                 quantity: batch.quantity,
-                quantitySent: batch.quantitySent,
+                quantitySent: totalSent,
+                quantitySentRaw: batch.quantitySentRaw || batch.quantitySent,
+                quantitySentAccessory: batch.quantitySentAccessory,
                 receivedQuantity: batch.receivedQuantity,
+                totalReceived: totalReceived,
                 dyehouse: dyehouseName,
                 machine: machineName,
                 dispatchNumber: batch.dispatchNumber,
@@ -112,7 +126,8 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                         batchStatus === 'sent' ? 'Sent' : 
                         batchStatus === 'pending' ? 'Pending' : 'Draft' as any,
                 notes: batch.notes,
-                rawStatus: batchStatus // Keep original status for filtering
+                rawStatus: batchStatus, // Keep original status for filtering
+                accessoryType: batch.accessoryType
               });
             });
           }

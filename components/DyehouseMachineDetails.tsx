@@ -20,14 +20,18 @@ interface LinkedItem {
   fabricShortName?: string;
   color: string;
   quantity: number; // Batch quantity (مطلوب)
-  quantitySent?: number; // Actual sent (مرسل)
+  quantitySent?: number; // Total sent (raw + accessory)
+  quantitySentRaw?: number;
+  quantitySentAccessory?: number;
   receivedQuantity?: number;
+  totalReceived?: number;
   plannedCapacity?: number;
   dispatchNumber?: string;
   dateSent?: string;
   formationDate?: string;
   notes?: string;
   status: 'Pending' | 'Sent' | 'Received';
+  accessoryType?: string;
 }
 
 export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
@@ -125,6 +129,13 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
             
             const isMatch = isDyehouseMatch && (isPlannedCapacityMatch || isQuantityMatch || isMachineNameMatch);
 
+            // Calculate totals from events
+            const events = batch.receiveEvents || [];
+            const totalReceivedRaw = events.reduce((s: number, e: any) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
+            const totalReceivedAccessory = events.reduce((s: number, e: any) => s + (e.quantityAccessory || 0), 0);
+            const totalReceived = totalReceivedRaw + totalReceivedAccessory;
+            const totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
+
             // LOG EVERY BATCH
             allScannedBatches.push(
               `[SCAN] Client: ${clientName} | Order: ${order.orderReference || order.id} | Dyehouse: "${effectiveDyehouse}" (Target: "${dyehouseName}") | PlannedCap: ${plannedCap} | Qty: ${batchQty} | Machine: "${assignedMachine}"`
@@ -132,7 +143,7 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
 
             if (isMatch) {
               const matchReason = isPlannedCapacityMatch ? 'PlannedCapacity Match' : (isQuantityMatch ? 'Qty Match' : 'Machine Name Match');
-              const matchMsg = `[MATCH] Client: ${clientName} | Order: ${order.orderReference || order.id} | Color: ${batch.color} | PlannedCap: ${plannedCap} | Sent: ${batch.quantitySent || 0} | Reason: ${matchReason}`;
+              const matchMsg = `[MATCH] Client: ${clientName} | Order: ${order.orderReference || order.id} | Color: ${batch.color} | PlannedCap: ${plannedCap} | Sent: ${totalSent} | Reason: ${matchReason}`;
               workingMatches.push(matchMsg);
 
               foundItems.push({
@@ -144,14 +155,18 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
                 fabricShortName: fabricMap[order.material] || order.material,
                 color: batch.color,
                 quantity: batch.quantity,
-                quantitySent: batch.quantitySent,
+                quantitySent: totalSent,
+                quantitySentRaw: batch.quantitySentRaw || batch.quantitySent,
+                quantitySentAccessory: batch.quantitySentAccessory,
                 receivedQuantity: batch.receivedQuantity,
+                totalReceived: totalReceived,
                 plannedCapacity: batch.plannedCapacity,
                 dispatchNumber: batch.dispatchNumber,
                 dateSent: batch.dateSent,
                 formationDate: batch.formationDate,
                 notes: batch.notes,
-                status: batch.receivedQuantity ? 'Received' : (batch.dateSent ? 'Sent' : 'Pending')
+                status: totalSent > 0 && totalReceived / totalSent >= 0.89 ? 'Received' : (batch.dateSent ? 'Sent' : 'Pending'),
+                accessoryType: batch.accessoryType
               });
             } else {
                 // Log near misses

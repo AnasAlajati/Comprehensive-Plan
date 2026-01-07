@@ -67,6 +67,11 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
       const targetClient = normalize(clientName);
       const targetFabric = normalize(order.material);
       
+      // Track what we find for debugging
+      const fabricFoundOnClients = new Set<string>();
+      const fabricFoundOnMachines = new Set<string>();
+      let totalLogsWithFabric = 0;
+      
       machines.forEach(machine => {
           if (!machine.dailyLogs || !Array.isArray(machine.dailyLogs)) return;
           
@@ -74,9 +79,11 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
               const logClient = normalize(log.client);
               const logFabric = normalize(log.fabric);
               
-              // Debug first few mismatches to help diagnose
-              if (idx < 3 && (logClient.includes(targetClient) || logFabric.includes(targetFabric))) {
-                  // debug.push(`Checked Log: ${log.date} - Client: "${log.client}" vs "${clientName}", Fabric: "${log.fabric}" vs "${order.material}"`);
+              // Track if fabric matches (even if client doesn't)
+              if (logFabric === targetFabric || (log.fabric && normalize(log.fabric) === targetFabric)) {
+                  totalLogsWithFabric++;
+                  fabricFoundOnClients.add(log.client || 'Unknown');
+                  fabricFoundOnMachines.add(machine.name || 'Unknown');
               }
 
               const isMatch = (logClient === targetClient && logFabric === targetFabric) ||
@@ -97,6 +104,14 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
       });
 
       debug.push(`Found ${logsData.length} matching logs.`);
+      
+      // Add helpful debug info if no matches but fabric exists elsewhere
+      if (logsData.length === 0 && totalLogsWithFabric > 0) {
+          debug.push(`---`);
+          debug.push(`⚠️ This fabric was found ${totalLogsWithFabric} times but for DIFFERENT clients:`);
+          debug.push(`Clients with this fabric: ${Array.from(fabricFoundOnClients).join(', ')}`);
+          debug.push(`Machines that produced it: ${Array.from(fabricFoundOnMachines).join(', ')}`);
+      }
 
       // Sort by date descending for display
       logsData.sort((a, b) => b.date.localeCompare(a.date));

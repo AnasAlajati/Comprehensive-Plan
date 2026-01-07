@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { FabricDefinition, FabricVariant } from '../types';
-import { X, Copy, Search, Sparkles, AlertCircle, Plus, Trash2, Loader2 } from 'lucide-react';
+import { X, Copy, Search, Sparkles, AlertCircle, Plus, Trash2, Loader2, Zap } from 'lucide-react';
 import { parseFabricName } from '../services/data';
 
 interface FabricFormModalProps {
@@ -32,10 +32,13 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
     shortName: string;
     workCenters: string[];
     variants: FabricVariant[];
-  }>({ name: '', code: '', shortName: '', workCenters: [], variants: [] });
+    avgProductionPerDay: number;
+    machineOverrides: Record<string, number>;
+  }>({ name: '', code: '', shortName: '', workCenters: [], variants: [], avgProductionPerDay: 0, machineOverrides: {} });
   
   const [machineSearch, setMachineSearch] = useState('');
   const [saving, setSaving] = useState(false);
+  const [showOverrides, setShowOverrides] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -45,10 +48,14 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
           code: initialData.code || '',
           shortName: initialData.shortName || '',
           workCenters: initialData.workCenters || [],
-          variants: initialData.variants ? JSON.parse(JSON.stringify(initialData.variants)) : []
+          variants: initialData.variants ? JSON.parse(JSON.stringify(initialData.variants)) : [],
+          avgProductionPerDay: initialData.avgProductionPerDay || 0,
+          machineOverrides: initialData.machineOverrides || {}
         });
+        setShowOverrides(Object.keys(initialData.machineOverrides || {}).length > 0);
       } else {
-        setModalForm({ name: '', code: '', shortName: '', workCenters: [], variants: [] });
+        setModalForm({ name: '', code: '', shortName: '', workCenters: [], variants: [], avgProductionPerDay: 0, machineOverrides: {} });
+        setShowOverrides(false);
       }
     }
   }, [isOpen, initialData]);
@@ -213,6 +220,113 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
                 onChange={(e) => setModalForm(prev => ({ ...prev, shortName: e.target.value }))}
                 className="w-full p-2 border border-slate-200 rounded-lg text-sm bg-slate-50"
               />
+            </div>
+          </div>
+
+          {/* Production Rate Section */}
+          <div className="space-y-3 p-4 bg-amber-50/50 border border-amber-200 rounded-lg">
+            <div className="flex items-center gap-2">
+              <Zap size={16} className="text-amber-600" />
+              <label className="text-xs font-bold text-amber-700 uppercase">Production Rate (kg/day)</label>
+            </div>
+            
+            <div className="flex items-center gap-4">
+              <div className="flex-1">
+                <label className="text-[10px] text-slate-500 mb-1 block">Default Rate (All Machines)</label>
+                <input
+                  type="number"
+                  value={modalForm.avgProductionPerDay || ''}
+                  onChange={(e) => setModalForm(prev => ({ ...prev, avgProductionPerDay: parseFloat(e.target.value) || 0 }))}
+                  placeholder="e.g. 150"
+                  className="w-full p-2 border border-amber-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-amber-400 focus:border-transparent outline-none"
+                />
+              </div>
+              <div className="text-xs text-amber-600 max-w-[150px]">
+                Used for scheduling & ETA calculations
+              </div>
+            </div>
+
+            {/* Machine Exceptions */}
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={() => setShowOverrides(!showOverrides)}
+                className="text-xs text-amber-700 hover:text-amber-900 font-medium flex items-center gap-1"
+              >
+                <Plus size={12} className={`transition-transform ${showOverrides ? 'rotate-45' : ''}`} />
+                {showOverrides ? 'Hide' : 'Add'} Machine Exceptions
+              </button>
+              
+              {showOverrides && (
+                <div className="mt-2 space-y-2 p-3 bg-white rounded-lg border border-amber-100">
+                  <div className="text-[10px] text-slate-500 mb-2">
+                    Override production rate for specific machines (faster/slower than default)
+                  </div>
+                  
+                  {Object.entries(modalForm.machineOverrides).map(([machineId, rate]) => {
+                    const machine = machines.find(m => String(m.id) === machineId || m.name === machineId);
+                    return (
+                      <div key={machineId} className="flex items-center gap-2">
+                        <span className="text-xs font-medium text-slate-700 flex-1 truncate">
+                          {machine?.name || machine?.machineName || machineId}
+                        </span>
+                        <input
+                          type="number"
+                          value={rate}
+                          onChange={(e) => {
+                            const newVal = parseFloat(e.target.value) || 0;
+                            setModalForm(prev => ({
+                              ...prev,
+                              machineOverrides: { ...prev.machineOverrides, [machineId]: newVal }
+                            }));
+                          }}
+                          className="w-20 p-1.5 text-xs border border-slate-200 rounded"
+                          placeholder="kg/day"
+                        />
+                        <span className="text-[10px] text-slate-400">kg/day</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newOverrides = { ...modalForm.machineOverrides };
+                            delete newOverrides[machineId];
+                            setModalForm(prev => ({ ...prev, machineOverrides: newOverrides }));
+                          }}
+                          className="text-slate-400 hover:text-red-500"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                  
+                  {/* Add New Override */}
+                  <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                    <select
+                      className="flex-1 p-1.5 text-xs border border-slate-200 rounded"
+                      onChange={(e) => {
+                        const machineId = e.target.value;
+                        if (machineId && !modalForm.machineOverrides[machineId]) {
+                          setModalForm(prev => ({
+                            ...prev,
+                            machineOverrides: { ...prev.machineOverrides, [machineId]: prev.avgProductionPerDay || 100 }
+                          }));
+                        }
+                        e.target.value = '';
+                      }}
+                      defaultValue=""
+                    >
+                      <option value="">+ Add machine exception...</option>
+                      {machines
+                        .filter(m => !modalForm.machineOverrides[String(m.id)] && !modalForm.machineOverrides[m.name])
+                        .map(m => (
+                          <option key={m.id} value={m.name || String(m.id)}>
+                            {m.name || m.machineName} ({m.brand} - {m.type})
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

@@ -1,13 +1,14 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { MachineRow, PlanItem, MachineStatus, CustomerOrder } from '../types';
+import { MachineRow, PlanItem, MachineStatus, CustomerOrder, MachineSS, OrderRow } from '../types';
 import { SmartPlanModal } from './SmartPlanModal';
-import { recalculateSchedule, addDays } from '../services/data';
+import { OrderProductionHistoryModal } from './OrderProductionHistoryModal';
+import { recalculateSchedule, addDays, getFabricProductionRate } from '../services/data';
 import { DataService } from '../services/dataService';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { doc, onSnapshot, setDoc, updateDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { Search, Play, GripVertical, Factory, Plus } from 'lucide-react';
+import { Search, Play, GripVertical, Factory, Plus, History } from 'lucide-react';
 
 // Global CSS to hide number input spinners
 const globalStyles = `
@@ -235,6 +236,14 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
   const [fabrics, setFabrics] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
   const [customerOrders, setCustomerOrders] = useState<CustomerOrder[]>([]);
+  const [rawMachineDocs, setRawMachineDocs] = useState<MachineSS[]>([]);
+  
+  // Production History Modal State
+  const [historyModal, setHistoryModal] = useState<{
+    isOpen: boolean;
+    order: OrderRow | null;
+    clientName: string;
+  }>({ isOpen: false, order: null, clientName: '' });
 
   const getFabricShortName = useCallback((fullName: string) => {
     if (!fullName) return '';
@@ -644,6 +653,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
 
         const mapped = machineDocs.map((machine: any, idx: number) => mapMachineSSDocToMachineRow(machine, idx, activeDay));
         setMachines(mapped);
+        setRawMachineDocs(machineDocs as MachineSS[]);
         setError('');
       } catch (err) {
         console.error('Failed to load MachineSS data', err);
@@ -1436,7 +1446,11 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
       {filteredMachines.map((machine) => {
         try {
           const isWorking = machine.status === MachineStatus.WORKING;
-          const dailyRate = machine.dayProduction > 0 ? machine.dayProduction : (machine.avgProduction || 1);
+          // Use fabric-based production rate with machine fallback
+          const machineFallback = machine.dayProduction > 0 ? machine.dayProduction : (machine.avgProduction || 100);
+          const dailyRate = machine.material 
+            ? getFabricProductionRate(machine.material, machine.machineSSId || machine.id, fabrics, machineFallback)
+            : machineFallback;
           const currentRemainingDays = isWorking && machine.remainingMfg > 0 ? Math.ceil(machine.remainingMfg / dailyRate) : 0;
           const currentEndDate = isWorking ? formatDateShort(addDays(activeDay, currentRemainingDays)) : '-';
           const isOther = machine.status === MachineStatus.OTHER;
@@ -1530,13 +1544,63 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                       </td>
                     </tr>
                   ) : (
-                    <tr className={`${isOther ? 'bg-purple-50/50 border-purple-100' : 'bg-amber-50/50 border-amber-100'} border-b`}>
-                      <td className="p-2 text-center align-middle hidden md:table-cell"><span className={`w-2 h-2 rounded-full inline-block ${isOther ? 'bg-purple-400' : 'bg-amber-400'}`}></span></td>
-                      <td colSpan={12} className={`p-3 text-center text-sm font-medium ${isOther ? 'text-purple-700' : 'text-amber-700'}`}>
-                         Machine Status: <span className="font-bold">{machine.status}</span> 
-                         {isOther && machine.customStatusNote && <span className="block text-xs font-normal mt-1 italic">"{machine.customStatusNote}"</span>}
-                         {!isOther && " — No Active Production"}
+                    <tr className={`${isOther ? 'bg-purple-50 border-purple-200' : 'bg-amber-50/50 border-amber-100'} border-b-2`}>
+                      <td className="p-2 text-center align-middle hidden md:table-cell">
+                        <span className={`w-3 h-3 rounded-full inline-block ${isOther ? 'bg-purple-500' : 'bg-amber-400'}`}></span>
                       </td>
+                      <td colSpan={machine.material || machine.client ? 5 : 12} className={`p-3 ${machine.material || machine.client ? '' : 'text-center'}`}>
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <span className={`px-3 py-1.5 rounded-lg text-sm font-bold ${isOther ? 'bg-purple-100 text-purple-800' : 'bg-amber-100 text-amber-800'}`}>
+                            {machine.status}
+                          </span>
+                          {isOther && machine.customStatusNote && (
+                            <span className="text-xs text-purple-600 italic">"{machine.customStatusNote}"</span>
+                          )}
+                          {!isOther && !machine.material && (
+                            <span className="text-sm text-amber-600">— No Active Production</span>
+                          )}
+                        </div>
+                      </td>
+                      {(machine.material || machine.client) && (
+                        <>
+                          <td className="p-2 text-center hidden md:table-cell">
+                            <span className="text-xs text-slate-400">-</span>
+                          </td>
+                          <td className="p-2 text-center">
+                            <span className="text-xs text-slate-400">-</span>
+                          </td>
+                          <td className="p-2 text-center hidden md:table-cell">
+                            <span className="text-xs text-slate-400">-</span>
+                          </td>
+                          <td className="p-3 text-right" dir="rtl">
+                            <div className="flex flex-col items-end gap-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium text-slate-700">{getFabricShortName(machine.material) || '-'}</span>
+                                <span className={`px-2 py-0.5 text-[9px] rounded-full uppercase font-bold tracking-wider ${isOther ? 'bg-purple-200 text-purple-800' : 'bg-amber-200 text-amber-800'}`}>
+                                  {machine.status === 'Qalb' ? 'Stopped' : machine.status}
+                                </span>
+                              </div>
+                              {machine.client && (
+                                <span className="text-xs text-slate-500">
+                                  Last: <span className="font-medium text-slate-600">{machine.client}</span>
+                                  {machine.orderReference && <span className="text-slate-400 ml-1">({machine.orderReference})</span>}
+                                </span>
+                              )}
+                              {machine.remainingMfg > 0 && (
+                                <span className="text-[10px] text-amber-600 font-medium">
+                                  Remaining: {machine.remainingMfg} kg
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="p-2 text-center hidden md:table-cell">
+                            <span className="text-xs text-slate-400">-</span>
+                          </td>
+                          <td className="p-2 text-center">
+                            <span className="text-xs text-slate-400">-</span>
+                          </td>
+                        </>
+                      )}
                     </tr>
                   )}
 
@@ -1645,6 +1709,49 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                         <td className="p-2 text-xs text-slate-300 font-mono align-middle hidden md:table-cell">{index + 1}</td>
                         <td className="p-1 align-middle">
                            <div className="flex items-center justify-center gap-1">
+                              {/* Production History Button */}
+                              {!isSettings && plan.fabric && (
+                                <button 
+                                  type="button"
+                                  onMouseDown={(e) => e.stopPropagation()}
+                                  onClick={() => {
+                                    const hasHistory = fabricHistory[plan.fabric] && fabricHistory[plan.fabric].length > 0;
+                                    // Create a mock OrderRow for the history modal
+                                    const mockOrder: OrderRow = {
+                                      id: `plan-${machine.machineSSId}-${index}`,
+                                      material: plan.fabric,
+                                      machine: '',
+                                      requiredQty: plan.quantity || 0,
+                                      accessory: '',
+                                      manufacturedQty: 0,
+                                      remainingQty: plan.remaining || plan.quantity || 0,
+                                      orderReceiptDate: '',
+                                      startDate: plan.startDate || '',
+                                      endDate: plan.endDate || '',
+                                      scrapQty: 0,
+                                      others: '',
+                                      notes: plan.notes || '',
+                                      batchDeliveries: 0,
+                                      accessoryDeliveries: 0
+                                    };
+                                    setHistoryModal({
+                                      isOpen: true,
+                                      order: mockOrder,
+                                      clientName: plan.client || ''
+                                    });
+                                  }}
+                                  className={`p-1 rounded transition-colors ${
+                                    fabricHistory[plan.fabric] && fabricHistory[plan.fabric].length > 0
+                                      ? "text-orange-600 bg-orange-50 hover:bg-orange-100 ring-1 ring-orange-200 shadow-sm"
+                                      : "text-slate-300 hover:text-slate-500 hover:bg-slate-50 opacity-60 hover:opacity-100"
+                                  }`}
+                                  title={fabricHistory[plan.fabric]?.length > 0 
+                                    ? `View History (${fabricHistory[plan.fabric].length} machines)` 
+                                    : "No Production History"}
+                                >
+                                  <History className="w-4 h-4" />
+                                </button>
+                              )}
                               <button 
                                 type="button"
                                 onMouseDown={(e) => e.stopPropagation()} 
@@ -2001,6 +2108,17 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
         <SmartPlanModal 
           onClose={() => setSmartAddMachineId(null)} 
           onSave={handleSmartPlanSave}
+        />
+      )}
+
+      {/* Production History Modal */}
+      {historyModal.isOpen && historyModal.order && (
+        <OrderProductionHistoryModal
+          isOpen={historyModal.isOpen}
+          onClose={() => setHistoryModal({ isOpen: false, order: null, clientName: '' })}
+          order={historyModal.order}
+          clientName={historyModal.clientName}
+          machines={rawMachineDocs}
         />
       )}
     </div>
