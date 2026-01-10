@@ -74,7 +74,9 @@ const App: React.FC = () => {
   const [rawMachines, setRawMachines] = useState<any[]>([]);
   const [todaysLogs, setTodaysLogs] = useState<any[]>([]); // NEW: Store logs from sub-collection
   const [machines, setMachines] = useState<MachineRow[]>([]);
-  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    return localStorage.getItem('globalActiveDay') || new Date().toISOString().split('T')[0];
+  });
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [connectionError, setConnectionError] = useState<string>('');
   const [machineLoading, setMachineLoading] = useState<boolean>(true);
@@ -280,6 +282,7 @@ const App: React.FC = () => {
       if (docSnap.exists()) {
         const data = docSnap.data();
         if (data.activeDay) {
+          localStorage.setItem('globalActiveDay', data.activeDay);
           setSelectedDate(data.activeDay);
           setGlobalActiveDay(data.activeDay);
         }
@@ -648,14 +651,14 @@ const App: React.FC = () => {
       <main className="max-w-[98%] mx-auto px-2 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
         
         {/* Professional Navigation Bar */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden sticky top-0 z-40">
            <div className="flex flex-col lg:flex-row items-center justify-between p-2 gap-2">
              
              {/* Primary Modules (Schedule & Excel) */}
-             <div className="flex items-center gap-2 w-full lg:w-auto p-1 bg-slate-100/50 rounded-lg">
+             <div className="flex items-center gap-2 w-full lg:w-auto p-1 bg-slate-100/50 rounded-lg overflow-x-auto no-scrollbar">
                 <button 
                   onClick={() => setViewMode('planning')}
-                  className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-md text-sm font-semibold transition-all ${
+                  className={`flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-semibold transition-all whitespace-nowrap ${
                     viewMode === 'planning' 
                       ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-black/5' 
                       : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
@@ -666,7 +669,7 @@ const App: React.FC = () => {
                 </button>
                 <button 
                   onClick={() => setViewMode('orders')}
-                  className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-md text-sm font-semibold transition-all ${
+                  className={`flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-semibold transition-all whitespace-nowrap ${
                     viewMode === 'orders' 
                       ? 'bg-white text-orange-600 shadow-sm ring-1 ring-black/5' 
                       : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
@@ -677,7 +680,7 @@ const App: React.FC = () => {
                 </button>
                 <button 
                   onClick={() => setViewMode('yarn-inventory')}
-                  className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-md text-sm font-semibold transition-all ${
+                  className={`flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-semibold transition-all whitespace-nowrap ${
                     viewMode === 'yarn-inventory' 
                       ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-black/5' 
                       : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
@@ -688,7 +691,7 @@ const App: React.FC = () => {
                 </button>
                 <button 
                   onClick={() => setViewMode('excel')}
-                  className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-md text-sm font-semibold transition-all ${
+                  className={`flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-semibold transition-all whitespace-nowrap ${
                     viewMode === 'excel' 
                       ? 'bg-white text-emerald-600 shadow-sm ring-1 ring-black/5' 
                       : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
@@ -702,7 +705,7 @@ const App: React.FC = () => {
              <div className="h-8 w-px bg-slate-200 hidden lg:block mx-2"></div>
 
              {/* Secondary Tools */}
-             <div className="flex flex-wrap items-center justify-center gap-1 w-full lg:w-auto overflow-x-auto pb-1 lg:pb-0">
+             <div className="flex flex-wrap items-center justify-start lg:justify-center gap-1 w-full lg:w-auto overflow-x-auto pb-1 lg:pb-0 no-scrollbar">
                 
                 {/* Analysis Group */}
                 <div className="flex items-center gap-1 px-2 border-r border-slate-100 last:border-0">

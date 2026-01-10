@@ -362,6 +362,10 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     machineId: '',
     machineName: ''
   });
+  
+  // Ref to track if the user has manually changed the date (to avoid auto-triggering "New Day" modal on load)
+  const isUserDateSelection = useRef(false);
+
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     type: 'fabric' | 'client';
@@ -1571,7 +1575,9 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     // Auto-start report (skip modal)
     // setIsNewDay(false);
     if (!hasRealLogs) {
-      setIsNewDay(true);
+      if (isUserDateSelection.current) {
+         setIsNewDay(true);
+      }
     } else {
       setIsNewDay(false);
     }
@@ -2541,28 +2547,87 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       <div className="max-w-[1400px] mx-auto flex flex-col gap-4">
 
         {/* Header with Date and Export */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-4">
+        <div className="bg-white p-2 md:p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-2 md:gap-4">
           
-          {/* Top Row: Date, Filters, Sync */}
-          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
+          {/* Top Row: Date & Global Controls */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-100 pb-3 md:pb-4">
             
-            {/* Date Selection */}
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Date:</span>
-                <input
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => {
-                    setSelectedDate(e.target.value);
-                    handleFetchLogs(e.target.value);
-                  }}
-                  className="bg-transparent text-slate-700 text-sm font-medium outline-none cursor-pointer"
-                />
-              </div>
-              
-              {/* Sync Status */}
-              <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200 text-xs font-medium text-slate-500">
+            <div className="flex items-center justify-between w-full md:w-auto">
+               {/* Date Selection */}
+               <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider hidden xs:inline">Date:</span>
+                  <input
+                    type="date"
+                    value={selectedDate}
+                    onChange={(e) => {
+                      isUserDateSelection.current = true; // Mark as user interaction
+                      setSelectedDate(e.target.value);
+                      handleFetchLogs(e.target.value);
+                    }}
+                    className="bg-transparent text-slate-700 text-sm font-medium outline-none cursor-pointer"
+                  />
+               </div>
+
+               {/* Mobile Active Day Indicator/Toggle */}
+               <div className="md:hidden">
+                  {activeDay === selectedDate ? (
+                    <div className="p-2 rounded-lg text-emerald-600 bg-emerald-50 border border-emerald-200 shadow-sm">
+                      <CheckCircle size={18} />
+                    </div>
+                  ) : (
+                    <button
+                      onClick={handleMarkActiveDay}
+                      className="p-2 rounded-lg text-slate-500 bg-slate-50 border border-slate-200 hover:bg-slate-100 transition-all shadow-sm"
+                      title="Set as Active Day"
+                    >
+                      <Calendar size={18} />
+                    </button>
+                  )}
+               </div>
+            </div>
+
+            {/* Filters Group - Scrollable on Mobile */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0 no-scrollbar -mx-2 px-2 md:mx-0 md:px-0">
+               <div className="relative shrink-0">
+                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 w-3.5 h-3.5" />
+                 <input 
+                   type="text" 
+                   placeholder="Search..." 
+                   value={searchTerm}
+                   onChange={(e) => setSearchTerm(e.target.value)}
+                   className="pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none w-28 md:w-32 transition-all"
+                 />
+               </div>
+               
+               <select
+                 value={filterType}
+                 onChange={(e) => setFilterType(e.target.value)}
+                 className="shrink-0 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none cursor-pointer"
+               >
+                 {availableTypes.map(type => (
+                   <option key={type} value={type}>{type}</option>
+                 ))}
+               </select>
+
+               <input 
+                 type="text" 
+                 placeholder="Client..." 
+                 value={filterClient}
+                 onChange={(e) => setFilterClient(e.target.value)}
+                 className="shrink-0 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none w-24 md:w-28 transition-all"
+               />
+               
+               <input 
+                 type="text" 
+                 placeholder="Fabric..." 
+                 value={filterFabric}
+                 onChange={(e) => setFilterFabric(e.target.value)}
+                 className="shrink-0 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none w-24 md:w-28 transition-all"
+               />
+            </div>
+            
+             {/* Desktop Sync Status */}
+             <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200 text-xs font-medium text-slate-500 shrink-0">
                 {navigator.onLine ? (
                   <>
                     <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
@@ -2575,69 +2640,28 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                   </>
                 )}
               </div>
-            </div>
-
-            {/* Filters Group */}
-            <div className="flex items-center gap-2 flex-wrap">
-               <div className="relative">
-                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 w-3.5 h-3.5" />
-                 <input 
-                   type="text" 
-                   placeholder="Search..." 
-                   value={searchTerm}
-                   onChange={(e) => setSearchTerm(e.target.value)}
-                   className="pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none w-32 transition-all"
-                 />
-               </div>
-               
-               <select
-                 value={filterType}
-                 onChange={(e) => setFilterType(e.target.value)}
-                 className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none cursor-pointer"
-               >
-                 {availableTypes.map(type => (
-                   <option key={type} value={type}>{type}</option>
-                 ))}
-               </select>
-
-               <input 
-                 type="text" 
-                 placeholder="Filter Client..." 
-                 value={filterClient}
-                 onChange={(e) => setFilterClient(e.target.value)}
-                 className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none w-28 transition-all"
-               />
-               
-               <input 
-                 type="text" 
-                 placeholder="Filter Fabric..." 
-                 value={filterFabric}
-                 onChange={(e) => setFilterFabric(e.target.value)}
-                 className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none w-28 transition-all"
-               />
-            </div>
           </div>
 
           {/* Bottom Row: Actions */}
-          <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
             
-            {/* Primary Actions */}
-            <div className="flex items-center gap-2">
+            {/* Primary Actions Scrollable */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0 no-scrollbar -mx-2 px-2 md:mx-0 md:px-0">
               <button
                 onClick={() => setIsFabricModalOpen(true)}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 transition-colors flex items-center gap-2 shadow-sm"
+                className="shrink-0 px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 transition-colors flex items-center gap-2 shadow-sm"
               >
                 <Plus size={16} />
-                Add Fabric
+                <span className="hidden xs:inline">Add Fabric</span>
+                <span className="xs:hidden">Fabric</span>
               </button>
 
               <button
                 onClick={() => setIsFabricDirectoryOpen(true)}
-                className="px-3 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center gap-2 shadow-sm"
-                title="View and edit fabric directory"
+                className="shrink-0 px-3 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center gap-2 shadow-sm"
               >
                 <Book size={16} />
-                Directory
+                <span className="hidden xs:inline">Directory</span>
               </button>
 
               <button
@@ -2647,68 +2671,69 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                   setFetchSourceDate(dateObj.toISOString().split('T')[0]);
                   setFetchModalOpen(true);
                 }}
-                className="px-3 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center gap-2 shadow-sm"
-                title="Copy status and fabric from a previous date"
+                className="shrink-0 px-3 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center gap-2 shadow-sm"
               >
-                <span>↺</span> Fetch Data
+                <span>↺</span> 
+                <span className="hidden xs:inline">Fetch Data</span>
+                <span className="xs:hidden">Fetch</span>
               </button>
 
-              {activeDay === selectedDate ? (
-                <div className="px-3 py-2 rounded-lg text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 flex items-center gap-2 shadow-sm cursor-default">
-                  <CheckCircle size={16} />
-                  Active Day
-                </div>
-              ) : (
-                <button
-                  onClick={handleMarkActiveDay}
-                  className="px-3 py-2 rounded-lg text-sm font-medium text-slate-600 bg-slate-100 border border-slate-200 hover:bg-slate-200 transition-all flex items-center gap-2 shadow-sm"
-                  title="Set this date as the active working day"
-                >
-                  <Calendar size={16} />
-                  Mark Active
-                </button>
-              )}
+              {/* Desktop Active Day Button */}
+              <div className="hidden md:block">
+                  {activeDay === selectedDate ? (
+                    <div className="px-3 py-2 rounded-lg text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 flex items-center gap-2 shadow-sm cursor-default">
+                      <CheckCircle size={16} />
+                      Active Day
+                    </div>
+                  ) : (
+                    <button
+                      onClick={handleMarkActiveDay}
+                      className="px-3 py-2 rounded-lg text-sm font-medium text-slate-600 bg-slate-100 border border-slate-200 hover:bg-slate-200 transition-all flex items-center gap-2 shadow-sm"
+                    >
+                      <Calendar size={16} />
+                      Mark Active
+                    </button>
+                  )}
+              </div>
             </div>
 
             {/* Secondary Actions / Tools */}
-            <div className="flex items-center gap-2">
-              <div className="h-8 w-px bg-slate-200 mx-1 hidden sm:block"></div>
+            <div className="flex items-center justify-between md:justify-end gap-2 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
               
-              <button
-                onClick={() => setShowImportModal(true)}
-                className="p-2 rounded-lg text-slate-600 hover:text-purple-600 hover:bg-purple-50 border border-transparent hover:border-purple-100 transition-all"
-                title="Import ODOO"
-              >
-                <FileSpreadsheet size={18} />
-              </button>
+              <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowImportModal(true)}
+                    className="p-2 rounded-lg text-slate-600 hover:text-purple-600 hover:bg-purple-50 border border-transparent hover:border-purple-100 transition-all"
+                  >
+                    <FileSpreadsheet size={18} />
+                  </button>
 
-              <button
-                onClick={handleExportBackup}
-                className="p-2 rounded-lg text-slate-600 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 transition-all"
-                title="Export JSON"
-              >
-                <Download size={18} />
-              </button>
+                  <button
+                    onClick={handleExportBackup}
+                    className="p-2 rounded-lg text-slate-600 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 transition-all"
+                  >
+                    <Download size={18} />
+                  </button>
 
-              <label className="p-2 rounded-lg text-slate-600 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 transition-all cursor-pointer" title="Import JSON">
-                <Upload size={18} />
-                <input
-                  type="file"
-                  accept=".json"
-                  onChange={handleImportBackup}
-                  className="hidden"
-                />
-              </label>
+                  <label className="p-2 rounded-lg text-slate-600 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 transition-all cursor-pointer" title="Import JSON">
+                    <Upload size={18} />
+                    <input
+                      type="file"
+                      accept=".json"
+                      onChange={handleImportBackup}
+                      className="hidden"
+                    />
+                  </label>
 
-              <button
-                onClick={handleDownloadPDF}
-                disabled={isDownloading}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-bold text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 transition-all disabled:opacity-50 shadow-sm"
-                title="Export PDF"
-              >
-                <FileText size={16} />
-                <span>PDF</span>
-              </button>
+                  <button
+                    onClick={handleDownloadPDF}
+                    disabled={isDownloading}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-bold text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 transition-all disabled:opacity-50 shadow-sm"
+                  >
+                    <FileText size={16} />
+                    <span className="hidden sm:inline">PDF</span>
+                  </button>
+              </div>
 
               <div className="h-8 w-px bg-slate-200 mx-1 hidden sm:block"></div>
 
@@ -2730,7 +2755,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 ) : (
                   <Send className="w-4 h-4" />
                 )}
-                {isReportSent ? 'Finished' : isSendingReport ? 'Sending...' : 'Finish'}
+                <span className="hidden sm:inline">{isReportSent ? 'Finished' : isSendingReport ? 'Sending...' : 'Finish'}</span>
+                <span className="sm:hidden">{isReportSent ? 'Done' : 'Finish'}</span>
               </button>
             </div>
           </div>

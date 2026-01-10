@@ -36,6 +36,7 @@ import {
   AlertCircle,
   X,
   Calendar,
+  Clock,
   Calculator,
   CheckSquare,
   Square,
@@ -789,12 +790,68 @@ const MemoizedOrderRow = React.memo(({
       const lastDate = logs[0].date;
       const uniqueMachines = Array.from(new Set(logs.map(l => l.machine)));
       
+      
       return { lastDate, uniqueMachines, logs };
   }, [machines, externalFactories, row, selectedCustomerName, statusInfo]);
 
+  // --- Mobile & Status Logic Extraction ---
+  const { internalActive, internalPlanned, externalMatches, directMachine, hasAnyPlan } = useMemo(() => {
+    // 1. Internal Active & Planned
+    const rawActive = (statusInfo && statusInfo.active) ? statusInfo.active : [];
+    const internalActive = rawActive.filter((m: string) => !m.endsWith('(Ext)'));
+    const internalPlanned = (statusInfo && statusInfo.planned) ? statusInfo.planned : [];
+
+    // 2. External Matches
+    const externalMatches: { factoryName: string; status: string }[] = [];
+    const reference = row.material ? `${selectedCustomerName}-${row.material}` : '';
+    
+    if (externalFactories && externalFactories.length > 0 && row.material) {
+      for (const factory of externalFactories) {
+        if (factory.plans && Array.isArray(factory.plans)) {
+          for (const plan of factory.plans) {
+              const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+              const planClient = normalize(plan.client);
+              const planFabric = normalize(plan.fabric);
+              const normCustomer = normalize(selectedCustomerName);
+              const normMaterial = normalize(row.material);
+
+              const isClientMatch = planClient === normCustomer;
+              const isFabricMatch = planFabric === normMaterial;
+              
+              const constructedRef = `${plan.client || ''}-${plan.fabric ? plan.fabric.split(/[\s-]+/).map((w: string) => w[0]).join('').toUpperCase() : ''}`;
+              
+              const planRef = normalize(plan.orderReference);
+              const searchRef = normalize(reference);
+              const constRef = normalize(constructedRef);
+
+              const isRefMatch = (planRef && planRef === searchRef) || (constRef === searchRef);
+
+              if ((isClientMatch && isFabricMatch) || isRefMatch) {
+                externalMatches.push({
+                  factoryName: factory.name,
+                  status: plan.status === 'ACTIVE' ? 'Active' : 'Planned'
+                });
+              }
+          }
+        }
+      }
+    }
+
+    // 3. Direct Machine
+    let directMachine = null;
+    if (internalActive.length === 0 && internalPlanned.length === 0 && row.machine) {
+        const m = machines.find(m => m.name === row.machine);
+        if (m) directMachine = m;
+    }
+
+    const hasAnyPlan = internalActive.length > 0 || internalPlanned.length > 0 || externalMatches.length > 0 || directMachine;
+    
+    return { internalActive, internalPlanned, externalMatches, directMachine, hasAnyPlan };
+  }, [statusInfo, externalFactories, selectedCustomerName, row.material, row.machine, machines]);
+
   return (
     <>
-    <tr className={`transition-colors group text-sm ${isSelected ? 'bg-blue-50' : 'hover:bg-blue-50/30'}`}>
+    <tr className={`transition-colors group text-sm table-view hidden md:table-row ${isSelected ? 'bg-blue-50' : 'hover:bg-blue-50/30'}`}>
       {/* Checkbox */}
       <td className="p-0 border-r border-slate-200 text-center align-middle">
         <button onClick={() => toggleSelectRow(row.id)} className="p-2 w-full h-full flex items-center justify-center text-slate-400 hover:text-blue-600">
@@ -1415,10 +1472,219 @@ const MemoizedOrderRow = React.memo(({
         </div>
       </td>
     </tr>
+
+    {/* Mobile Card View Row */}
+    <tr className="card-view md:hidden border-b border-slate-200 last:border-0">
+      <td colSpan={100} className="p-0 block w-full whitespace-normal">
+         <div className={`p-4 flex flex-col gap-3 ${isSelected ? 'bg-blue-50' : 'bg-white'}`}>
+            {/* Header: Fabric & Checkbox */}
+            <div className="flex justify-between items-start gap-2">
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <button onClick={() => toggleSelectRow(row.id)} className={`flex-shrink-0 w-6 h-6 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-slate-300 text-slate-300'}`}>
+                       {isSelected && <CheckSquare size={14} />}
+                    </button>
+                    <div className="min-w-0">
+                         <div className="font-bold text-slate-800 text-sm leading-tight break-words">{fabrics.find(f => f.name === row.material)?.shortName || row.material}</div>
+                         {row.variantId && <div className="text-[10px] text-amber-600 font-medium truncate">Variant Selected</div>}
+                    </div>
+                </div>
+                {/* Actions */}
+                <div className="flex items-center gap-1">
+                     <button onClick={() => onOpenHistory(row)} className={`p-2 rounded-full ${hasHistory ? 'bg-orange-100 text-orange-600' : 'bg-slate-100 text-slate-400'}`}>
+                        <History size={14} />
+                     </button>
+                     <button onClick={() => setIsExpanded(!isExpanded)} className={`p-2 rounded-full transition-colors ${isExpanded ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-500'}`}>
+                        {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                     </button>
+                </div>
+            </div>
+
+            {/* Status Section */}
+            <div className="flex flex-wrap gap-1 items-center min-h-[24px]">
+                 {showDyehouse ? (
+                    // 1. Dyehouse View Status
+                    <>
+                         <div className="bg-slate-100 px-2 py-0.5 rounded text-[10px] border border-slate-200 font-mono text-slate-500">
+                             Sent: <span className="font-bold text-blue-600">{totalSent > 0 ? totalSent : '-'}</span>
+                         </div>
+                         <div className="bg-slate-100 px-2 py-0.5 rounded text-[10px] border border-slate-200 font-mono text-slate-500">
+                             Rcv: <span className="font-bold text-emerald-600">{totalReceived > 0 ? totalReceived : '-'}</span>
+                         </div>
+                         {assignedMachinesSummary && Array.isArray(assignedMachinesSummary) && assignedMachinesSummary.map((part, idx) => (
+                             <span key={idx} className="bg-slate-50 text-slate-700 font-mono text-[10px] px-1.5 py-0.5 rounded border border-slate-200">
+                                {part.capacity}kg x{part.count}
+                             </span>
+                         ))}
+                    </>
+                 ) : (
+                    // 2. Standard View Status
+                    <>
+                        {!hasAnyPlan && displayRemaining <= 0 && <span className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded text-[10px] border border-slate-200 font-medium">Finished</span>}
+                        {!hasAnyPlan && displayRemaining > 0 && <button onClick={() => onOpenCreatePlan(row)} className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] border border-amber-200 font-medium flex items-center gap-1">Not Planned <Plus size={10}/></button>}
+                        
+                        {internalActive.map((m: string) => <span key={m} className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[10px] border border-emerald-200 font-medium">{m}</span>)}
+                        {directMachine && <span className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded text-[10px] border border-emerald-200 font-medium">{directMachine.name}</span>}
+                        {externalMatches.map((m: any) => <span key={m.factoryName} className="bg-cyan-100 text-cyan-700 px-2 py-0.5 rounded text-[10px] border border-cyan-200 font-medium">{m.factoryName}</span>)}
+                    </>
+                 )}
+            </div>
+
+            {/* Metrics Grid */}
+            <div className="grid grid-cols-2 gap-3 mt-1">
+                 <div className="bg-slate-50 p-2 rounded border border-slate-100">
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-1">Ordered</span>
+                    <input 
+                      type="number" 
+                      value={row.requiredQty || ''} 
+                      onChange={(e) => {
+                          const val = Number(e.target.value);
+                          const updates: Partial<OrderRow> = { requiredQty: val };
+                          if (!statusInfo || statusInfo.active.length === 0) updates.remainingQty = val;
+                          handleUpdateOrder(row.id, updates);
+                      }}
+                      className="w-full bg-transparent font-mono text-lg font-medium text-slate-700 outline-none p-0 border-0 focus:ring-0"
+                    />
+                 </div>
+                 {showDyehouse ? (
+                     <div className="bg-slate-50 p-2 rounded border border-slate-100 relative">
+                        <span className="text-[10px] text-slate-400 uppercase font-bold block mb-1">Capacity</span>
+                        <div className="font-mono text-lg font-medium text-slate-700">
+                            {totalCapacity}
+                            <span className="text-xs text-slate-400 ml-1">kg</span>
+                        </div>
+                        {totalCapacity < row.requiredQty && (
+                            <div className="absolute top-2 right-2 text-amber-500">
+                                <AlertTriangle size={14} />
+                            </div>
+                        )}
+                     </div>
+                 ) : (
+                     <div className={`p-2 rounded border ${hasActive ? 'bg-emerald-50 border-emerald-100' : 'bg-slate-50 border-slate-100'}`}>
+                        <span className="text-[10px] text-slate-400 uppercase font-bold block mb-1">Remaining</span>
+                        <input 
+                        type="number" 
+                        value={displayRemaining || ''} 
+                        onChange={(e) => handleUpdateOrder(row.id, { remainingQty: Number(e.target.value) })}
+                        className={`w-full bg-transparent font-mono text-lg font-medium outline-none p-0 border-0 focus:ring-0 ${hasActive ? 'text-emerald-600' : 'text-slate-700'}`}
+                        />
+                     </div>
+                 )}
+            </div>
+            
+            {/* ... Dates (Unchanged) ... */}
+
+             {/* Expanded Mobile Input Section - Dyehouse Mode */}
+             {isExpanded && showDyehouse && (
+               <div className="mt-2 pt-3 border-t border-slate-100 space-y-3 animate-in fade-in slide-in-from-top-1">
+                   <div className="flex justify-between items-center mb-2">
+                       <h4 className="text-xs font-bold text-slate-700 flex items-center gap-2">
+                           <Droplets size={12} className="text-blue-500" />
+                           Dyeing Batches
+                       </h4>
+                       {/* Placeholder for future Add Batch functionality */}
+                       <div className="hidden"></div>
+                   </div>
+                   
+                   <div className="space-y-4">
+                       {(row.dyeingPlan || []).map((batch, idx) => (
+                           <div key={idx} className="bg-slate-50 rounded border border-slate-200 p-3 shadow-sm relative">
+                               {/* Color Header */}
+                               <div className="flex justify-between items-start mb-2 border-b border-slate-200 pb-2">
+                                   <div className="flex items-center gap-2">
+                                       <div 
+                                            className="w-4 h-4 rounded-full border border-slate-300 shadow-sm"
+                                            style={{ backgroundColor: batch.colorHex || '#ffffff' }}
+                                       />
+                                       <span className="font-bold text-sm text-slate-800">{batch.color || 'No Color'}</span>
+                                   </div>
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold ${
+                                        batch.status === 'received' ? 'bg-emerald-100 text-emerald-700' :
+                                        batch.status === 'sent' ? 'bg-blue-100 text-blue-700' :
+                                        batch.status === 'pending' ? 'bg-indigo-100 text-indigo-700' :
+                                        'bg-slate-200 text-slate-600'
+                                    }`}>
+                                        {batch.status || 'Draft'}
+                                    </span>
+                               </div>
+                               
+                               {/* Key Fields Grid */}
+                               <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                                   <div>
+                                       <label className="text-[10px] text-slate-400 block">Dyehouse</label>
+                                       <div className="font-medium text-slate-700">{batch.dyehouse || '-'}</div>
+                                   </div>
+                                   <div>
+                                       <label className="text-[10px] text-slate-400 block">Capacity</label>
+                                       <div className="font-mono font-medium text-slate-700">{batch.plannedCapacity ? `${batch.plannedCapacity}kg` : '-'}</div>
+                                   </div>
+                                   <div>
+                                       <label className="text-[10px] text-slate-400 block">Sent</label>
+                                       <div className="font-mono text-blue-600">{batch.quantitySentRaw || batch.quantitySent || '-'}</div>
+                                   </div>
+                                   <div>
+                                       <label className="text-[10px] text-slate-400 block">Received</label>
+                                       <div className="font-mono text-emerald-600">
+                                            {(() => {
+                                                const events = batch.receiveEvents || [];
+                                                const total = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
+                                                return total > 0 ? total : '-';
+                                            })()}
+                                       </div>
+                                   </div>
+                               </div>
+                               
+                               {/* Dates Footer */}
+                               <div className="mt-2 pt-2 border-t border-slate-200 flex justify-between text-[10px] text-slate-400">
+                                   <span>Sent: {formatDateShort(batch.dateSent)}</span>
+                                   <span>Dispatch: {batch.dispatchNumber || '-'}</span>
+                               </div>
+                           </div>
+                       ))}
+                   </div>
+               </div>
+             )}
+
+             {/* Expanded Mobile Input Section - Standard Mode */}
+             {isExpanded && !showDyehouse && (
+               <div className="mt-2 pt-3 border-t border-slate-100 space-y-3 animate-in fade-in slide-in-from-top-1">
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                             <label className="text-[10px] text-slate-400 font-medium mb-1 block">Acc. Qty</label>
+                             <input 
+                                type="number" 
+                                className="w-full text-xs p-2 bg-slate-50 border border-slate-200 rounded"
+                                value={row.accessoryQty || ''}
+                                onChange={(e) => handleUpdateOrder(row.id, { accessoryQty: Number(e.target.value) })}
+                             />
+                        </div>
+                        <div>
+                             <label className="text-[10px] text-slate-400 font-medium mb-1 block">Acc. Deliveries</label>
+                             <input 
+                                type="number" 
+                                className="w-full text-xs p-2 bg-purple-50 border border-purple-100 rounded text-purple-700"
+                                value={row.accessoryDeliveries || ''}
+                                onChange={(e) => handleUpdateOrder(row.id, { accessoryDeliveries: Number(e.target.value) })}
+                             />
+                        </div>
+                    </div>
+                   <div>
+                      <label className="text-[10px] text-slate-400 font-medium mb-1 block">Notes</label>
+                      <textarea 
+                        value={row.notes || ''} 
+                        onChange={(e) => handleUpdateOrder(row.id, { notes: e.target.value })}
+                        className="w-full bg-slate-50 p-2 text-xs rounded border border-slate-200 h-16 resize-none"
+                        placeholder="Add notes..."
+                      />
+                   </div>
+               </div>
+             )}
+         </div>
+      </td>
+    </tr>
     
-    {/* Expanded Dyehouse Plan Row */}
+    {/* Expanded Dyehouse Plan Row (Desktop Only) */}
     {showDyehouse && isExpanded && (
-      <tr className="bg-slate-50/50 animate-in slide-in-from-top-2">
+      <tr className="bg-slate-50/50 animate-in slide-in-from-top-2 hidden md:table-row">
         <td colSpan={1} className="border-r border-slate-200"></td>
         <td colSpan={10} className="p-4 border-b border-slate-200 shadow-inner">
             <div className="bg-white rounded border border-slate-200 overflow-hidden">
@@ -3763,7 +4029,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                 <>
                   <div className="bg-white rounded-lg shadow border border-slate-200 overflow-x-auto mb-4">
                     <table className="w-full text-sm border-collapse whitespace-nowrap">
-                      <thead className="bg-slate-100 text-slate-600 font-semibold shadow-sm text-xs uppercase tracking-wider">
+                      <thead className="bg-slate-100 text-slate-600 font-semibold shadow-sm text-xs uppercase tracking-wider table-view hidden md:table-header-group">
                         <tr>
                           <th className="p-3 w-10 border-b border-r border-slate-200 text-center">
                             <button onClick={toggleSelectAll} className="text-slate-400 hover:text-slate-600">
@@ -4222,11 +4488,31 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                         {remainingAccessory > 0 && <div className="text-amber-500 text-xs mt-1">متبقي: {remainingAccessory.toFixed(1)}</div>}
                       </div>
                       <div className="bg-white rounded-lg p-3 border border-slate-200">
-                        <div className="text-slate-500 mb-1">الفاقد (Scrap)</div>
+                        <div className="text-slate-500 mb-1">الهالك</div>
                         {batch?.isComplete ? (
-                          <div className="flex items-baseline gap-2">
-                            <span className="text-red-600 font-bold">{(batch.scrapRaw || 0).toFixed(1)} خام</span>
-                            <span className="text-red-600 font-bold">{(batch.scrapAccessory || 0).toFixed(1)} اكسسوار</span>
+                          <div className="flex flex-col">
+                            <div className="flex items-baseline gap-2">
+                                {/* Percentage (Prominent) */}
+                                <span className="text-2xl font-bold text-red-600">
+                                    {totalSentRaw > 0 ? ((batch.scrapRaw || 0) / totalSentRaw * 100).toFixed(1) : '0.0'}%
+                                </span>
+                                {/* Value (Secondary) */}
+                                <span className="text-sm font-medium text-red-500">
+                                    {(batch.scrapRaw || 0).toFixed(1)} <span className="text-[10px] font-normal opacity-80">خام</span>
+                                </span>
+                            </div>
+                            
+                            {/* Accessory Scarp (if any) */}
+                            {(batch.scrapAccessory || 0) > 0 && (
+                                <div className="flex items-baseline gap-2 mt-1 pt-1 border-t border-slate-100">
+                                    <span className="text-sm font-bold text-red-500">
+                                        {totalSentAccessory > 0 ? ((batch.scrapAccessory || 0) / totalSentAccessory * 100).toFixed(1) : '0.0'}%
+                                    </span>
+                                    <span className="text-xs text-red-400">
+                                        {(batch.scrapAccessory || 0).toFixed(1)} <span className="text-[8px] opacity-80">اكسسوار</span>
+                                    </span>
+                                </div>
+                            )}
                           </div>
                         ) : (
                           <div className="text-slate-400 text-xs">يحسب عند اكتمال الاستلام</div>

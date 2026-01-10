@@ -16,3 +16,51 @@ input[type="number"]::-webkit-outer-spin-button {
 input[type="number"] {
   -moz-appearance: textfield;
 }
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.max-w-xxs {
+  max-width: 16rem;
+}
+
+@media (max-width: 640px) {
+  .mobile-card-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  .mobile-hidden {
+    display: none;
+  }
+}
+
+.card-view {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .table-view {
+    display: none;
+  }
+  .card-view {
+    display: block;
+  }
+}
+
+.card-view {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .table-view {
+    display: none;
+  }
+  .card-view {
+    display: block;
+  }
+}
