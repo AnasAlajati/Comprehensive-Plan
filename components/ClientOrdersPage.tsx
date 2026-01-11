@@ -57,9 +57,11 @@ import {
   Upload,
   Eye,
   Check,
+  Edit as EditIcon,
   AlertTriangle,
   Split,
-  CalendarRange
+  CalendarRange,
+  Truck
 } from 'lucide-react';
 
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
@@ -522,28 +524,48 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
 
   return (
     <div className="relative w-full h-full" ref={containerRef}>
-      <input
-        id={id}
-        type="text"
-        value={inputValue}
-        onChange={handleInputChange}
-        onFocus={() => {
-          setIsOpen(true);
-          if (onFocus) onFocus();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && filteredOptions.length > 0) {
-             handleSelect(filteredOptions[0]);
-          } else if (e.key === 'Enter' && onCreateNew && searchTerm) {
-             onCreateNew(searchTerm);
-             setIsOpen(false);
-          }
-          if (onKeyDown) onKeyDown(e);
-        }}
-        placeholder={placeholder}
-        className={className || "w-full h-full px-2 py-1 bg-transparent outline-none focus:bg-blue-50 text-center"}
-        autoComplete="off"
-      />
+      <div className="relative w-full h-full flex items-center">
+        <input
+            id={id}
+            type="text"
+            value={inputValue}
+            onChange={handleInputChange}
+            onFocus={() => {
+            setIsOpen(true);
+            if (onFocus) onFocus();
+            }}
+            onKeyDown={(e) => {
+            if (e.key === 'Enter' && filteredOptions.length > 0) {
+                handleSelect(filteredOptions[0]);
+            } else if (e.key === 'Enter' && onCreateNew && searchTerm) {
+                onCreateNew(searchTerm);
+                setIsOpen(false);
+            }
+            if (onKeyDown) onKeyDown(e);
+            }}
+            placeholder={placeholder}
+            className={className || "w-full h-full px-2 py-1 bg-transparent outline-none focus:bg-blue-50 text-center pr-6"} // Added pr-6
+            autoComplete="off"
+        />
+        {/* Edit Button - Visible only when a value is selected */}
+        {value && onCreateNew && (
+            <button
+                type="button"
+                onClick={(e) => {
+                    e.stopPropagation();
+                    // Open edit modal for the CURRENT fabric
+                    // Assuming onCreateNew handles opening the modal - usually for "New", but we can reuse for "Edit" 
+                    // if we pass the current name.
+                    onCreateNew(value); 
+                }}
+                className="absolute right-1 text-slate-400 hover:text-blue-600 p-0.5 rounded transition-colors"
+                title="Edit Fabric Details"
+                tabIndex={-1} // Prevent tabbing to it easily while typing
+            >
+                <EditIcon size={10} />
+            </button>
+        )}
+      </div>
       {isOpen && (searchTerm || filteredOptions.length > 0) && (
         <div className="fixed z-[9999] min-w-[200px] bg-white border border-slate-200 shadow-xl rounded-md mt-1 max-h-60 overflow-y-auto"
              style={{
@@ -627,6 +649,7 @@ const MemoizedOrderRow = React.memo(({
   userRole,
   userName,
   onOpenReceiveModal,
+  onOpenSentModal,
   onOpenSmartScheduler
 }: {
   row: OrderRow;
@@ -654,6 +677,7 @@ const MemoizedOrderRow = React.memo(({
   userRole?: 'admin' | 'editor' | 'viewer' | null;
   userName?: string;
   onOpenReceiveModal: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
+  onOpenSentModal: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
   onOpenSmartScheduler: (order: OrderRow) => void;
 }) => {
   const [showMachineDetails, setShowMachineDetails] = useState<{ capacity: number; batches: any[] } | null>(null);
@@ -1522,9 +1546,9 @@ const MemoizedOrderRow = React.memo(({
                         {!hasAnyPlan && displayRemaining <= 0 && <span className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded text-[10px] border border-slate-200 font-medium">Finished</span>}
                         {!hasAnyPlan && displayRemaining > 0 && <button onClick={() => onOpenCreatePlan(row)} className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] border border-amber-200 font-medium flex items-center gap-1">Not Planned <Plus size={10}/></button>}
                         
-                        {internalActive.map((m: string) => <span key={m} className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[10px] border border-emerald-200 font-medium">{m}</span>)}
+                        {internalActive.map((m: string, i: number) => <span key={`${m}-${i}`} className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[10px] border border-emerald-200 font-medium">{m}</span>)}
                         {directMachine && <span className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded text-[10px] border border-emerald-200 font-medium">{directMachine.name}</span>}
-                        {externalMatches.map((m: any) => <span key={m.factoryName} className="bg-cyan-100 text-cyan-700 px-2 py-0.5 rounded text-[10px] border border-cyan-200 font-medium">{m.factoryName}</span>)}
+                        {externalMatches.map((m: any, idx: number) => <span key={`${m.factoryName}-${idx}`} className="bg-cyan-100 text-cyan-700 px-2 py-0.5 rounded text-[10px] border border-cyan-200 font-medium">{m.factoryName}</span>)}
                     </>
                  )}
             </div>
@@ -1702,8 +1726,7 @@ const MemoizedOrderRow = React.memo(({
                     <th className="px-3 py-2 text-center w-20" title="Customer Demand">مطلوب</th>
                     <th className="px-3 py-2 text-center w-24" title="Vessel Capacity">ماكنة الصباغة</th>
                     <th className="px-3 py-2 text-center w-16">اكسسوار</th>
-                    <th className="px-3 py-2 text-center w-20" title="Raw Sent">مرسل خام</th>
-                    <th className="px-3 py-2 text-center w-20" title="Accessory Sent">مرسل اكسسوار</th>
+                    <th className="px-3 py-2 text-center w-20" title="Sent">مرسل</th>
                     <th className="px-3 py-2 text-center w-24" title="Click to add receive">مستلم</th>
                     <th className="px-3 py-2 text-center w-20">الحالة</th>
                     <th className="px-3 py-2 text-right">ملاحظات</th>
@@ -1940,45 +1963,41 @@ const MemoizedOrderRow = React.memo(({
                           title="Accessory Type"
                         />
                       </td>
-                      {/* مرسل خام - Raw Sent */}
-                      <td className="p-0">
-                        <input
-                          type="number"
-                          className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono font-medium text-blue-600"
-                          value={batch.quantitySentRaw ?? batch.quantitySent ?? ''}
-                          onChange={(e) => {
-                            const newPlan = [...(row.dyeingPlan || [])];
-                            const val = Number(e.target.value);
-                            newPlan[idx] = { ...batch, quantitySentRaw: val, quantitySent: val + (batch.quantitySentAccessory || 0) };
-                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
-                          }}
-                          placeholder="0"
-                          title="Raw Sent"
-                        />
-                      </td>
-                      {/* مرسل اكسسوار - Accessory Sent */}
-                      <td className="p-0">
-                        <input
-                          type="number"
-                          className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono font-medium text-purple-600"
-                          value={batch.quantitySentAccessory || ''}
-                          onChange={(e) => {
-                            const newPlan = [...(row.dyeingPlan || [])];
-                            const val = Number(e.target.value);
-                            newPlan[idx] = { ...batch, quantitySentAccessory: val, quantitySent: (batch.quantitySentRaw || 0) + val };
-                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
-                          }}
-                          placeholder="0"
-                          title="Accessory Sent"
-                        />
+                      {/* مرسل - Sent (Clickable for modal) */}
+                      <td className="p-0 relative">
+                        {(() => {
+                           const events = batch.sentEvents || [];
+                           const totalSent = events.reduce((s, e) => s + (e.quantity || 0), 0) + (batch.quantitySentRaw || batch.quantitySent || 0);
+                           
+                           return (
+                               <button
+                                  onClick={() => onOpenSentModal(row.id, idx, batch)}
+                                  className="w-full px-2 py-1.5 text-center bg-transparent hover:bg-blue-50 transition-colors group/sent"
+                                  title="Click to add/view sent items"
+                               >
+                                  <div className="flex flex-col items-center gap-0.5">
+                                      <span className="font-mono font-medium text-blue-600">
+                                          {totalSent > 0 ? totalSent : '-'}
+                                      </span>
+                                      {events.length > 0 && (
+                                          <span className="text-[8px] text-slate-400">
+                                              {events.length} شحنة
+                                          </span>
+                                      )}
+                                  </div>
+                                  <Plus size={10} className="absolute left-1 top-1 text-slate-300 group-hover/sent:text-blue-500 transition-colors" />
+                               </button>
+                           );
+                        })()}
                       </td>
                       {/* مستلم - Received (Clickable for modal) */}
                       <td className="p-0 relative">
                         {(() => {
                           const events = batch.receiveEvents || [];
+                          const sentEvents = batch.sentEvents || [];
                           const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
                           const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
-                          const totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
+                          const totalSent = sentEvents.reduce((s, e) => s + (e.quantity || 0), 0) + (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
                           const totalReceived = totalReceivedRaw + totalReceivedAccessory;
                           const remaining = totalSent - totalReceived;
                           
@@ -2011,9 +2030,10 @@ const MemoizedOrderRow = React.memo(({
                       <td className="p-0 text-center align-middle relative group/status">
                         {(() => {
                            const events = batch.receiveEvents || [];
+                           const sentEvents = batch.sentEvents || [];
                            const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
                            const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
-                           const totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
+                           const totalSent = sentEvents.reduce((s, e) => s + (e.quantity || 0), 0) + (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
                            const totalReceived = totalReceivedRaw + totalReceivedAccessory;
                            const percentage = totalSent > 0 ? (totalReceived / totalSent) : 0;
 
@@ -2407,6 +2427,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
   const [fabricFormModal, setFabricFormModal] = useState<{
     isOpen: boolean;
     initialName?: string;
+    existingId?: string; // Track ID for editing
   }>({ isOpen: false });
 
   // Receive Modal State
@@ -2422,6 +2443,21 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
     quantityAccessory: number;
     notes: string;
   }>({ date: new Date().toISOString().split('T')[0], quantityRaw: 0, quantityAccessory: 0, notes: '' });
+
+  // Sent Modal State
+  const [sentModal, setSentModal] = useState<{
+    isOpen: boolean;
+    orderId: string;
+    batchIdx: number;
+    batch: DyeingBatch | null;
+  }>({ isOpen: false, orderId: '', batchIdx: -1, batch: null });
+  const [newSent, setNewSent] = useState<{
+    date: string;
+    quantity: number;
+    accessorySent: number;
+    notes: string;
+  }>({ date: new Date().toISOString().split('T')[0], quantity: 0, accessorySent: 0, notes: '' });
+
 
   // Smart Scheduler Modal (Unified Internal + External Planning)
   const [smartSchedulerModal, setSmartSchedulerModal] = useState<{
@@ -3429,20 +3465,45 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
   };
 
   const handleCreateFabric = async (name: string) => {
-    setFabricFormModal({ isOpen: true, initialName: name });
+    // Check if fabric exists to enable edit mode
+    const existing = fabrics.find(f => f.name === name);
+    setFabricFormModal({ 
+        isOpen: true, 
+        initialName: name,
+        existingId: existing?.id
+    });
   };
 
   const handleSaveNewFabric = async (fabricData: Partial<FabricDefinition>) => {
     try {
-      await DataService.addFabric({
-        ...fabricData,
-        fabricId: crypto.randomUUID(),
-        type: 'General'
-      } as FabricDefinition);
+      // Sanitize input to remove undefined fields which Firestore hates
+      const cleanData = JSON.parse(JSON.stringify(fabricData));
+      
+      // Try to find ID if missing, to prevent duplicates (Upsert logic)
+      let targetId = fabricData.id;
+      if (!targetId && fabricData.name) {
+         const existing = fabrics.find(f => f.name.toLowerCase().trim() === fabricData.name?.toLowerCase().trim());
+         if (existing) targetId = existing.id;
+      }
+
+      if (targetId) {
+         // Update existing
+         delete cleanData.id; // Remove ID from payload if it's in the document body logic
+         await DataService.updateFabric(targetId, cleanData);
+      } else {
+         // Create new - Remove undefined ID if it exists
+         if (cleanData.id === undefined) delete cleanData.id;
+         
+         await DataService.addFabric({
+            ...cleanData,
+            fabricId: crypto.randomUUID(),
+            type: 'General'
+         } as FabricDefinition);
+      }
       setFabrics(await DataService.getFabrics());
       setFabricFormModal({ isOpen: false });
     } catch (err) {
-      console.error("Failed to create fabric", err);
+      console.error("Failed to save fabric", err);
     }
   };
 
@@ -4131,6 +4192,10 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                                 setReceiveModal({ isOpen: true, orderId, batchIdx, batch });
                                 setNewReceive({ date: new Date().toISOString().split('T')[0], quantityRaw: 0, quantityAccessory: 0, notes: '' });
                               }}
+                              onOpenSentModal={(orderId, batchIdx, batch) => {
+                                setSentModal({ isOpen: true, orderId, batchIdx, batch });
+                                setNewSent({ date: new Date().toISOString().split('T')[0], quantity: 0, notes: '' });
+                              }}
                               onOpenSmartScheduler={(order) => setSmartSchedulerModal({
                                 isOpen: true,
                                 order,
@@ -4586,7 +4651,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-slate-500 mb-1">مستلم خام (kg)</label>
+                    <label className="block text-xs text-slate-500 mb-1">مستلم مصبوغ (kg)</label>
                     <input
                       type="number"
                       value={newReceive.quantityRaw || ''}
@@ -4699,6 +4764,189 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
           </div>
         )}
 
+        {/* Sent Modal */}
+        {sentModal.isOpen && sentModal.batch && (
+          <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4" onClick={() => setSentModal({ isOpen: false, orderId: '', batchIdx: -1, batch: null })}>
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+              {/* Header */}
+              <div className="p-4 border-b border-slate-200 bg-gradient-to-r from-blue-50 to-slate-50">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-blue-100 p-2 rounded-lg text-blue-600">
+                      <Truck size={20} />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-800 text-lg">سجل الارسال</h3>
+                      <div className="text-sm text-slate-500">
+                        {sentModal.batch.color} • {sentModal.batch.dyehouse}
+                      </div>
+                    </div>
+                  </div>
+                  <button onClick={() => setSentModal({ isOpen: false, orderId: '', batchIdx: -1, batch: null })} className="p-2 hover:bg-slate-100 rounded-full">
+                    <X size={20} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Summary Stats */}
+              <div className="p-4 bg-slate-50 border-b border-slate-200">
+                {(() => {
+                  const batch = sentModal.batch;
+                  const events = batch?.sentEvents || [];
+                  const totalSent = events.reduce((s, e) => s + (e.quantity || 0), 0) + (batch?.quantitySentRaw || batch?.quantitySent || 0); // Include legacy single value
+                  
+                  return (
+                    <div className="grid grid-cols-1 gap-4 text-sm" dir="rtl">
+                      <div className="bg-white rounded-lg p-3 border border-slate-200 flex items-center justify-between">
+                        <div>
+                          <div className="text-slate-500 mb-1">اجمالي المرسل للكجم</div>
+                          <div className="text-2xl font-bold text-blue-600">{totalSent} <span className="text-sm font-normal text-slate-400">kg</span></div>
+                        </div>
+                        <div className="text-right text-xs text-slate-400">
+                           {events.length} شحنات مسجلة
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Sent Events List */}
+              <div className="p-4 max-h-[300px] overflow-y-auto" dir="rtl">
+                <div className="text-sm font-semibold text-slate-600 mb-3">سجل الشحنات المرسلة</div>
+                {(sentModal.batch?.sentEvents || []).length === 0 && (!sentModal.batch?.quantitySentRaw && !sentModal.batch?.quantitySent) ? (
+                  <div className="text-center text-slate-400 py-8">لا توجد شحنات مرسلة مسجلة بعد</div>
+                ) : (
+                  <div className="space-y-2">
+                    {/* Legacy Sent as first event if exists */}
+                    {(sentModal.batch?.quantitySentRaw || sentModal.batch?.quantitySent) && (
+                         <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+                            <div className="flex items-center gap-3">
+                                <div className="text-slate-400 text-xs">تاريخ {sentModal.batch.dateSent || 'غير محدد'}</div>
+                                <div className="font-medium text-blue-600">
+                                    <span dir="ltr">{sentModal.batch.quantitySentRaw || sentModal.batch.quantitySent} kg</span> <span className="text-xs text-slate-500">(سجل قديم)</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Sent events */}
+                    {(sentModal.batch?.sentEvents || []).map((event, i) => (
+                      <div key={event.id} className="flex items-center justify-between p-3 bg-white rounded-lg border border-slate-200 hover:bg-slate-50">
+                        <div className="flex items-center gap-4">
+                          <div className="text-slate-500 text-sm">{new Date(event.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</div>
+                          <div className="font-bold text-blue-600" dir="ltr">{event.quantity} kg</div>
+                          {event.accessorySent ? <div className="text-amber-600 text-xs font-medium" dir="ltr">+ {event.accessorySent} kg (acc)</div> : null}
+                          {event.notes && <span className="text-slate-400 text-xs">({event.notes})</span>}
+                        </div>
+                        <button
+                          onClick={() => {
+                            const currentOrder = flatOrders.find(o => o.id === sentModal.orderId);
+                            if (!currentOrder) return;
+                            const newPlan = [...(currentOrder.dyeingPlan || [])];
+                            const batch = newPlan[sentModal.batchIdx];
+                            if (batch) {
+                              batch.sentEvents = (batch.sentEvents || []).filter((_, idx) => idx !== i);
+                              handleUpdateOrder(sentModal.orderId, { dyeingPlan: newPlan });
+                              setSentModal({ ...sentModal, batch: batch });
+                            }
+                          }}
+                          className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Add New Sent Form */}
+              <div className="p-4 border-t border-slate-200 bg-slate-50" dir="rtl">
+                <div className="text-sm font-semibold text-slate-600 mb-3">اضافة شحنة جديدة</div>
+                <div className="grid grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">التاريخ</label>
+                    <input
+                      type="date"
+                      value={newSent.date}
+                      onChange={(e) => setNewSent({ ...newSent, date: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">الكمية المرسلة (kg)</label>
+                    <input
+                      type="number"
+                      value={newSent.quantity || ''}
+                      onChange={(e) => setNewSent({ ...newSent, quantity: Number(e.target.value) })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">ارسال اكسسوار (kg)</label>
+                    <input
+                      type="number"
+                      value={newSent.accessorySent || ''}
+                      onChange={(e) => setNewSent({ ...newSent, accessorySent: Number(e.target.value) })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">ملاحظات</label>
+                    <input
+                      type="text"
+                      value={newSent.notes}
+                      onChange={(e) => setNewSent({ ...newSent, notes: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                      placeholder="اختياري"
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center justify-end mt-4">
+                  <button
+                    onClick={() => {
+                      const currentOrder = flatOrders.find(o => o.id === sentModal.orderId);
+                      if (!currentOrder) return;
+                      const newPlan = [...(currentOrder.dyeingPlan || [])];
+                      const batch = newPlan[sentModal.batchIdx];
+                      if (batch) {
+                        const events = [...(batch.sentEvents || []), {
+                          id: `sent-${Date.now()}`,
+                          date: newSent.date,
+                          quantity: newSent.quantity,
+                          accessorySent: newSent.accessorySent,
+                          sentBy: userName || auth.currentUser?.email || 'Unknown',
+                          notes: newSent.notes
+                        }];
+                        
+                        // Update status if needed
+                        if (batch.status === 'draft' || batch.status === 'pending') {
+                            batch.status = 'sent';
+                            if (!batch.dateSent) batch.dateSent = newSent.date;
+                        }
+                        
+                        batch.sentEvents = events;
+                        
+                        handleUpdateOrder(sentModal.orderId, { dyeingPlan: newPlan });
+                        setSentModal({ ...sentModal, batch: { ...batch } });
+                        setNewSent({ date: new Date().toISOString().split('T')[0], quantity: 0, accessorySent: 0, notes: '' });
+                      }
+                    }}
+                    disabled={!newSent.quantity && !newSent.accessorySent}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-medium rounded-lg flex items-center gap-2"
+                  >
+                    <Plus size={16} />
+                    اضافة ارسال
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Create Plan Modal */}
         {createPlanModal.isOpen && createPlanModal.order && (
           <CreatePlanModal
@@ -4766,7 +5014,13 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
           isOpen={fabricFormModal.isOpen}
           onClose={() => setFabricFormModal({ isOpen: false })}
           onSave={handleSaveNewFabric}
-          initialData={fabricFormModal.initialName ? { name: fabricFormModal.initialName } as any : null}
+          initialData={
+              fabricFormModal.existingId 
+                ? fabrics.find(f => f.id === fabricFormModal.existingId) || null 
+                : fabricFormModal.initialName 
+                    ? { name: fabricFormModal.initialName } as any 
+                    : null
+          }
           machines={machines}
         />
 

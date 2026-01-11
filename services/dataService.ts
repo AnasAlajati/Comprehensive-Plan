@@ -241,7 +241,7 @@ export const DataService = {
   },
 
   async updateFabric(fabricId: string, updates: Partial<Fabric>): Promise<void> {
-    const docRef = doc(db, 'fabrics', fabricId);
+    const docRef = doc(db, 'FabricSS', fabricId);
     await setDoc(docRef, { ...updates, lastUpdated: Timestamp.now() }, { merge: true });
   },
 

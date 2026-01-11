@@ -178,6 +178,15 @@ export interface ReceiveEvent {
   notes?: string;
 }
 
+export interface SentEvent {
+  id: string;
+  date: string;                // Date sent
+  quantity: number;            // مرسل
+  accessorySent?: number;      // by kg
+  sentBy?: string;             // Who recorded the sent
+  notes?: string;
+}
+
 export interface DyeingBatch {
   id: string;
   color: string;
@@ -195,6 +204,8 @@ export interface DyeingBatch {
   quantitySentRaw?: number;     // مرسل خام
   quantitySentAccessory?: number; // مرسل اكسسوار
   accessoryType?: string;       // نوع الاكسسوار
+  sentEvents?: SentEvent[];     // NEW: Multiple sent events
+
   
   // Receive events array (multiple receives over time)
   receiveEvents?: ReceiveEvent[];

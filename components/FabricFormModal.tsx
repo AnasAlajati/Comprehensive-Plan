@@ -81,7 +81,11 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
     if (!modalForm.name) return;
     setSaving(true);
     try {
-      await onSave(modalForm);
+      // Pass ID if editing
+      await onSave({
+        ...modalForm,
+        id: initialData?.id
+      });
       onClose();
     } catch (error) {
       console.error("Error saving fabric:", error);
@@ -346,14 +350,16 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
               <div className="max-h-40 overflow-y-auto p-1 space-y-1">
                  {machines
                    .filter(m => (m.name || '').toLowerCase().includes(machineSearch.toLowerCase()))
-                   .map(m => (
-                     <label key={m.id} className="flex items-center gap-2 p-2 hover:bg-slate-50 rounded cursor-pointer transition-colors">
+                   .map((m, idx) => (
+                     <label key={`${m.id}-${idx}`} className="flex items-center gap-2 p-2 hover:bg-slate-50 rounded cursor-pointer transition-colors">
                        <input 
                          type="checkbox"
                          checked={modalForm.workCenters.includes(m.name)}
                          onChange={(e) => {
                            if (e.target.checked) {
-                             setModalForm(prev => ({...prev, workCenters: [...prev.workCenters, m.name]}));
+                             if (!modalForm.workCenters.includes(m.name)) {
+                                setModalForm(prev => ({...prev, workCenters: [...prev.workCenters, m.name]}));
+                             }
                            } else {
                              setModalForm(prev => ({...prev, workCenters: prev.workCenters.filter(w => w !== m.name)}));
                            }
@@ -372,8 +378,8 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
             
             {/* Selected Chips */}
             <div className="flex flex-wrap gap-1 mt-2 min-h-[24px]">
-              {modalForm.workCenters.map(wc => (
-                <span key={wc} className="px-2 py-1 bg-blue-50 text-blue-700 rounded text-[10px] font-bold border border-blue-100 flex items-center gap-1 animate-in fade-in zoom-in duration-200">
+              {Array.from(new Set(modalForm.workCenters)).map((wc, idx) => (
+                <span key={`${wc}-${idx}`} className="px-2 py-1 bg-blue-50 text-blue-700 rounded text-[10px] font-bold border border-blue-100 flex items-center gap-1 animate-in fade-in zoom-in duration-200">
                   {wc}
                   <button onClick={() => setModalForm(prev => ({...prev, workCenters: prev.workCenters.filter(w => w !== wc)}))} className="hover:text-red-500 transition-colors"><X size={12}/></button>
                 </span>
@@ -476,7 +482,7 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
 
                   <div className="space-y-2">
                     {variant.yarns.map((yarn, yIdx) => (
-                      <div key={yIdx} className="flex gap-2 items-center">
+                      <div key={`variant-${variant.id || vIdx}-yarn-${yIdx}`} className="flex gap-2 items-center">
                         <input
                           type="text"
                           placeholder="Yarn Name"

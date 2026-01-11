@@ -3,7 +3,6 @@ import { writeBatch, doc, getDoc, onSnapshot, collection } from 'firebase/firest
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
 import { parseFabricName } from '../services/data';
-import { TelegramService } from '../services/telegramService';
 import { PlanItem, MachineStatus, CustomerOrder, MachineRow } from '../types';
 import { LinkOrderModal } from './LinkOrderModal';
 import { toJpeg } from 'html-to-image';
@@ -14,6 +13,7 @@ import { ExternalProductionSheet } from './ExternalProductionSheet'; // New Comp
 import { FabricFormModal } from './FabricFormModal';
 import { FabricDirectoryModal } from './FabricDirectoryModal';
 import { MachineHistoryModal } from './MachineHistoryModal';
+import { DailySummaryModal } from './DailySummaryModal';
 
 // Navigable fields across the whole row (including read-only) for smooth Excel-like movement
 const NAVIGABLE_FIELDS: (keyof any)[] = [
@@ -353,6 +353,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [lastValidDate, setLastValidDate] = useState<string>('');
   const [isFabricModalOpen, setIsFabricModalOpen] = useState(false);
   const [isFabricDirectoryOpen, setIsFabricDirectoryOpen] = useState(false);
+  const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
   const [historyModalOpen, setHistoryModalOpen] = useState<{
     isOpen: boolean;
     machineId: string;
@@ -530,94 +531,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     reader.readAsText(file);
   };
 
-  const handleSendReport = async () => {
-    if (isReportSent) return; // Prevent double send if already sent
-
-    if (!activeDay) {
-      alert("⚠️ Please mark an Active Day first before sending the report.");
-      return;
-    }
-
-    if (selectedDate !== activeDay) {
-      if (!window.confirm(`⚠️ You are viewing ${selectedDate}, but the Active Day is ${activeDay}.\n\nDo you want to send the report for ${selectedDate}?`)) {
-        return;
-      }
-    }
-
-    setIsSendingReport(true);
-    try {
-      const lowStockMachines = machines.filter(m => 
-        m.status === 'Working' && 
-        m.remainingMfg < 100 && 
-        m.remainingMfg > 0
-      );
-
-      const finishedMachines = machines.filter(m => 
-        (Number(m.remainingMfg) || 0) === 0 && 
-        (Number(m.dayProduction) || 0) > 0
-      );
-
-      const date = new Date().toLocaleDateString('en-GB');
-      let message = `📅 <b>Daily Report: ${date}</b>\n\n`;
-
-      // Section 1: Finished Machines
-      if (finishedMachines.length > 0) {
-        message += `🏁 <b>FINISHED PRODUCTION</b>\n`;
-        finishedMachines.forEach((m) => {
-           const fabricName = m.material || m.fabric || 'Unknown';
-           const { shortName } = parseFabricName(fabricName);
-           
-           message += `\n🔹 <b>${m.machineName}</b> (${m.brand || ''})\n`;
-           message += `📦 <b>Done:</b> ${shortName} (${m.client || '-'})\n`;
-           
-           const hasPlans = m.futurePlans && m.futurePlans.length > 0;
-           if (hasPlans) {
-             const nextPlan = m.futurePlans[0];
-             const { shortName: nextFabric } = parseFabricName(nextPlan.fabric);
-             message += `📅 <b>Next:</b> ${nextFabric} (${nextPlan.client})\n`;
-           } else {
-             message += `🛑 <b>Next:</b> No Plan!\n`;
-           }
-        });
-        message += `\n`;
-      }
-
-      // Section 2: Low Stock
-      if (lowStockMachines.length > 0) {
-        message += `⚠️ <b>LOW STOCK ALERTS</b>\n`;
-        
-        lowStockMachines.forEach((m) => {
-          message += `\n🔸 <b>${m.machineName}</b> (${m.brand || ''})\n`;
-          message += `📉 <b>Rem:</b> ${m.remainingMfg}kg\n`;
-          
-          const hasPlans = m.futurePlans && m.futurePlans.length > 0;
-          if (hasPlans) {
-            const nextPlan = m.futurePlans[0];
-            const { shortName: nextFabric } = parseFabricName(nextPlan.fabric);
-            message += `📅 <b>Next:</b> ${nextFabric} (${nextPlan.client})\n`;
-          } else {
-            message += `🛑 <b>Next:</b> No Plan!\n`;
-          }
-        });
-        message += `\n`;
-      }
-
-      if (lowStockMachines.length === 0 && finishedMachines.length === 0) {
-        message += `✅ <b>All Good!</b>\nNo low stock alerts or finished machines.`;
-      }
-
-      await TelegramService.send(message);
-      setIsReportSent(true);
-      // alert("Report sent to Telegram successfully!"); // Removed alert to be less intrusive
-
-    } catch (error) {
-      console.error("Failed to send report:", error);
-      alert("Failed to send report.");
-    } finally {
-      setIsSendingReport(false);
-    }
-  };
-  
   // Filter State
   const [searchTerm, setSearchTerm] = useState('');
   const [filterClient, setFilterClient] = useState('');
@@ -2710,9 +2623,12 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
                   <button
                     onClick={handleExportBackup}
-                    className="p-2 rounded-lg text-slate-600 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 transition-all"
+                    className="p-2 rounded-lg text-slate-600 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 transition-all data-[offline=true]:bg-amber-100 data-[offline=true]:text-amber-800 data-[offline=true]:border-amber-300 data-[offline=true]:animate-pulse data-[offline=true]:shadow-lg"
+                    data-offline={!navigator.onLine}
+                    title={!navigator.onLine ? "OFFLINE: Download backup now to save changes!" : "Export JSON Backup"}
                   >
                     <Download size={18} />
+                    {!navigator.onLine && <span className="ml-1 text-xs font-bold sm:inline hidden">SAVE</span>}
                   </button>
 
                   <label className="p-2 rounded-lg text-slate-600 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 transition-all cursor-pointer" title="Import JSON">
@@ -2738,25 +2654,12 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
               <div className="h-8 w-px bg-slate-200 mx-1 hidden sm:block"></div>
 
               <button
-                onClick={handleSendReport}
-                disabled={isSendingReport || isReportSent}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm border ${
-                  isReportSent
-                    ? 'bg-emerald-100 text-emerald-700 border-emerald-300 cursor-default'
-                    : isSendingReport 
-                      ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
-                      : 'bg-slate-800 text-white border-slate-800 hover:bg-slate-700 hover:border-slate-700'
-                }`}
+                onClick={() => setIsSummaryModalOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm border bg-slate-800 text-white border-slate-800 hover:bg-slate-700 hover:border-slate-700"
               >
-                {isReportSent ? (
-                  <CheckCircle className="w-4 h-4" />
-                ) : isSendingReport ? (
-                  <Send className="w-4 h-4 animate-pulse" />
-                ) : (
-                  <Send className="w-4 h-4" />
-                )}
-                <span className="hidden sm:inline">{isReportSent ? 'Finished' : isSendingReport ? 'Sending...' : 'Finish'}</span>
-                <span className="sm:hidden">{isReportSent ? 'Done' : 'Finish'}</span>
+                <Book className="w-4 h-4" />
+                <span className="hidden sm:inline">Daily Summary</span>
+                <span className="sm:hidden">Summary</span>
               </button>
             </div>
           </div>
@@ -3102,39 +3005,18 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             </div>
                           )}
                           
-                          {/* Link Button / Indicator */}
-                          <div className="absolute top-0 right-0 h-full flex items-center pr-1 pointer-events-auto z-10">
-                            {log.orderReference ? (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setLinkModalOpen({ 
-                                    isOpen: true, 
-                                    machine: { ...log, id: log.machineId, material: log.fabric } as any 
-                                  });
-                                }}
-                                className="flex items-center gap-1 text-[9px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded-full border border-blue-200 hover:bg-blue-100 transition-all font-medium shadow-sm"
-                                title={`Linked to Order: ${log.orderReference}`}
-                              >
-                                <Link size={10} className="text-blue-500" />
-                                {log.orderReference}
-                              </button>
-                            ) : (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setLinkModalOpen({ 
-                                    isOpen: true, 
-                                    machine: { ...log, id: log.machineId, material: log.fabric } as any 
-                                  });
-                                }}
-                                className="opacity-0 group-hover:opacity-100 transition-all duration-200 text-slate-300 hover:text-blue-500 hover:bg-blue-50 p-1 rounded-full"
-                                title="Link to Order"
-                              >
-                                <Link size={14} />
-                              </button>
-                            )}
-                          </div>
+                        {/* Link Indicator (Read-only) */}
+                        <div className="absolute top-0 right-0 h-full flex items-center pr-1 pointer-events-auto z-10">
+                          {log.orderReference && (
+                            <div
+                              className="flex items-center gap-1 text-[9px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded-full border border-blue-200 transition-all font-medium shadow-sm cursor-default"
+                              title={`Linked to Order: ${log.orderReference}`}
+                            >
+                              <Link size={10} className="text-blue-500" />
+                              {log.orderReference}
+                            </div>
+                          )}
+                        </div>
                         </td>
 
                         {/* Remaining */}
@@ -4578,9 +4460,15 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       {/* Machine History Modal */}
       <MachineHistoryModal
         isOpen={historyModalOpen.isOpen}
-        onClose={() => setHistoryModalOpen({ ...historyModalOpen, isOpen: false })}
+        onClose={() => setHistoryModalOpen(prev => ({ ...prev, isOpen: false }))}
         machineId={historyModalOpen.machineId}
         machineName={historyModalOpen.machineName}
+      />
+
+      <DailySummaryModal 
+        isOpen={isSummaryModalOpen}
+        onClose={() => setIsSummaryModalOpen(false)}
+        machines={machines}
       />
 
       {/* PDF Generation Overlay */}
