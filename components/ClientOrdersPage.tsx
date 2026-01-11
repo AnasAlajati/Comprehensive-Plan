@@ -21,9 +21,8 @@ import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnIn
 import { FabricDetailsModal } from './FabricDetailsModal';
 import { FabricFormModal } from './FabricFormModal';
 import { CreatePlanModal } from './CreatePlanModal';
-import { FabricProductionOrderModal } from './FabricProductionOrderModal';
 import { OrderProductionHistoryModal } from './OrderProductionHistoryModal';
-import { SmartSchedulerModal } from './SmartSchedulerModal';
+import { RemainingClientWork } from './RemainingClientWork';
 import { 
   Plus, 
   Trash2, 
@@ -61,10 +60,12 @@ import {
   AlertTriangle,
   Split,
   CalendarRange,
-  Truck
+  Truck,
+  LayoutList
 } from 'lucide-react';
 
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
+const ALL_REMAINING_WORK_ID = 'ALL_REMAINING_WORK';
 const ALL_YARNS_ID = 'ALL_YARNS';
 
 // Global CSS to hide number input spinners
@@ -1138,49 +1139,6 @@ const MemoizedOrderRow = React.memo(({
             <div className="flex items-center justify-between gap-2">
               <div className="flex flex-col gap-1 flex-1 min-w-0">
                 {(() => {
-                  // 1. Internal Active & Planned from statsMap
-                  // Filter out "(Ext)" entries from active list as they are handled by externalMatches
-                  const rawActive = statusInfo?.active || [];
-                  const internalActive = rawActive.filter((m: string) => !m.endsWith('(Ext)'));
-                  const internalPlanned = statusInfo?.planned || [];
-
-                  // 2. External Matches
-                  const externalMatches: { factoryName: string; status: string }[] = [];
-                  const reference = `${selectedCustomerName}-${row.material}`;
-                  
-                  if (externalFactories && externalFactories.length > 0) {
-                    for (const factory of externalFactories) {
-                      if (factory.plans && Array.isArray(factory.plans)) {
-                        for (const plan of factory.plans) {
-                           const isClientMatch = plan.client && plan.client.trim().toLowerCase() === selectedCustomerName.toLowerCase();
-                           const isFabricMatch = plan.fabric && row.material && plan.fabric.trim().toLowerCase() === row.material.toLowerCase();
-                           
-                           const constructedRef = `${plan.client}-${plan.fabric ? plan.fabric.split(/[\s-]+/).map((w: string) => w[0]).join('').toUpperCase() : ''}`;
-                           const isRefMatch = (plan.orderReference && plan.orderReference.toLowerCase() === reference.toLowerCase()) ||
-                                              (constructedRef.toLowerCase() === reference.toLowerCase());
-
-                           if ((isClientMatch && isFabricMatch) || isRefMatch) {
-                              externalMatches.push({
-                                factoryName: factory.name,
-                                status: plan.status === 'ACTIVE' ? 'Active' : 'Planned'
-                              });
-                           }
-                        }
-                      }
-                    }
-                  }
-
-                  // 3. Direct Machine Assignment (Legacy/Fallback)
-                  let directMachine = null;
-                  if (internalActive.length === 0 && internalPlanned.length === 0 && row.machine) {
-                     const m = machines.find(m => m.name === row.machine);
-                     if (m) {
-                        directMachine = m;
-                     }
-                  }
-
-                  const hasAnyPlan = internalActive.length > 0 || internalPlanned.length > 0 || externalMatches.length > 0 || directMachine;
-
                   if (!hasAnyPlan) {
                      if ((displayRemaining || 0) <= 0) {
                         return (
@@ -1329,6 +1287,16 @@ const MemoizedOrderRow = React.memo(({
               >
                 <Search className="w-4 h-4" />
               </button>
+              
+              {hasAnyPlan && (
+                  <button
+                    onClick={() => onOpenCreatePlan(row)}
+                    className="p-1.5 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded-md transition-all flex-shrink-0"
+                    title="Manage Planning Hub"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                  </button>
+              )}
               
               <button
                 onClick={() => {
@@ -2302,6 +2270,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
   const [showYarnRequirements, setShowYarnRequirements] = useState(false);
   const [selectedYarnDetails, setSelectedYarnDetails] = useState<any>(null);
   const [showDyehouse, setShowDyehouse] = useState(false);
+  // const [showRemainingWork, setShowRemainingWork] = useState(false); // Removed
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
   const [externalFactories, setExternalFactories] = useState<any[]>([]);
   
@@ -2492,7 +2461,11 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
 
     // 2. All Orders (Sub-collections) - Optimized for Global View
     const unsubOrders = onSnapshot(query(collectionGroup(db, 'orders')), (snapshot) => {
-      const orders = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as OrderRow));
+      const orders = snapshot.docs.map(d => ({ 
+        id: d.id, 
+        ...d.data(),
+        customerId: d.ref.parent.parent?.id 
+      } as OrderRow));
       setFlatOrders(orders);
     });
 
@@ -3394,6 +3367,9 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
   const handlePlanSearch = (clientName: string, fabricName: string) => {
     const reference = `${clientName}-${fabricName}`;
     const results: { machineName: string; type: 'ACTIVE' | 'PLANNED'; details: string; date?: string }[] = [];
+    const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+    const targetClient = normalize(clientName);
+    const targetFabric = normalize(fabricName);
   
     // 1. Internal Machines
     machines.forEach(machine => {
@@ -3401,7 +3377,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
       const activeLog = machine.dailyLogs?.find(l => l.date === activeDay);
       if (activeLog) {
          // Check match by explicit reference OR by client/fabric combination
-         const isMatch = (activeLog.client === clientName && activeLog.fabric === fabricName) || 
+         const isMatch = (normalize(activeLog.client) === targetClient && normalize(activeLog.fabric) === targetFabric) || 
                          (activeLog.orderReference === reference);
          
          if (isMatch) {
@@ -3418,7 +3394,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
       if (machine.futurePlans) {
         machine.futurePlans.forEach(plan => {
            // Check if plan matches
-           if (plan.client === clientName && plan.fabric === fabricName) {
+           if (normalize(plan.client || '') === targetClient && normalize(plan.fabric || '') === targetFabric) {
               results.push({
                 machineName: machine.name,
                 type: 'PLANNED',
@@ -3435,8 +3411,9 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
       if (factory.plans && Array.isArray(factory.plans)) {
         factory.plans.forEach((plan: any) => {
            // Robust matching for external plans
-           const isClientMatch = plan.client && plan.client.trim() === clientName;
-           const isFabricMatch = plan.fabric && plan.fabric.trim() === fabricName;
+           const isClientMatch = normalize(plan.client) === targetClient;
+           const isFabricMatch = normalize(plan.fabric) === targetFabric;
+           
            // Also check constructed reference if explicit one is missing
            const constructedRef = `${plan.client}-${plan.fabric ? plan.fabric.split(/[\s-]+/).map((w: string) => w[0]).join('').toUpperCase() : ''}`;
            const isRefMatch = (plan.orderReference && plan.orderReference.toLowerCase() === reference.toLowerCase()) ||
@@ -3759,6 +3736,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                         className="pl-10 pr-10 py-3 bg-white border border-slate-300 text-slate-700 text-base font-semibold rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm transition-all cursor-pointer appearance-none hover:border-indigo-300"
                     >
                         <option value={ALL_CLIENTS_ID} className="font-bold text-blue-600">All Clients Overview</option>
+                        <option value={ALL_REMAINING_WORK_ID} className="font-bold text-amber-600">Remaining Client Work</option>
                         <option value={ALL_YARNS_ID} className="font-bold text-purple-600">All Yarn Requirements</option>
                         <option disabled value="">Select a client...</option>
                         {customers.map(c => (
@@ -3820,7 +3798,10 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                     onClick={() => {
                         const newState = !showYarnRequirements;
                         setShowYarnRequirements(newState);
-                        if (newState) setShowDyehouse(false);
+                        if (newState) {
+                            setShowDyehouse(false);
+                            // setShowRemainingWork(false); // Removed state
+                        }
                     }}
                     className={`flex items-center gap-2 px-3 py-1.5 border text-xs font-medium rounded-md shadow-sm transition-all whitespace-nowrap ${
                         showYarnRequirements 
@@ -3836,7 +3817,10 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                     onClick={() => {
                         const newState = !showDyehouse;
                         setShowDyehouse(newState);
-                        if (newState) setShowYarnRequirements(false);
+                        if (newState) {
+                            setShowYarnRequirements(false);
+                            // setShowRemainingWork(false);
+                        }
                     }}
                     className={`flex items-center gap-2 px-3 py-1.5 border text-xs font-medium rounded-md shadow-sm transition-all whitespace-nowrap ${
                         showDyehouse 
@@ -3847,6 +3831,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                     <Droplets className="w-3.5 h-3.5" />
                     Dyehouse Info
                 </button>
+
+
 
                 {/* Machine Filter */}
                 {showDyehouse && (
@@ -3997,6 +3983,15 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                 </table>
              </div>
           </div>
+        ) : selectedCustomerId === ALL_REMAINING_WORK_ID ? (
+           <RemainingClientWork 
+               orders={flatOrders} 
+               machines={machines}
+               externalFactories={externalFactories}
+               customers={rawCustomers}
+               activeDay={activeDay}
+               onClose={() => setSelectedCustomerId(ALL_CLIENTS_ID)}
+           />
         ) : selectedCustomerId === ALL_YARNS_ID ? (
           <div className="flex-1 overflow-auto p-6 bg-slate-50">
              <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -4954,6 +4949,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
             onClose={() => setCreatePlanModal({ ...createPlanModal, isOpen: false })}
             order={createPlanModal.order}
             customerName={createPlanModal.customerName}
+            machines={machines}
+            externalFactories={externalFactories}
           />
         )}
 

@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, Calendar, Factory, AlertCircle, Loader2, History, TrendingDown, AlertTriangle, PauseCircle, CheckCircle2, Bug } from 'lucide-react';
+import { X, Calendar, Factory, AlertCircle, Loader2, History, TrendingDown, AlertTriangle, PauseCircle, CheckCircle2, Bug, Globe } from 'lucide-react';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../services/firebase';
 import { OrderRow, MachineSS } from '../types';
 
 interface OrderProductionHistoryModalProps {
@@ -18,6 +20,7 @@ interface ProductionLog {
   remaining: number; // NEW: Remaining quantity for that day
   scrap: number;
   reason?: string;
+  isExternal?: boolean; // NEW: Track if external
 }
 
 interface Insight {
@@ -67,7 +70,7 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
       const targetClient = normalize(clientName);
       const targetFabric = normalize(order.material);
       
-      // Track what we find for debugging
+      // 1. Internal Logs
       const fabricFoundOnClients = new Set<string>();
       const fabricFoundOnMachines = new Set<string>();
       let totalLogsWithFabric = 0;
@@ -97,13 +100,45 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
                       dayProduction: Number(log.dayProduction) || 0,
                       remaining: Number(log.remainingMfg) || 0, // Capture remaining
                       scrap: Number(log.scrap) || 0,
-                      reason: log.note || ''
+                      reason: log.note || '',
+                      isExternal: false
                   });
               }
           });
       });
 
-      debug.push(`Found ${logsData.length} matching logs.`);
+      // 2. External Production Logs
+      try {
+        const extDocs = await getDocs(query(
+            collection(db, 'ExternalProduction'),
+            where('client', '==', clientName), 
+            // Note: If you have issues with strict equality, you might need to fetch more and filter.
+            // For now assuming client names match exactly as they usually come from dropdowns.
+        ));
+
+        extDocs.forEach(doc => {
+            const data = doc.data();
+            // Safety check for fabric
+            if (normalize(data.fabric) === targetFabric) {
+                logsData.push({
+                    id: doc.id,
+                    date: data.date,
+                    machineName: data.factory || 'External',
+                    dayProduction: Number(data.receivedQty) || 0,
+                    remaining: Number(data.remainingQty) || 0,
+                    scrap: 0,
+                    reason: data.notes || '',
+                    isExternal: true
+                });
+            }
+        });
+        debug.push(`Found ${extDocs.size} external records (filtered to ${logsData.filter(l => l.isExternal).length}).`);
+      } catch (err) {
+        console.error("Error fetching external logs", err);
+        debug.push("Error fetching external logs: " + err);
+      }
+
+      debug.push(`Found ${logsData.length} total matching logs.`);
       
       // Add helpful debug info if no matches but fabric exists elsewhere
       if (logsData.length === 0 && totalLogsWithFabric > 0) {
@@ -444,8 +479,15 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
                                 </td>
                                 <td className="px-4 py-3">
                                     <div className="flex items-center gap-2">
-                                    <Factory className="w-3 h-3 text-slate-400" />
-                                    <span className="font-medium text-slate-700">{log.machineName}</span>
+                                    {log.isExternal ? (
+                                        <Globe className="w-3 h-3 text-blue-400" />
+                                    ) : (
+                                        <Factory className="w-3 h-3 text-slate-400" />
+                                    )}
+                                    <span className={`font-medium ${log.isExternal ? 'text-blue-700' : 'text-slate-700'}`}>
+                                        {log.machineName}
+                                        {log.isExternal && <span className="ml-2 text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">Ext</span>}
+                                    </span>
                                     </div>
                                 </td>
                                 <td className="px-4 py-3 text-right font-mono font-bold text-emerald-600">

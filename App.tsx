@@ -61,7 +61,9 @@ import {
   Settings,
   Building,
   LogOut,
-  Users
+  Users,
+  Menu,
+  X
 } from 'lucide-react';
 import { MachineStatus } from './types';
 
@@ -82,6 +84,9 @@ const App: React.FC = () => {
   const [machineLoading, setMachineLoading] = useState<boolean>(true);
   const [globalActiveDay, setGlobalActiveDay] = useState<string | null>(null);
   const notificationCooldown = useRef<Set<string>>(new Set()); // Prevent notification loops
+
+  // UI State
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   // AI State
   const [showInsights, setShowInsights] = useState(false);
@@ -650,134 +655,165 @@ const App: React.FC = () => {
 
       <main className="max-w-[98%] mx-auto px-2 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
         
-        {/* Professional Navigation Bar */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden sticky top-0 z-40">
-           <div className="flex flex-col lg:flex-row items-center justify-between p-2 gap-2">
+        {/* Professional Navigation Bar - Option A: Command Center */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 sticky top-0 z-40 mb-6">
+           <div className="flex items-center justify-between p-2 px-3">
              
-             {/* Primary Modules (Schedule & Excel) */}
-             <div className="flex items-center gap-2 w-full lg:w-auto p-1 bg-slate-100/50 rounded-lg overflow-x-auto no-scrollbar">
+             {/* Main Tools (Daily Machine Plan & Orders - User Requested) */}
+             <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                 <button 
-                  onClick={() => setViewMode('planning')}
-                  className={`flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-semibold transition-all whitespace-nowrap ${
-                    viewMode === 'planning' 
-                      ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-black/5' 
-                      : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
-                  }`}
-                >
-                  <Calendar size={18} />
-                  Schedule
-                </button>
-                <button 
-                  onClick={() => setViewMode('orders')}
-                  className={`flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-semibold transition-all whitespace-nowrap ${
-                    viewMode === 'orders' 
-                      ? 'bg-white text-orange-600 shadow-sm ring-1 ring-black/5' 
-                      : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
-                  }`}
-                >
-                  <Package size={18} />
-                  Orders
-                </button>
-                <button 
-                  onClick={() => setViewMode('yarn-inventory')}
-                  className={`flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-semibold transition-all whitespace-nowrap ${
-                    viewMode === 'yarn-inventory' 
-                      ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-black/5' 
-                      : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
-                  }`}
-                >
-                  <LayoutGrid size={18} />
-                  Yarn Inv.
-                </button>
-                <button 
-                  onClick={() => setViewMode('excel')}
-                  className={`flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-semibold transition-all whitespace-nowrap ${
+                  onClick={() => { setViewMode('excel'); setIsMenuOpen(false); }}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
                     viewMode === 'excel' 
-                      ? 'bg-white text-emerald-600 shadow-sm ring-1 ring-black/5' 
-                      : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
+                      ? 'bg-emerald-600 text-white shadow-emerald-200' 
+                      : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
                   }`}
                 >
-                  <Table size={18} />
-                  Daily Machine Plan
+                  <Table size={18} className={viewMode === 'excel' ? 'text-white' : 'text-emerald-600'} />
+                  <span>Daily Machine Plan</span>
+                </button>
+
+                <button 
+                  onClick={() => { setViewMode('orders'); setIsMenuOpen(false); }}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
+                    viewMode === 'orders' 
+                      ? 'bg-orange-600 text-white shadow-orange-200' 
+                      : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                  }`}
+                >
+                  <Package size={18} className={viewMode === 'orders' ? 'text-white' : 'text-orange-600'} />
+                  <span>Orders</span>
+                </button>
+
+                <button 
+                  onClick={() => { setViewMode('dyehouse-directory'); setIsMenuOpen(false); }}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
+                    viewMode === 'dyehouse-directory' 
+                      ? 'bg-blue-600 text-white shadow-blue-200' 
+                      : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                  }`}
+                >
+                  <Building size={18} className={viewMode === 'dyehouse-directory' ? 'text-white' : 'text-blue-600'} />
+                  <span>Dyehouse Dir.</span>
                 </button>
              </div>
 
-             <div className="h-8 w-px bg-slate-200 hidden lg:block mx-2"></div>
+             {/* App Launcher */}
+             <div className="relative">
+               <button 
+                 onClick={() => setIsMenuOpen(!isMenuOpen)}
+                 className={`p-2.5 rounded-lg transition-all flex items-center gap-2 font-medium border ${
+                   isMenuOpen 
+                      ? 'bg-slate-800 text-white border-slate-800 shadow-lg' 
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-slate-900'
+                 }`}
+               >
+                 <span className="hidden sm:inline text-sm">All Apps</span>
+                 {isMenuOpen ? <X size={20} /> : <LayoutGrid size={20} />}
+               </button>
 
-             {/* Secondary Tools */}
-             <div className="flex flex-wrap items-center justify-start lg:justify-center gap-1 w-full lg:w-auto overflow-x-auto pb-1 lg:pb-0 no-scrollbar">
-                
-                {/* Analysis Group */}
-                <div className="flex items-center gap-1 px-2 border-r border-slate-100 last:border-0">
-                  <button 
-                    onClick={() => setViewMode('compare')}
-                    title="Compare Days"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'compare' ? 'bg-blue-50 text-blue-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <GitCompare size={20} />
-                  </button>
-                  <button 
-                    onClick={() => setViewMode('history')}
-                    title="Production History"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'history' ? 'bg-teal-50 text-teal-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <History size={20} />
-                  </button>
-                  <button 
-                    onClick={() => setViewMode('fabric-history')}
-                    title="Fabric History"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'fabric-history' ? 'bg-orange-50 text-orange-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <Package size={20} />
-                  </button>
-                </div>
+               {/* Dropdown Menu */}
+               {isMenuOpen && (
+                 <>
+                   <div 
+                      className="fixed inset-0 bg-black/5 z-40" 
+                      onClick={() => setIsMenuOpen(false)}
+                   />
+                   <div className="absolute top-full right-0 mt-2 w-[calc(100vw-32px)] sm:w-[500px] bg-white rounded-xl shadow-2xl border border-slate-200 p-4 z-50 animate-in fade-in slide-in-from-top-2 origin-top-right">
+                     <div className="grid grid-cols-2 sm:grid-cols-2 gap-2 max-h-[70vh] overflow-y-auto">
+                        
+                        <div className="col-span-2 pb-2 mb-2 border-b border-slate-100 flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                          <Calendar size={14} /> Core Planning
+                        </div>
+                        <button 
+                          onClick={() => { setViewMode('planning'); setIsMenuOpen(false); }}
+                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'planning' ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                        >
+                          <div className={`p-2 rounded-md ${viewMode === 'planning' ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-500'}`}><Calendar size={20} /></div>
+                          <div>
+                            <div className="font-semibold text-sm">Schedule</div>
+                            <div className="text-[10px] text-slate-400 leading-tight">Gantt chart view</div>
+                          </div>
+                        </button>
+                        <button 
+                          onClick={() => { setViewMode('yarn-inventory'); setIsMenuOpen(false); }}
+                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'yarn-inventory' ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                        >
+                          <div className={`p-2 rounded-md ${viewMode === 'yarn-inventory' ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-500'}`}><LayoutGrid size={20} /></div>
+                          <div>
+                            <div className="font-semibold text-sm">Yarn Inventory</div>
+                            <div className="text-[10px] text-slate-400 leading-tight">Stock tracking</div>
+                          </div>
+                        </button>
+                        
+                        <div className="col-span-2 py-2 mb-2 border-b border-t border-slate-100 flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider mt-2">
+                          <BarChart3 size={14} /> Analysis & Reports
+                        </div>
+                        <button 
+                          onClick={() => { setViewMode('compare'); setIsMenuOpen(false); }}
+                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'compare' ? 'bg-purple-50 text-purple-700 ring-1 ring-purple-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                        >
+                          <div className={`p-2 rounded-md ${viewMode === 'compare' ? 'bg-purple-100 text-purple-600' : 'bg-slate-100 text-slate-500'}`}><GitCompare size={20} /></div>
+                          <div className="font-semibold text-sm">Compare Days</div>
+                        </button>
+                        <button 
+                          onClick={() => { setViewMode('history'); setIsMenuOpen(false); }}
+                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'history' ? 'bg-teal-50 text-teal-700 ring-1 ring-teal-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                        >
+                          <div className={`p-2 rounded-md ${viewMode === 'history' ? 'bg-teal-100 text-teal-600' : 'bg-slate-100 text-slate-500'}`}><History size={20} /></div>
+                          <div className="font-semibold text-sm">Production History</div>
+                        </button>
+                        <button 
+                          onClick={() => { setViewMode('fabric-history'); setIsMenuOpen(false); }}
+                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'fabric-history' ? 'bg-orange-50 text-orange-700 ring-1 ring-orange-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                        >
+                          <div className={`p-2 rounded-md ${viewMode === 'fabric-history' ? 'bg-orange-100 text-orange-600' : 'bg-slate-100 text-slate-500'}`}><Package size={20} /></div>
+                          <div className="font-semibold text-sm">Fabric History</div>
+                        </button>
+                        <button 
+                          onClick={() => { setViewMode('dyehouse-inventory'); setIsMenuOpen(false); }}
+                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'dyehouse-inventory' ? 'bg-cyan-50 text-cyan-700 ring-1 ring-cyan-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                        >
+                          <div className={`p-2 rounded-md ${viewMode === 'dyehouse-inventory' ? 'bg-cyan-100 text-cyan-600' : 'bg-slate-100 text-slate-500'}`}><Layers size={20} /></div>
+                          <div className="font-semibold text-sm">Dyehouse Inv.</div>
+                        </button>
 
-                {/* Monitoring Group */}
-                <div className="flex items-center gap-1 px-2">
-                  <button 
-                    onClick={() => setViewMode('maintenance')}
-                    title="Maintenance & Changeovers"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'maintenance' ? 'bg-purple-50 text-purple-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <Wrench size={20} />
-                  </button>
-                  <button 
-                    onClick={() => setViewMode('dyehouse-inventory')}
-                    title="Dyehouse Inventory"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'dyehouse-inventory' ? 'bg-teal-50 text-teal-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <Layers size={20} />
-                  </button>
-                  <button 
-                    onClick={() => setViewMode('fabrics')}
-                    title="Fabrics Database"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'fabrics' ? 'bg-green-50 text-green-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <FileSpreadsheet size={20} />
-                  </button>
-                  <button 
-                    onClick={() => setViewMode('machines')}
-                    title="Machines Directory"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'machines' ? 'bg-slate-100 text-slate-800' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <Settings size={20} />
-                  </button>
-                  <button 
-                    onClick={() => setViewMode('dyehouse-directory')}
-                    title="Dyehouse Directory"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'dyehouse-directory' ? 'bg-slate-100 text-slate-800' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <Building size={20} />
-                  </button>
-                  <button 
-                    onClick={() => setViewMode('idle')}
-                    title="Idle Machines"
-                    className={`p-2.5 rounded-lg transition-all ${viewMode === 'idle' ? 'bg-red-50 text-red-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <AlertCircle size={20} />
-                  </button>
-                </div>
-
+                        <div className="col-span-2 py-2 mb-2 border-b border-t border-slate-100 flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider mt-2">
+                          <Settings size={14} /> System & Management
+                        </div>
+                        <button 
+                          onClick={() => { setViewMode('maintenance'); setIsMenuOpen(false); }}
+                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'maintenance' ? 'bg-slate-100 text-slate-800 ring-1 ring-slate-300' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                        >
+                           <div className={`p-2 rounded-md ${viewMode === 'maintenance' ? 'bg-slate-200 text-slate-700' : 'bg-slate-100 text-slate-500'}`}><Wrench size={20} /></div>
+                           <div className="font-semibold text-sm">Maintenance</div>
+                        </button>
+                        <button 
+                          onClick={() => { setViewMode('fabrics'); setIsMenuOpen(false); }}
+                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'fabrics' ? 'bg-slate-100 text-slate-800 ring-1 ring-slate-300' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                        >
+                           <div className={`p-2 rounded-md ${viewMode === 'fabrics' ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-500'}`}><FileSpreadsheet size={20} /></div>
+                           <div className="font-semibold text-sm">Fabrics DB</div>
+                        </button>
+                        <button 
+                          onClick={() => { setViewMode('machines'); setIsMenuOpen(false); }}
+                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'machines' ? 'bg-slate-100 text-slate-800 ring-1 ring-slate-300' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                        >
+                           <div className={`p-2 rounded-md ${viewMode === 'machines' ? 'bg-slate-200 text-slate-700' : 'bg-slate-100 text-slate-500'}`}><Settings size={20} /></div>
+                           <div className="font-semibold text-sm">Machines</div>
+                        </button>
+                        <button 
+                          onClick={() => { setViewMode('idle'); setIsMenuOpen(false); }}
+                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'idle' ? 'bg-red-50 text-red-700 ring-1 ring-red-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                        >
+                           <div className={`p-2 rounded-md ${viewMode === 'idle' ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'}`}><AlertCircle size={20} /></div>
+                           <div className="font-semibold text-sm">Idle Monitor</div>
+                        </button>
+                        
+                     </div>
+                   </div>
+                 </>
+               )}
              </div>
            </div>
         </div>
