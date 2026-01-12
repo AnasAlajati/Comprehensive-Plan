@@ -19,6 +19,8 @@ import { db, auth } from '../services/firebase';
 import { DataService } from '../services/dataService';
 import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem, FabricDefinition, Dyehouse, DyehouseMachine, Season, ReceiveEvent, DyeingBatch, ExternalPlanAssignment } from '../types';
 import { FabricDetailsModal } from './FabricDetailsModal';
+import { FabricDyehouseModal } from './FabricDyehouseModal';
+import { ColorApprovalModal } from './ColorApprovalModal';
 import { FabricFormModal } from './FabricFormModal';
 import { CreatePlanModal } from './CreatePlanModal';
 import { OrderProductionHistoryModal } from './OrderProductionHistoryModal';
@@ -31,6 +33,7 @@ import {
   FileSpreadsheet,
   MapPin,
   Layers,
+  FileText,
   CheckCircle2,
   AlertCircle,
   X,
@@ -48,7 +51,6 @@ import {
   ArrowRight,
   Sparkles,
   Factory,
-  FileText,
   History,
   Trophy,
   Info,
@@ -651,7 +653,9 @@ const MemoizedOrderRow = React.memo(({
   userName,
   onOpenReceiveModal,
   onOpenSentModal,
-  onOpenSmartScheduler
+  onOpenSmartScheduler,
+  onOpenFabricDyehouse,
+  onOpenColorApproval
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -680,6 +684,8 @@ const MemoizedOrderRow = React.memo(({
   onOpenReceiveModal: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
   onOpenSentModal: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
   onOpenSmartScheduler: (order: OrderRow) => void;
+  onOpenFabricDyehouse: (order: OrderRow) => void;
+  onOpenColorApproval: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
 }) => {
   const [showMachineDetails, setShowMachineDetails] = useState<{ capacity: number; batches: any[] } | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -739,12 +745,18 @@ const MemoizedOrderRow = React.memo(({
         list.push(batch);
         grouped.set(batch.plannedCapacity, list);
       }
-      total += batch.quantity || 0;
-      sent += (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
-      // Calculate received from events
-      const events = batch.receiveEvents || [];
-      const batchReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
-      const batchReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
+      total += Number(batch.quantity) || 0;
+      
+      // Calculate Sent (Include Events + Legacy)
+      const sEvents = batch.sentEvents || [];
+      const batchSentRaw = sEvents.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
+      const batchSentAcc = sEvents.reduce((s, e) => s + (Number(e.accessorySent) || 0), 0) + (Number(batch.quantitySentAccessory) || 0);
+      sent += batchSentRaw + batchSentAcc;
+
+      // Calculate Received
+      const rEvents = batch.receiveEvents || [];
+      const batchReceivedRaw = rEvents.reduce((s, e) => s + (Number(e.quantityRaw) || 0), 0) + (Number(batch.receivedQuantity) || 0);
+      const batchReceivedAccessory = rEvents.reduce((s, e) => s + (Number(e.quantityAccessory) || 0), 0);
       received += batchReceivedRaw + batchReceivedAccessory;
     });
 
@@ -888,11 +900,23 @@ const MemoizedOrderRow = React.memo(({
         <>
           {/* Fabric (Read-only in Dyehouse View) */}
           <td className="p-0 border-r border-slate-200 relative group/fabric" title={refCode}>
-             <div className="flex items-center h-full w-full px-3 py-2 text-slate-700 font-medium">
-                {(() => {
-                  const fabricDef = fabrics.find(f => f.name === row.material);
-                  return fabricDef ? (fabricDef.shortName || fabricDef.name) : (row.material || '-');
-                })()}
+             <div className="flex items-center justify-between h-full w-full px-3 py-2">
+                <div className="text-slate-700 font-medium truncate mr-2">
+                    {(() => {
+                      const fabricDef = fabrics.find(f => f.name === row.material);
+                      return fabricDef ? (fabricDef.shortName || fabricDef.name) : (row.material || '-');
+                    })()}
+                </div>
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenFabricDyehouse(row);
+                  }}
+                  className="p-1.5 hover:bg-slate-100 text-slate-400 hover:text-indigo-600 rounded-md transition-colors opacity-0 group-hover/fabric:opacity-100"
+                  title="Fabric Technical Sheet"
+                >
+                  <FileText className="w-4 h-4" />
+                </button>
              </div>
           </td>
           {/* Dyehouse (Computed Read-Only) */}
@@ -1761,18 +1785,28 @@ const MemoizedOrderRow = React.memo(({
                             />
                         </div>
                       </td>
-                      <td className="p-0">
-                        <input
-                          type="text"
-                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right"
-                          value={batch.colorApproval || ''}
-                          onChange={(e) => {
-                            const newPlan = [...(row.dyeingPlan || [])];
-                            newPlan[idx] = { ...batch, colorApproval: e.target.value };
-                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
-                          }}
-                          placeholder="..."
-                        />
+                      <td className="p-0 relative bg-transparent">
+                        <button
+                             className="w-full h-full min-h-[48px] cursor-pointer hover:bg-indigo-50 transition-colors flex flex-col items-center justify-center px-1 py-1 relative group/approval"
+                             onClick={() => {
+                                 // Allow editing color approvals regardless of batch status
+                                 onOpenColorApproval(row.id, idx, batch);
+                             }}
+                             title="Click to manage color approvals"
+                        >
+                             <span className={`font-medium text-xs truncate max-w-full ${batch.colorApproval ? 'text-indigo-800' : 'text-slate-300'}`}>
+                                {batch.colorApproval || '...'}
+                             </span>
+                             
+                             {batch.colorApprovals && batch.colorApprovals.length > 0 && (
+                                <div className="flex items-center gap-0.5 bg-indigo-100 px-1.5 py-0.5 rounded-full mt-1 border border-indigo-200">
+                                    <span className="text-[9px] font-bold text-indigo-700">{batch.colorApprovals.length}</span>
+                                    <Check size={8} className="text-indigo-600" />
+                                </div>
+                             )}
+
+                             <Plus size={8} className="absolute left-1 top-1 text-slate-300 opacity-0 group-hover/approval:opacity-100 transition-opacity" />
+                        </button>
                       </td>
                       <td className="p-0">
                         <input
@@ -1787,16 +1821,16 @@ const MemoizedOrderRow = React.memo(({
                           placeholder="رقم..."
                         />
                       </td>
-                      <td className="p-0">
+                      <td className="p-0 relative group/date">
                         <input
-                          type="date"
-                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right"
-                          value={batch.formationDate || ''}
-                          onChange={(e) => {
-                            const newPlan = [...(row.dyeingPlan || [])];
-                            newPlan[idx] = { ...batch, formationDate: e.target.value };
-                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
-                          }}
+                            type="date"
+                            className="w-full h-full px-2 py-2 bg-transparent outline-none focus:bg-blue-50 text-center text-xs font-mono text-slate-700 cursor-pointer"
+                            value={batch.formationDate || ''}
+                            onChange={(e) => {
+                                const newPlan = [...(row.dyeingPlan || [])];
+                                newPlan[idx] = { ...batch, formationDate: e.target.value };
+                                handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                            }}
                         />
                       </td>
                       <td className="p-0 text-center align-middle">
@@ -1806,16 +1840,16 @@ const MemoizedOrderRow = React.memo(({
                           </span>
                         )}
                       </td>
-                      <td className="p-0">
+                      <td className="p-0 relative group/date">
                         <input
-                          type="date"
-                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right"
-                          value={batch.dateSent || ''}
-                          onChange={(e) => {
-                            const newPlan = [...(row.dyeingPlan || [])];
-                            newPlan[idx] = { ...batch, dateSent: e.target.value };
-                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
-                          }}
+                            type="date"
+                            className="w-full h-full px-2 py-2 bg-transparent outline-none focus:bg-blue-50 text-center text-xs font-mono text-slate-700 cursor-pointer"
+                            value={batch.dateSent || ''}
+                            onChange={(e) => {
+                                const newPlan = [...(row.dyeingPlan || [])];
+                                newPlan[idx] = { ...batch, dateSent: e.target.value };
+                                handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                            }}
                         />
                       </td>
                       <td className="p-0 text-center align-middle">
@@ -1935,25 +1969,35 @@ const MemoizedOrderRow = React.memo(({
                       <td className="p-0 relative">
                         {(() => {
                            const events = batch.sentEvents || [];
-                           const totalSent = events.reduce((s, e) => s + (e.quantity || 0), 0) + (batch.quantitySentRaw || batch.quantitySent || 0);
+                           const sentRaw = events.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
+                           const sentAcc = events.reduce((s, e) => s + (Number(e.accessorySent) || 0), 0) + (Number(batch.quantitySentAccessory) || 0);
+                           const totalSent = sentRaw + sentAcc;
                            
                            return (
                                <button
                                   onClick={() => onOpenSentModal(row.id, idx, batch)}
-                                  className="w-full px-2 py-1.5 text-center bg-transparent hover:bg-blue-50 transition-colors group/sent"
+                                  className="w-full px-1 py-1 text-center bg-transparent hover:bg-blue-50 transition-colors group/sent"
                                   title="Click to add/view sent items"
                                >
-                                  <div className="flex flex-col items-center gap-0.5">
-                                      <span className="font-mono font-medium text-blue-600">
-                                          {totalSent > 0 ? totalSent : '-'}
+                                  <div className="flex flex-col items-center justify-center min-h-[40px]">
+                                      <span className={`font-mono font-bold text-xs ${sentRaw > 0 ? 'text-blue-600' : 'text-slate-300'}`}>
+                                          {sentRaw > 0 ? sentRaw : '-'}
                                       </span>
-                                      {events.length > 0 && (
-                                          <span className="text-[8px] text-slate-400">
-                                              {events.length} شحنة
+                                      
+                                      {sentAcc > 0 && (
+                                        <div className="flex items-center gap-0.5 bg-blue-100 px-1 rounded-sm mt-0.5 border border-blue-200">
+                                            <span className="text-[9px] font-bold text-blue-700">+{sentAcc}</span>
+                                            <span className="text-[7px] text-blue-500 uppercase">Acc</span>
+                                        </div>
+                                      )}
+                                      
+                                      {events.length > 1 && (
+                                          <span className="text-[7px] text-slate-400 mt-0.5">
+                                              {events.length} loads
                                           </span>
                                       )}
                                   </div>
-                                  <Plus size={10} className="absolute left-1 top-1 text-slate-300 group-hover/sent:text-blue-500 transition-colors" />
+                                  <Plus size={8} className="absolute left-1 top-1 text-slate-300 opacity-0 group-hover/sent:opacity-100 transition-opacity" />
                                </button>
                            );
                         })()}
@@ -1963,34 +2007,45 @@ const MemoizedOrderRow = React.memo(({
                         {(() => {
                           const events = batch.receiveEvents || [];
                           const sentEvents = batch.sentEvents || [];
-                          const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
-                          const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
-                          const totalSent = sentEvents.reduce((s, e) => s + (e.quantity || 0), 0) + (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
-                          const totalReceived = totalReceivedRaw + totalReceivedAccessory;
-                          const remaining = totalSent - totalReceived;
+                          
+                          const recRaw = events.reduce((s, e) => s + (Number(e.quantityRaw) || 0), 0) + (Number(batch.receivedQuantity) || 0);
+                          const recAcc = events.reduce((s, e) => s + (Number(e.quantityAccessory) || 0), 0);
+                          const totalReceived = recRaw + recAcc;
+
+                          const sentRaw = sentEvents.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
+                          const sentAcc = sentEvents.reduce((s, e) => s + (Number(e.accessorySent) || 0), 0) + (Number(batch.quantitySentAccessory) || 0);
+                          
+                          const remainingRaw = Math.max(0, sentRaw - recRaw);
+                          const remainingAcc = Math.max(0, sentAcc - recAcc);
                           
                           return (
                             <button
                               onClick={() => onOpenReceiveModal(row.id, idx, batch)}
-                              className="w-full px-2 py-1.5 text-center bg-transparent hover:bg-emerald-50 transition-colors group/receive"
+                              className="w-full px-1 py-1 text-center bg-transparent hover:bg-emerald-50 transition-colors group/receive"
                               title="Click to add/view receives"
                             >
-                              <div className="flex flex-col items-center gap-0.5">
-                                <span className="font-mono font-medium text-emerald-600">
-                                  {totalReceived > 0 ? totalReceived.toFixed(0) : '-'}
-                                </span>
-                                {events.length > 0 && (
-                                  <span className="text-[8px] text-slate-400">
-                                    {events.length} استلام
-                                  </span>
+                              <div className="flex flex-col items-center justify-center min-h-[40px]">
+                                <div className="flex items-baseline gap-1">
+                                    <span className={`font-mono font-bold text-xs ${recRaw > 0 ? 'text-emerald-600' : 'text-slate-300'}`}>
+                                      {recRaw > 0 ? Math.round(recRaw) : '-'}
+                                    </span>
+                                    {remainingRaw > 0 && sentRaw > 0 && <span className="text-[8px] text-amber-500 font-bold">-{Math.round(remainingRaw)}</span>}
+                                </div>
+
+                                {recAcc > 0 && (
+                                    <div className="flex items-center gap-0.5 bg-emerald-100 px-1 rounded-sm mt-0.5 border border-emerald-200">
+                                        <span className="text-[9px] font-bold text-emerald-700">+{recAcc}</span>
+                                        <span className="text-[7px] text-emerald-500 uppercase">Acc</span>
+                                    </div>
                                 )}
-                                {totalSent > 0 && remaining > 0 && (
-                                  <span className="text-[8px] text-amber-500 font-medium">
-                                    متبقي: {remaining.toFixed(0)}
+
+                                {events.length > 1 && (
+                                  <span className="text-[7px] text-slate-400 mt-0.5">
+                                    {events.length} loads
                                   </span>
                                 )}
                               </div>
-                              <Plus size={10} className="absolute left-1 top-1 text-slate-300 group-hover/receive:text-emerald-500 transition-colors" />
+                              <Plus size={8} className="absolute left-1 top-1 text-slate-300 opacity-0 group-hover/receive:opacity-100 transition-opacity" />
                             </button>
                           );
                         })()}
@@ -2348,6 +2403,20 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
     activeMachines: string[];
     plannedMachines: string[];
   }>({ isOpen: false, order: null, activeMachines: [], plannedMachines: [] });
+
+  // Fabric Dyehouse Modal State
+  const [fabricDyehouseModal, setFabricDyehouseModal] = useState<{
+    isOpen: boolean;
+    order: OrderRow | null;
+  }>({ isOpen: false, order: null });
+
+  // Color Approval Modal State
+  const [colorApprovalModal, setColorApprovalModal] = useState<{
+    isOpen: boolean;
+    orderId: string;
+    batchIdx: number;
+    batch: DyeingBatch | null;
+  }>({ isOpen: false, orderId: '', batchIdx: -1, batch: null });
 
   // Production History Modal State
   const [selectedOrderForHistory, setSelectedOrderForHistory] = useState<OrderRow | null>(null);
@@ -3050,10 +3119,38 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
        }
     }
 
-    // Sanitize updates to remove undefined values
+    // Helper: Deeply sanitize object for Firestore (undefined -> null)
+    const sanitizeForFirestore = (obj: any): any => {
+      if (obj === undefined) return null;
+      if (obj === null) return null;
+      
+      if (Array.isArray(obj)) {
+        return obj.map(sanitizeForFirestore);
+      }
+      
+      if (typeof obj === 'object') {
+        const newObj: any = {};
+        Object.keys(obj).forEach(key => {
+          const val = obj[key];
+          if (val === undefined) {
+             newObj[key] = null; // Convert undefined to null
+          } else {
+             newObj[key] = sanitizeForFirestore(val);
+          }
+        });
+        return newObj;
+      }
+      return obj;
+    };
+
+    // Sanitize updates to remove undefined values at top level
     Object.keys(finalUpdates).forEach(key => {
-        if (finalUpdates[key as keyof OrderRow] === undefined) {
-            delete finalUpdates[key as keyof OrderRow];
+        const k = key as keyof OrderRow;
+        if (finalUpdates[k] === undefined) {
+            delete finalUpdates[k];
+        } else if (typeof finalUpdates[k] === 'object') {
+            // Deep sanitize nested objects/arrays (like dyeingPlan)
+            finalUpdates[k] = sanitizeForFirestore(finalUpdates[k]);
         }
     });
 
@@ -3990,6 +4087,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                externalFactories={externalFactories}
                customers={rawCustomers}
                activeDay={activeDay}
+               onDateChange={setActiveDay}
                onClose={() => setSelectedCustomerId(ALL_CLIENTS_ID)}
            />
         ) : selectedCustomerId === ALL_YARNS_ID ? (
@@ -4160,7 +4258,9 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                               selectedCustomerName={selectedCustomer.name}
                               onOpenFabricDetails={handleOpenFabricDetails}
                               showDyehouse={showDyehouse}
-                              onOpenCreatePlan={(order) => setCreatePlanModal({ 
+                              onOpenFabricDyehouse={(order) => setFabricDyehouseModal({ isOpen: true, order })}
+                              onOpenColorApproval={(orderId, batchIdx, batch) => setColorApprovalModal({ isOpen: true, orderId, batchIdx, batch })}
+                              onOpenCreatePlan={(order) => setCreatePlanModal({  
                                 isOpen: true, 
                                 order, 
                                 customerName: selectedCustomer.name 
@@ -4519,11 +4619,17 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
               <div className="p-4 bg-slate-50 border-b border-slate-200">
                 {(() => {
                   const batch = receiveModal.batch;
-                  const events = batch?.receiveEvents || [];
-                  const totalSentRaw = batch?.quantitySentRaw || batch?.quantitySent || 0;
-                  const totalSentAccessory = batch?.quantitySentAccessory || 0;
-                  const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch?.receivedQuantity || 0);
-                  const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
+                  const rEvents = batch?.receiveEvents || [];
+                  const sEvents = batch?.sentEvents || [];
+                  
+                  // Calculate Total Sent (including events)
+                  const totalSentRaw = sEvents.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(batch?.quantitySentRaw) || Number(batch?.quantitySent) || 0);
+                  const totalSentAccessory = sEvents.reduce((s, e) => s + (Number(e.accessorySent) || 0), 0) + (Number(batch?.quantitySentAccessory) || 0);
+
+                  // Calculate Total Received
+                  const totalReceivedRaw = rEvents.reduce((s, e) => s + (Number(e.quantityRaw) || 0), 0) + (Number(batch?.receivedQuantity) || 0);
+                  const totalReceivedAccessory = rEvents.reduce((s, e) => s + (Number(e.quantityAccessory) || 0), 0);
+                  
                   const remainingRaw = totalSentRaw - totalReceivedRaw;
                   const remainingAccessory = totalSentAccessory - totalReceivedAccessory;
                   
@@ -4618,6 +4724,21 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                             const batch = newPlan[receiveModal.batchIdx];
                             if (batch) {
                               batch.receiveEvents = (batch.receiveEvents || []).filter((_, idx) => idx !== i);
+
+                              // Recalculate scrap if already complete
+                              if (batch.isComplete) {
+                                  const sEvents = batch.sentEvents || [];
+                                  const totalSentRaw = sEvents.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
+                                  const totalSentAccessory = sEvents.reduce((s, e) => s + (Number(e.accessorySent) || 0), 0) + (Number(batch.quantitySentAccessory) || 0);
+                                  
+                                  const rEvents = batch.receiveEvents || [];
+                                  const totalReceivedRaw = rEvents.reduce((s, e) => s + (Number(e.quantityRaw) || 0), 0) + (Number(batch.receivedQuantity) || 0);
+                                  const totalReceivedAccessory = rEvents.reduce((s, e) => s + (Number(e.quantityAccessory) || 0), 0);
+                                  
+                                  batch.scrapRaw = Math.max(0, totalSentRaw - totalReceivedRaw);
+                                  batch.scrapAccessory = Math.max(0, totalSentAccessory - totalReceivedAccessory);
+                              }
+
                               handleUpdateOrder(receiveModal.orderId, { dyeingPlan: newPlan });
                               setReceiveModal({ ...receiveModal, batch: batch });
                             }
@@ -4693,8 +4814,10 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                           receivedBy: userName || auth.currentUser?.email || 'Unknown',
                           notes: newReceive.notes
                         }];
-                        const totalSentRaw = batch.quantitySentRaw || batch.quantitySent || 0;
-                        const totalSentAccessory = batch.quantitySentAccessory || 0;
+                        // Updated calculation to include sentEvents
+                        const sEvents = batch.sentEvents || [];
+                        const totalSentRaw = sEvents.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
+                        const totalSentAccessory = sEvents.reduce((s, e) => s + (Number(e.accessorySent) || 0), 0) + (Number(batch.quantitySentAccessory) || 0);
                         const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
                         const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
                         const totalSent = totalSentRaw + totalSentAccessory;
@@ -4703,9 +4826,14 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                         // Auto-complete if received >= 89% of sent
                         const isComplete = totalSent > 0 && (totalReceived / totalSent) >= 0.89;
                         
+                        // Recalculate scrap always if complete
+                        // Or if we are just updating list
+                        // But wait, user might want to see updated scrap if it was ALREADY complete
+                        // We will recalculate scrap if isComplete is true OR if it was effectively complete
+                        
                         batch.receiveEvents = events;
-                        if (isComplete && !batch.isComplete) {
-                          batch.isComplete = true;
+                        if (isComplete || batch.isComplete) {
+                          batch.isComplete = true; // Ensure it stays true
                           batch.scrapRaw = Math.max(0, totalSentRaw - totalReceivedRaw);
                           batch.scrapAccessory = Math.max(0, totalSentAccessory - totalReceivedAccessory);
                           batch.status = 'received';
@@ -4732,11 +4860,15 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                         const newPlan = [...(currentOrder.dyeingPlan || [])];
                         const batch = newPlan[receiveModal.batchIdx];
                         if (batch) {
-                          const events = batch.receiveEvents || [];
-                          const totalSentRaw = batch.quantitySentRaw || batch.quantitySent || 0;
-                          const totalSentAccessory = batch.quantitySentAccessory || 0;
-                          const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
-                          const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
+                          const rEvents = batch.receiveEvents || [];
+                          const sEvents = batch.sentEvents || [];
+                          // Calculate Sent (Legacy + Events)
+                          const totalSentRaw = sEvents.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
+                          const totalSentAccessory = sEvents.reduce((s, e) => s + (Number(e.accessorySent) || 0), 0) + (Number(batch.quantitySentAccessory) || 0);
+
+                          // Calculate Received (Legacy + Events)
+                          const totalReceivedRaw = rEvents.reduce((s, e) => s + (Number(e.quantityRaw) || 0), 0) + (Number(batch.receivedQuantity) || 0);
+                          const totalReceivedAccessory = rEvents.reduce((s, e) => s + (Number(e.quantityAccessory) || 0), 0);
                           
                           batch.isComplete = true;
                           batch.scrapRaw = Math.max(0, totalSentRaw - totalReceivedRaw);
@@ -4788,17 +4920,26 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                 {(() => {
                   const batch = sentModal.batch;
                   const events = batch?.sentEvents || [];
-                  const totalSent = events.reduce((s, e) => s + (e.quantity || 0), 0) + (batch?.quantitySentRaw || batch?.quantitySent || 0); // Include legacy single value
+                  // Calculate raw separately
+                  const totalSentRaw = events.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(batch?.quantitySentRaw) || Number(batch?.quantitySent) || 0);
+                  // Calculate accessory separately
+                  const totalSentAccessory = events.reduce((s, e) => s + (Number(e.accessorySent) || 0), 0) + (Number(batch?.quantitySentAccessory) || 0);
                   
                   return (
-                    <div className="grid grid-cols-1 gap-4 text-sm" dir="rtl">
+                    <div className="grid grid-cols-2 gap-4 text-sm" dir="rtl">
                       <div className="bg-white rounded-lg p-3 border border-slate-200 flex items-center justify-between">
                         <div>
-                          <div className="text-slate-500 mb-1">اجمالي المرسل للكجم</div>
-                          <div className="text-2xl font-bold text-blue-600">{totalSent} <span className="text-sm font-normal text-slate-400">kg</span></div>
+                          <div className="text-slate-500 mb-1">اجمالي المرسل (خام)</div>
+                          <div className="text-2xl font-bold text-blue-600">{totalSentRaw} <span className="text-sm font-normal text-slate-400">kg</span></div>
                         </div>
-                        <div className="text-right text-xs text-slate-400">
-                           {events.length} شحنات مسجلة
+                      </div>
+                      <div className="bg-white rounded-lg p-3 border border-slate-200 flex items-center justify-between">
+                         <div>
+                          <div className="text-slate-500 mb-1">اجمالي المرسل (اكسسوار)</div>
+                          <div className="text-2xl font-bold text-purple-600">{totalSentAccessory} <span className="text-sm font-normal text-slate-400">kg</span></div>
+                         </div>
+                         <div className="text-right text-xs text-slate-400">
+                           {events.length} شحنات
                         </div>
                       </div>
                     </div>
@@ -5039,6 +5180,40 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
               }
             }}
           />
+        )}
+
+        {/* Fabric Dyehouse Modal */}
+        {fabricDyehouseModal.isOpen && fabricDyehouseModal.order && (
+          <FabricDyehouseModal
+            isOpen={fabricDyehouseModal.isOpen}
+            onClose={() => setFabricDyehouseModal({ isOpen: false, order: null })}
+            order={fabricDyehouseModal.order}
+            onUpdateOrder={handleUpdateOrder}
+            customerName={selectedCustomer?.name || ''}
+            dyehouses={dyehouses}
+          />
+        )}
+
+        {/* Color Approval Modal */}
+        {colorApprovalModal.isOpen && colorApprovalModal.batch && (
+           <ColorApprovalModal
+               isOpen={colorApprovalModal.isOpen}
+               onClose={() => setColorApprovalModal({ ...colorApprovalModal, isOpen: false, batch: null })}
+               batch={colorApprovalModal.batch}
+               dyehouses={dyehouses}
+               onSave={(updatedBatch) => {
+                   const order = flatOrders.find(o => o.id === colorApprovalModal.orderId);
+                   if (order) {
+                       const newPlan = [...(order.dyeingPlan || [])];
+                       if (newPlan[colorApprovalModal.batchIdx]) {
+                           newPlan[colorApprovalModal.batchIdx] = updatedBatch;
+                           handleUpdateOrder(colorApprovalModal.orderId, { dyeingPlan: newPlan });
+                           // ALSO Update the local modal state so the modal UI reflects changes immediately
+                           setColorApprovalModal(prev => ({ ...prev, batch: updatedBatch }));
+                       }
+                   }
+               }}
+           />
         )}
 
         {/* Production History Modal */}

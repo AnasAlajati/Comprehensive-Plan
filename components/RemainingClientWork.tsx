@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { OrderRow, MachineSS, CustomerSheet } from '../types'; 
 import { parseFabricName } from '../services/data';
-import { AlertCircle, Activity, CalendarClock, Ban, CheckCircle2, Download, Loader2, X, Bug, Terminal } from 'lucide-react';
+import { AlertCircle, Activity, CalendarClock, Ban, CheckCircle2, Download, Loader2, X, Bug, Terminal, Calendar } from 'lucide-react';
 import { toJpeg } from 'html-to-image';
 import jsPDF from 'jspdf';
 
@@ -12,6 +12,7 @@ interface RemainingClientWorkProps {
   customers: CustomerSheet[];
   activeDay: string;
   onClose: () => void;
+  onDateChange?: (date: string) => void;
 }
 
 export const RemainingClientWork: React.FC<RemainingClientWorkProps> = ({
@@ -20,7 +21,8 @@ export const RemainingClientWork: React.FC<RemainingClientWorkProps> = ({
   externalFactories,
   customers,
   activeDay,
-  onClose
+  onClose,
+  onDateChange
 }) => {
   
   // Helper to get client name
@@ -244,6 +246,7 @@ export const RemainingClientWork: React.FC<RemainingClientWorkProps> = ({
                     }
 
                     const ordered = order.requiredQty || 0;
+                    const accQty = order.accessoryQty || 0;
                     let remaining = order.remainingQty || 0;
                     if (isWorking && activeRemaining > 0) {
                         remaining = activeRemaining;
@@ -258,6 +261,7 @@ export const RemainingClientWork: React.FC<RemainingClientWorkProps> = ({
                         fabricFull: order.material,
                         statusBadges,
                         ordered,
+                        accQty,
                         manufactured,
                         remaining
                     };
@@ -522,7 +526,25 @@ export const RemainingClientWork: React.FC<RemainingClientWorkProps> = ({
                     Remaining Client Work
                     {showDebug && <Bug className="w-4 h-4 text-red-500 animate-pulse ml-2" />}
                 </h2>
-                <p className="text-sm text-slate-500 mt-1">Outstanding production orders group by client • <span className="font-semibold text-slate-700">Date: {activeDay}</span></p>
+                <div className="text-sm text-slate-500 mt-1 flex items-center gap-1.5">
+                    Outstanding production orders group by client • 
+                    <div className="relative flex items-center gap-2 px-2 py-0.5 rounded hover:bg-slate-100 cursor-pointer transition-colors group border border-transparent hover:border-slate-200">
+                        <span className="font-semibold text-slate-700 group-hover:text-indigo-600 transition-colors">Date: {activeDay}</span>
+                        {onDateChange && (
+                           <>
+                             <Calendar className="w-4 h-4 text-slate-400 group-hover:text-indigo-500" />
+                             {/* Invisible overlay input that captures clicks anywhere on the badge */}
+                             <input 
+                                type="date" 
+                                value={activeDay}
+                                onChange={(e) => onDateChange(e.target.value)}
+                                className="absolute inset-0 opacity-0 cursor-pointer z-50 w-full h-full"
+                                title="Click to change date"
+                             />
+                           </>
+                        )}
+                    </div>
+                </div>
             </div>
             
             <div className="flex items-center gap-3 no-print">
@@ -705,8 +727,18 @@ export const RemainingClientWork: React.FC<RemainingClientWorkProps> = ({
                                     </td>
 
                                     {/* Ordered (Total) */}
-                                    <td className="px-6 py-4 text-right font-mono text-slate-600">
-                                        {row.ordered.toLocaleString()}
+                                    <td className="px-6 py-4 text-right">
+                                        <div className="flex flex-col items-end gap-1">
+                                            <span className="font-mono text-slate-600">
+                                                {(row.ordered - (row.accQty || 0)).toLocaleString()}
+                                            </span>
+                                            {row.accQty > 0 && (
+                                                <div className="flex items-center gap-1 text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-100 whitespace-nowrap font-medium">
+                                                    <span>+{row.accQty}</span>
+                                                    <span className="opacity-75">Acc</span>
+                                                </div>
+                                            )}
+                                        </div>
                                     </td>
 
                                     {/* Manufactured (Knitted) */}

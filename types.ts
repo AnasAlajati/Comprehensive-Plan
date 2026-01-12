@@ -187,11 +187,21 @@ export interface SentEvent {
   notes?: string;
 }
 
+export interface ColorApproval {
+  id: string;
+  dyehouseName: string;
+  approvalCode: string; // موافقة اللون
+  dyehouseColor: string; // لون المصبغة
+  notes: string;
+  date: string;
+}
+
 export interface DyeingBatch {
   id: string;
   color: string;
   colorHex?: string; // NEW: Color Approval Hex Code
   colorApproval?: string; // NEW: Color Approval Text
+  colorApprovals?: ColorApproval[]; // NEW: List of color approvals
   quantity: number;
   machine: string;
   notes: string;
@@ -274,6 +284,9 @@ export interface OrderRow {
   variantId?: string; // NEW: Selected Fabric Variant ID
   requiredGsm?: number; // NEW: Required GSM
   requiredWidth?: number; // NEW: Required Width
+  finishedGsm?: number; // NEW: Finished/Received GSM
+  finishedWidth?: number; // NEW: Finished/Received Width
+  finishingNotes?: string; // NEW: Finishing specific notes
   isPrinted?: boolean; // NEW: Track if production order has been printed
   printedAt?: string; // NEW: Date when the order was printed
   seasonId?: string; // NEW: Season ID
