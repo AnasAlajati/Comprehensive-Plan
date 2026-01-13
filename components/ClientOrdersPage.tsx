@@ -23,6 +23,7 @@ import { FabricDyehouseModal } from './FabricDyehouseModal';
 import { ColorApprovalModal } from './ColorApprovalModal';
 import { FabricFormModal } from './FabricFormModal';
 import { CreatePlanModal } from './CreatePlanModal';
+import { FabricProductionOrderModal } from './FabricProductionOrderModal';
 import { OrderProductionHistoryModal } from './OrderProductionHistoryModal';
 import { RemainingClientWork } from './RemainingClientWork';
 import { 
@@ -653,7 +654,6 @@ const MemoizedOrderRow = React.memo(({
   userName,
   onOpenReceiveModal,
   onOpenSentModal,
-  onOpenSmartScheduler,
   onOpenFabricDyehouse,
   onOpenColorApproval
 }: {
@@ -683,7 +683,6 @@ const MemoizedOrderRow = React.memo(({
   userName?: string;
   onOpenReceiveModal: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
   onOpenSentModal: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
-  onOpenSmartScheduler: (order: OrderRow) => void;
   onOpenFabricDyehouse: (order: OrderRow) => void;
   onOpenColorApproval: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
 }) => {
@@ -888,7 +887,10 @@ const MemoizedOrderRow = React.memo(({
 
   return (
     <>
-    <tr className={`transition-colors group text-sm table-view hidden md:table-row ${isSelected ? 'bg-blue-50' : 'hover:bg-blue-50/30'}`}>
+    <tr 
+      data-fabric-name={row.material}
+      className={`transition-colors group text-sm table-view hidden sm:table-row ${isSelected ? 'bg-blue-50' : 'hover:bg-blue-50/30'}`}
+    >
       {/* Checkbox */}
       <td className="p-0 border-r border-slate-200 text-center align-middle">
         <button onClick={() => toggleSelectRow(row.id)} className="p-2 w-full h-full flex items-center justify-center text-slate-400 hover:text-blue-600">
@@ -1471,14 +1473,6 @@ const MemoizedOrderRow = React.memo(({
                     </div>
                 </div>
             )}
-            {/* Smart Scheduler Button */}
-            <button 
-              onClick={() => onOpenSmartScheduler(row)}
-              className="p-1.5 text-purple-500 hover:text-purple-700 hover:bg-purple-50 rounded transition-colors opacity-0 group-hover:opacity-100"
-              title="Smart Scheduler - Plan Internal + External"
-            >
-              <CalendarRange className="w-4 h-4" />
-            </button>
             <button 
             onClick={() => handleDeleteRow(row.id)}
             className="p-2 text-slate-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
@@ -1490,7 +1484,10 @@ const MemoizedOrderRow = React.memo(({
     </tr>
 
     {/* Mobile Card View Row */}
-    <tr className="card-view md:hidden border-b border-slate-200 last:border-0">
+    <tr 
+      data-fabric-name={row.material}
+      className="card-view sm:hidden border-b border-slate-200 last:border-0"
+    >
       <td colSpan={100} className="p-0 block w-full whitespace-normal">
          <div className={`p-4 flex flex-col gap-3 ${isSelected ? 'bg-blue-50' : 'bg-white'}`}>
             {/* Header: Fabric & Checkbox */}
@@ -1700,7 +1697,7 @@ const MemoizedOrderRow = React.memo(({
     
     {/* Expanded Dyehouse Plan Row (Desktop Only) */}
     {showDyehouse && isExpanded && (
-      <tr className="bg-slate-50/50 animate-in slide-in-from-top-2 hidden md:table-row">
+      <tr className="bg-slate-50/50 animate-in slide-in-from-top-2 hidden sm:table-row">
         <td colSpan={1} className="border-r border-slate-200"></td>
         <td colSpan={10} className="p-4 border-b border-slate-200 shadow-inner">
             <div className="bg-white rounded border border-slate-200 overflow-hidden">
@@ -2271,9 +2268,15 @@ const MemoizedOrderRow = React.memo(({
 
 interface ClientOrdersPageProps {
   userRole?: 'admin' | 'editor' | 'viewer' | null;
+  highlightTarget?: { client: string; fabric?: string } | null;
+  onHighlightComplete?: () => void;
 }
 
-export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) => {
+export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ 
+  userRole,
+  highlightTarget,
+  onHighlightComplete
+}) => {
   const [customers, setCustomers] = useState<CustomerSheet[]>([]);
   const [rawCustomers, setRawCustomers] = useState<CustomerSheet[]>([]);
   const [flatOrders, setFlatOrders] = useState<OrderRow[]>([]);
@@ -2315,6 +2318,53 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
   }, [selectedCustomerId]);
 
   const [searchTerm, setSearchTerm] = useState('');
+
+  // NEW: Handle Highlight Navigation from Daily Summary
+  useEffect(() => {
+    if (highlightTarget && customers.length > 0) {
+      // 1. Find Client
+      const targetClient = customers.find(c => 
+        c.name.trim().toLowerCase() === highlightTarget.client.trim().toLowerCase()
+      );
+
+      if (targetClient) {
+        setSelectedCustomerId(targetClient.id);
+        
+        // 2. Highlight Specific Fabric
+        if (highlightTarget.fabric) {
+             // We delay to allow the state change (setSelectedCustomerId) to trigger a re-render 
+             // and the DOM to update with the new client's orders.
+             setTimeout(() => {
+                const selector = `[data-fabric-name="${highlightTarget.fabric}"]`;
+                const elements = document.querySelectorAll(selector);
+                
+                elements.forEach((el) => {
+                    // Check if element is visible
+                    if ((el as HTMLElement).offsetParent !== null || window.getComputedStyle(el).display !== 'none') {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        
+                        // Apply temporary highlight style directly
+                        const originalTransition = (el as HTMLElement).style.transition;
+                        // Use inline style to override Tailwind classes temporarily
+                        (el as HTMLElement).style.transition = 'background-color 0.5s ease';
+                        (el as HTMLElement).style.backgroundColor = '#fef08a'; // yellow-200
+                        
+                        // Remove highlight after 2 seconds
+                        setTimeout(() => {
+                            (el as HTMLElement).style.backgroundColor = ''; // Remove inline style to revert to CSS class
+                            setTimeout(() => {
+                                (el as HTMLElement).style.transition = originalTransition;
+                            }, 500);
+                        }, 2000);
+                    }
+                });
+
+                if (onHighlightComplete) onHighlightComplete();
+             }, 800); 
+        }
+      }
+    }
+  }, [highlightTarget, customers]);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [isAddingCustomer, setIsAddingCustomer] = useState(false);
   const [fabrics, setFabrics] = useState<FabricDefinition[]>([]);
@@ -2497,12 +2547,6 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
   }>({ date: new Date().toISOString().split('T')[0], quantity: 0, accessorySent: 0, notes: '' });
 
 
-  // Smart Scheduler Modal (Unified Internal + External Planning)
-  const [smartSchedulerModal, setSmartSchedulerModal] = useState<{
-    isOpen: boolean;
-    order: OrderRow | null;
-    customerName: string;
-  }>({ isOpen: false, order: null, customerName: '' });
 
   // Import/Export State
   const [showImportModal, setShowImportModal] = useState(false);
@@ -4183,7 +4227,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                 <>
                   <div className="bg-white rounded-lg shadow border border-slate-200 overflow-x-auto mb-4">
                     <table className="w-full text-sm border-collapse whitespace-nowrap">
-                      <thead className="bg-slate-100 text-slate-600 font-semibold shadow-sm text-xs uppercase tracking-wider table-view hidden md:table-header-group">
+                      <thead className="bg-slate-100 text-slate-600 font-semibold shadow-sm text-xs uppercase tracking-wider table-view hidden sm:table-header-group">
                         <tr>
                           <th className="p-3 w-10 border-b border-r border-slate-200 text-center">
                             <button onClick={toggleSelectAll} className="text-slate-400 hover:text-slate-600">
@@ -4291,11 +4335,6 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
                                 setSentModal({ isOpen: true, orderId, batchIdx, batch });
                                 setNewSent({ date: new Date().toISOString().split('T')[0], quantity: 0, notes: '' });
                               }}
-                              onOpenSmartScheduler={(order) => setSmartSchedulerModal({
-                                isOpen: true,
-                                order,
-                                customerName: selectedCustomer.name
-                              })}
                             />
                           );
                         })}
@@ -5227,78 +5266,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ userRole }) 
           />
         )}
 
-        {/* Smart Scheduler Modal - Unified Internal + External Planning */}
-        {smartSchedulerModal.isOpen && smartSchedulerModal.order && (
-          <SmartSchedulerModal
-            isOpen={smartSchedulerModal.isOpen}
-            onClose={() => setSmartSchedulerModal({ isOpen: false, order: null, customerName: '' })}
-            order={smartSchedulerModal.order}
-            customerName={smartSchedulerModal.customerName}
-            machines={machines}
-            externalFactories={externalFactories}
-            fabricDefinitions={fabrics}
-            onSave={async (allocations) => {
-              const order = smartSchedulerModal.order!;
-              const customerName = smartSchedulerModal.customerName;
-              
-              // Separate internal and external allocations
-              const internalAllocations = allocations.filter(a => a.type === 'internal');
-              const externalAllocations = allocations.filter(a => a.type === 'external');
-              
-              // Generate a split group ID if we have multiple internal allocations
-              const splitGroupId = internalAllocations.length > 1 
-                ? `split-${order.id}-${Date.now()}` 
-                : undefined;
-              
-              // Process internal allocations - add to machine futurePlans
-              for (let i = 0; i < internalAllocations.length; i++) {
-                const alloc = internalAllocations[i];
-                const machine = machines.find(m => m.id === alloc.machineId || String(m.machineid) === alloc.machineId);
-                if (!machine) continue;
-                
-                const newPlan = {
-                  type: 'PRODUCTION' as const,
-                  fabric: order.material,
-                  client: customerName,
-                  quantity: alloc.quantity,
-                  productionPerDay: alloc.productionRate || 0,
-                  days: alloc.estimatedDays || 0,
-                  remaining: alloc.quantity,
-                  startDate: '',
-                  endDate: '',
-                  orderId: order.id,
-                  orderReference: `${customerName}-${order.material?.substring(0, 10)}`,
-                  ...(splitGroupId && {
-                    splitGroupId,
-                    splitIndex: i + 1,
-                    splitTotal: internalAllocations.length
-                  })
-                };
-                
-                const existingPlans = machine.futurePlans || [];
-                await updateDoc(doc(db, 'MachinesSS', machine.id || String(machine.machineid)), {
-                  futurePlans: [...existingPlans, newPlan]
-                });
-              }
-              
-              // Process external allocations - save to order.externalPlan
-              if (externalAllocations.length > 0) {
-                const externalPlan = externalAllocations.map(alloc => ({
-                  factoryId: alloc.factoryId!,
-                  factoryName: alloc.factoryName!,
-                  quantity: alloc.quantity,
-                  status: 'pending' as const,
-                  createdAt: new Date().toISOString(),
-                  createdBy: userName || 'system'
-                }));
-                await handleUpdateOrder(order.id, { externalPlan });
-              }
-              
-              // Close modal
-              setSmartSchedulerModal({ isOpen: false, order: null, customerName: '' });
-            }}
-          />
-        )}
+
 
         {/* Inventory View Modal */}
         {inventoryViewModal.isOpen && (

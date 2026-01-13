@@ -96,10 +96,18 @@ const App: React.FC = () => {
   // View Modes
   const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'fabrics' | 'machines' | 'users'>('excel'); 
   const [planningInitialViewMode, setPlanningInitialViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
+  
+  // Navigation State
+  const [highlightTarget, setHighlightTarget] = useState<{client: string, fabric?: string} | null>(null);
 
   const handleNavigateToPlanning = (mode: 'INTERNAL' | 'EXTERNAL') => {
     setPlanningInitialViewMode(mode);
     setViewMode('planning');
+  };
+
+  const handleNavigateToOrder = (client: string, fabric?: string) => {
+    setHighlightTarget({ client, fabric });
+    setViewMode('orders');
   };
   
   // External Production State
@@ -696,6 +704,18 @@ const App: React.FC = () => {
                   <Building size={18} className={viewMode === 'dyehouse-directory' ? 'text-white' : 'text-blue-600'} />
                   <span>Dyehouse Dir.</span>
                 </button>
+
+                <button 
+                  onClick={() => setViewMode('planning')}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                    viewMode === 'planning' 
+                      ? 'bg-blue-600 text-white shadow-blue-200' 
+                      : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                  }`}
+                >
+                  <Calendar size={18} className={viewMode === 'planning' ? 'text-white' : 'text-blue-600'} />
+                  <span>Schedule</span>
+                </button>
              </div>
 
              {/* App Launcher */}
@@ -725,16 +745,6 @@ const App: React.FC = () => {
                         <div className="col-span-2 pb-2 mb-2 border-b border-slate-100 flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider">
                           <Calendar size={14} /> Core Planning
                         </div>
-                        <button 
-                          onClick={() => { setViewMode('planning'); setIsMenuOpen(false); }}
-                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'planning' ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
-                        >
-                          <div className={`p-2 rounded-md ${viewMode === 'planning' ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-500'}`}><Calendar size={20} /></div>
-                          <div>
-                            <div className="font-semibold text-sm">Schedule</div>
-                            <div className="text-[10px] text-slate-400 leading-tight">Gantt chart view</div>
-                          </div>
-                        </button>
                         <button 
                           onClick={() => { setViewMode('yarn-inventory'); setIsMenuOpen(false); }}
                           className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'yarn-inventory' ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
@@ -824,6 +834,7 @@ const App: React.FC = () => {
                 selectedDate={selectedDate}
                 machines={machines}
                 onNavigateToPlanning={handleNavigateToPlanning}
+                onNavigateToOrder={handleNavigateToOrder}
               />
             )}
 
@@ -855,7 +866,11 @@ const App: React.FC = () => {
             )}
 
             {viewMode === 'orders' && (
-              <ClientOrdersPage userRole={userRole} />
+              <ClientOrdersPage 
+                userRole={userRole} 
+                highlightTarget={highlightTarget}
+                onHighlightComplete={() => setHighlightTarget(null)}
+              />
             )}
 
             {viewMode === 'yarn-inventory' && (

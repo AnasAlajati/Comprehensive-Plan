@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Printer, FileText, Download } from 'lucide-react';
-import { OrderRow, FabricDefinition, YarnAllocationItem, Yarn } from '../types';
+import { OrderRow, FabricDefinition, YarnAllocationItem, Yarn, DyeingBatch } from '../types';
 import { toJpeg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
 
@@ -28,7 +28,22 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
   onMarkPrinted
 }) => {
   const [selectedMachine, setSelectedMachine] = useState<string>('');
+  const [manualMachine, setManualMachine] = useState<string>('');
+  
+  // New State for Qty and Accessories
+  const [editedTotalQty, setEditedTotalQty] = useState<string>('');
+  const [accessoryName, setAccessoryName] = useState<string>('');
+  const [accessoryQty, setAccessoryQty] = useState<string>('');
+  const [dyehouseInfo, setDyehouseInfo] = useState<string>('');
+  const [numberOfBatches, setNumberOfBatches] = useState<string>('');
+
   const [notes, setNotes] = useState<string>('');
+  const [checkboxes, setCheckboxes] = useState({
+    open: false,
+    closed: false,
+    production: false,
+    sample: false
+  });
   const [isDownloading, setIsDownloading] = useState(false);
   const printRef = useRef<HTMLDivElement>(null);
 
@@ -39,9 +54,54 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
         setSelectedMachine(all[0]);
       } else if (order.machine) {
         setSelectedMachine(order.machine);
+      } else {
+        setSelectedMachine('');
       }
+      setNotes(order.notes || '');
+      setEditedTotalQty(order.requiredQty?.toString() || '');
+      
+      // Initialize Accessory Fields
+      setAccessoryName(order.accessory || order.accessoryType || '');
+      setAccessoryQty(order.accessoryQty?.toString() || '');
+
+      // Initialize Dyehouse Info
+      const formattedDyePlan = formatDyeingPlan(order.dyeingPlan);
+      setDyehouseInfo(formattedDyePlan || order.requiredQty?.toString() || '');
+      
+      // Initialize Batch Count
+      setNumberOfBatches((order.dyeingPlan ? order.dyeingPlan.length || 1 : 1).toString());
+
+      // Infer initial checkboxes if possible, otherwise default false
+      // Currently defaulting to 'Production' checked if not sample
+      setCheckboxes({
+        open: false,
+        closed: false,
+        production: !order.isSample,
+        sample: !!order.isSample
+      });
     }
-  }, [isOpen, activeMachines, plannedMachines, order.machine]);
+  }, [isOpen, activeMachines, plannedMachines, order.machine, order.notes, order.isSample, order.requiredQty, order.accessory, order.accessoryType, order.accessoryQty, order.dyeingPlan]);
+
+  const formatDyeingPlan = (plan: DyeingBatch[] | undefined) => {
+    if (!plan || plan.length === 0) return '';
+    const counts: Record<number, number> = {};
+    plan.forEach(p => {
+        const cap = p.plannedCapacity || p.quantity || 0;
+        counts[cap] = (counts[cap] || 0) + 1;
+    });
+    return Object.entries(counts).map(([cap, count]) => {
+        const capacity = Number(cap);
+        if (count > 1) return `${capacity}*${count}`;
+        return `${capacity}`;
+    }).join(' + ');
+  };
+
+  // Handle manual machine input changes
+  // If no machine is selected/available, we use this manual value. 
+  // We'll display this value in the print view if selectedMachine is empty.
+
+  const currentMachineDisplay = selectedMachine || manualMachine;
+
 
   if (!isOpen) return null;
 
@@ -147,162 +207,299 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
         <div className="flex-1 overflow-y-auto p-8 bg-slate-100">
           
           {/* A4 Page Layout */}
-          <div ref={printRef} className="max-w-[210mm] mx-auto bg-white shadow-lg p-6 min-h-[297mm]">
+          <div ref={printRef} className="max-w-[210mm] mx-auto bg-white shadow-lg p-[10mm] min-h-[297mm] text-black text-xs" dir="rtl">
             
-            {/* Title Section */}
-            <div className="text-center border-b-2 border-black pb-2 mb-4">
-              <h1 className="text-2xl font-bold uppercase tracking-wider mb-1">Production Order</h1>
-              <div className="text-xs text-slate-500">
-                Date: {new Date().toLocaleDateString()}
-              </div>
-            </div>
-            
-            {/* Key Info Grid */}
-            <div className="grid grid-cols-2 gap-x-8 gap-y-4 mb-4">
-              <div className="border-b border-slate-200 pb-1">
-                <span className="text-xs font-bold text-slate-500 uppercase block mb-1">Client</span>
-                <div className="text-base font-bold">{clientName}</div>
-              </div>
-              <div className="border-b border-slate-200 pb-1">
-                <span className="text-xs font-bold text-slate-500 uppercase block mb-1">Machine</span>
-                <div className={`text-base font-bold ${!selectedMachine ? 'text-red-600' : ''}`}>
-                  {selectedMachine || 'Not Assigned'}
+            {/* 1. Header Section */}
+            <div className="flex border-b-2 border-slate-800 pb-2 mb-4 items-center min-h-[80px]">
+                {/* Left: Box */}
+                <div className="w-1/3 h-20 border-2 border-slate-800 flex items-center justify-center bg-slate-50">
+                    {/* Placeholder for Logo or QR */}
                 </div>
-              </div>
-              <div className="border-b border-slate-200 pb-1">
-                <span className="text-xs font-bold text-slate-500 uppercase block mb-1">Fabric Name</span>
-                <div className="text-base font-bold leading-relaxed whitespace-pre-wrap" style={{ direction: 'rtl', textAlign: 'right' }}>
-                  {fabric?.name || order.material}
+
+                {/* Center: Title */}
+                <div className="w-1/3 flex flex-col items-center justify-center">
+                    <h1 className="text-lg font-bold border-2 border-slate-800 px-6 py-1 bg-slate-100 shadow-sm">أمر تشغيل</h1>
                 </div>
-              </div>
-              <div className="border-b border-slate-200 pb-1">
-                <span className="text-xs font-bold text-slate-500 uppercase block mb-1">Order Quantity</span>
-                <div className={`text-base font-bold ${!order.requiredQty ? 'text-red-600' : ''}`}>
-                  {order.requiredQty ? `${order.requiredQty} kg` : 'Not Assigned'}
+
+                {/* Right: Info */}
+                <div className="w-1/3 text-left pl-2">
+                     <div className="flex justify-end flex-col gap-1 text-xs font-bold">
+                        <div className="flex items-center justify-end gap-2">
+                             <span>التاريخ:</span>
+                             <span className="border-b border-dotted border-slate-400 min-w-[100px] text-center">{new Date().toLocaleDateString('en-GB')}</span>
+                        </div>
+                        {/* Empty lines for manual dates if needed */}
+                     </div>
                 </div>
-              </div>
             </div>
 
-            {/* Specs Grid */}
-            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4">
-              <h3 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-2 uppercase text-xs">
-                Technical Specifications
-              </h3>
-              <div className="grid grid-cols-4 gap-4">
-                <div>
-                  <span className="text-[10px] text-slate-500 block">Required GSM</span>
-                  <span className={`font-bold text-base ${!order.requiredGsm ? 'text-red-600' : ''}`}>
-                    {order.requiredGsm || 'Missing'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-500 block">Required Width</span>
-                  <span className={`font-bold text-base ${!order.requiredWidth ? 'text-red-600' : ''}`}>
-                    {order.requiredWidth || 'Missing'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-500 block">Accessories</span>
-                  <span className="font-bold text-base">{order.accessory || 'None'}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-500 block">Acc. Qty</span>
-                  <span className="font-bold text-base">{order.accessoryQty || '-'}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Yarn Allocations */}
+            {/* 2. Order Data Box */}
             <div className="mb-4">
-              <h3 className="font-bold text-slate-800 border-b-2 border-black pb-1 mb-2 uppercase text-xs">
-                Yarn Allocation
-              </h3>
-              <table className="w-full text-xs text-left">
-                <thead>
-                  <tr className="border-b border-slate-300">
-                    <th className="py-1 font-bold w-1/3">Yarn Type</th>
-                    <th className="py-1 font-bold">Allocated Lot #</th>
-                    <th className="py-1 font-bold text-right">Quantity</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {order.yarnAllocations && Object.entries(order.yarnAllocations).length > 0 ? (
-                    Object.entries(order.yarnAllocations).map(([yarnId, allocations]) => (
-                      <tr key={yarnId}>
-                        <td className="py-2 align-top font-medium leading-relaxed" style={{ direction: 'rtl', textAlign: 'right' }}>
-                          {getYarnName(yarnId)}
-                        </td>
-                        <td className="py-2 align-top">
-                          <div className="flex flex-col gap-1">
-                            {allocations.map((alloc, i) => (
-                              <span key={i} className="bg-slate-100 px-1.5 py-0.5 rounded">
-                                {alloc.lotNumber}
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="py-2 align-top text-right font-mono">
-                          {allocations.reduce((sum, a) => sum + (a.quantity || 0), 0).toFixed(1)} kg
-                        </td>
-                      </tr>
+                 <div className="border-2 border-slate-800 bg-slate-200 text-center font-bold py-0.5 text-xs w-full mb-2">بيانات الأوردار</div>
+                 <div className="px-2 space-y-2">
+                      {/* Row 1: Client & Fabric */}
+                      <div className="flex justify-between items-center gap-4">
+                           <div className="flex items-center gap-2 w-1/2">
+                                <span className="font-bold whitespace-nowrap min-w-[60px]">العميل :</span>
+                                <span className="border-b border-dotted border-slate-400 w-full text-right px-2 font-mono font-bold text-base">{clientName}</span>
+                           </div>
+                           <div className="flex items-center gap-2 w-1/2">
+                                <span className="font-bold whitespace-nowrap min-w-[70px]">نوع القماش :</span>
+                                <span className="border-b border-dotted border-slate-400 w-full text-right px-2 font-bold">{fabric?.name || order.material}</span>
+                           </div>
+                      </div>
+
+                      {/* Row 2: Machine & Order No */}
+                      <div className="flex justify-between items-center gap-4">
+                           <div className="flex items-center gap-2 w-1/2">
+                                <span className="font-bold whitespace-nowrap min-w-[60px]">رقم المكنة :</span>
+                                <div className="border-b border-dotted border-slate-400 w-full text-right px-2 font-mono font-bold text-base relative">
+                                    {selectedMachine ? (
+                                        selectedMachine
+                                    ) : (
+                                        <input 
+                                            type="text" 
+                                            value={manualMachine}
+                                            onChange={(e) => setManualMachine(e.target.value)}
+                                            placeholder="Not Assigned"
+                                            className="w-full bg-transparent border-none outline-none text-right placeholder-red-500 text-black font-bold"
+                                        />
+                                    )}
+                                </div>
+                           </div>
+                           <div className="flex items-center gap-2 w-1/2">
+                                {/* Order Number Removed as requested */}
+                           </div>
+                      </div>
+                 </div>
+            </div>
+
+            {/* 3. Yarn Allocation Grid */}
+            <div className="mb-4 border-2 border-slate-800 mt-4">
+                 {/* Header */}
+                 <div className="bg-slate-200 border-b border-slate-800 flex font-bold text-xs">
+                     <div className="w-1/2 p-0.5 text-center border-l border-slate-800">الخيط</div>
+                     <div className="w-1/2 p-0.5 text-center">رقم اللوط</div>
+                 </div>
+                 
+                 {/* Rows */}
+                 {Object.entries(order.yarnAllocations || {}).length > 0 ? (
+                    Object.entries(order.yarnAllocations || {}).map(([yarnId, allocations], idx) => {
+                         const yarnName = getYarnName(yarnId);
+                         const lot = (allocations as any[]).map(a => a.lotNumber).join(', ');
+                         
+                         return (
+                             <div className="flex border-b border-slate-300 text-sm last:border-0 min-h-[30px]" key={yarnId}>
+                                  <div className="w-1/2 p-1 border-l border-slate-800 pr-2 flex items-center">
+                                      <span className="font-bold ml-2 w-6">({idx + 1})</span>
+                                      <span className="font-bold">{yarnName}</span>
+                                  </div>
+                                  <div className="w-1/2 p-1 text-center font-mono font-bold flex items-center justify-center bg-slate-50">
+                                      {lot || '-'}
+                                  </div>
+                             </div>
+                         );
+                    })
+                 ) : (
+                    // Empty Placeholders if no yarn allocated
+                    Array.from({ length: 4 }).map((_, i) => (
+                        <div key={i} className="flex border-b border-slate-300 text-sm last:border-0 min-h-[30px]">
+                            <div className="w-1/2 p-1 border-l border-slate-800 pr-2 flex items-center">
+                                <span className="font-bold ml-2 w-6">({i + 1})</span>
+                            </div>
+                            <div className="w-1/2 p-1 bg-slate-50"></div>
+                        </div>
                     ))
-                  ) : (
-                    <tr>
-                      <td colSpan={3} className="py-2 text-center text-red-600 font-bold italic">
-                        No specific yarn lots allocated.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                 )}
+                 {/* Make sure at least 4 rows exist */}
+                 {Object.entries(order.yarnAllocations || {}).length < 4 && Array.from({ length: 4 - Object.entries(order.yarnAllocations || {}).length }).map((_, i) => (
+                     <div key={`empty-${i}`} className="flex border-b border-slate-300 text-sm last:border-0 min-h-[30px]">
+                          <div className="w-1/2 p-1 border-l border-slate-800 pr-2 flex items-center">
+                              <span className="font-bold ml-2 w-6">({Object.entries(order.yarnAllocations || {}).length + i + 1})</span>
+                          </div>
+                          <div className="w-1/2 p-1 bg-slate-50"></div>
+                     </div>
+                 ))}
             </div>
 
-            {/* Dyehouse Info */}
-            <div className="mb-4">
-              <h3 className="font-bold text-slate-800 border-b-2 border-black pb-1 mb-2 uppercase text-xs">
-                Dyehouse Information
-              </h3>
-              <div className="grid grid-cols-2 gap-8">
-                <div>
-                  <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Dyehouse</span>
-                  <div className={`text-base font-bold ${!order.dyehouse ? 'text-red-600' : ''}`}>
-                    {order.dyehouse || 'Not Specified'}
-                  </div>
+            {/* 4. Specifications Section */}
+            <div className="mb-4 mt-4">
+                <div className="border-2 border-slate-800 bg-slate-200 text-center font-bold py-0.5 text-xs w-full mb-2">المواصفة</div>
+                
+                {/* Row 1: Weight & Width */}
+                <div className="flex gap-8 mb-2 px-2">
+                     <div className="flex items-center gap-2 w-1/2">
+                          <span className="font-bold text-base min-w-[70px]">وزن مجهز :</span>
+                          <div className="border-b border-dotted border-slate-400 flex-1 text-center font-bold text-lg font-mono relative">
+                            {order.requiredGsm}
+                            <span className="absolute right-0 bottom-0 text-[10px] font-sans font-normal text-slate-500">gm/m²</span>
+                          </div>
+                     </div>
+                     <div className="flex items-center gap-2 w-1/2">
+                          <span className="font-bold text-base min-w-[70px]">عرض مجهز:</span>
+                          <div className="border-b border-dotted border-slate-400 flex-1 text-center font-bold text-lg font-mono relative">
+                            {order.requiredWidth}
+                            <span className="absolute right-0 bottom-0 text-[10px] font-sans font-normal text-slate-500">cm</span>
+                          </div>
+                     </div>
                 </div>
-                <div>
-                  <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Machines</span>
-                  <div className="text-base font-bold">{getDyehouseMachines()}</div>
+
+                {/* Row 2: Grid & Checkboxes */}
+                <div className="flex border-2 border-slate-800 min-h-[70px]">
+                     {/* Checkboxes */}
+                     
+                     {/* Right Side Part (Data) */}
+                     <div className="w-2/3 border-l-2 border-slate-800 flex">
+                           <div className="flex-1 border-l border-slate-400 flex flex-col items-center justify-center p-1">
+                                <span className="text-[9px] font-bold text-slate-500 mb-0.5">إجمالي الكمية</span>
+                                <input 
+                                    type="text" 
+                                    value={editedTotalQty} 
+                                    onChange={e => setEditedTotalQty(e.target.value)}
+                                    className="w-full text-center font-bold font-mono text-base bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
+                                />
+                           </div>
+                           
+                           {/* Accessory Column 1: Name */}
+                           <div className="flex-1 border-l border-slate-400 flex flex-col items-center justify-center p-1">
+                                <span className="text-[9px] font-bold text-slate-500 mb-0.5">اسم الإكسسوار</span>
+                                <input 
+                                    type="text" 
+                                    value={accessoryName} 
+                                    onChange={e => setAccessoryName(e.target.value)}
+                                    className="w-full text-center font-bold text-[10px] bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
+                                    placeholder="-"
+                                />
+                           </div>
+
+                           {/* Accessory Column 2: Quantity */}
+                           <div className="flex-1 border-l border-slate-400 flex flex-col items-center justify-center p-1">
+                                <span className="text-[9px] font-bold text-slate-500 mb-0.5">كمية إكسسوار</span>
+                                <input 
+                                    type="text" 
+                                    value={accessoryQty} 
+                                    onChange={e => setAccessoryQty(e.target.value)}
+                                    className="w-full text-center font-bold font-mono text-base bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
+                                    placeholder="-"
+                                />
+                           </div>
+
+                           <div className="flex-1 border-l border-slate-400 flex flex-col items-center justify-center p-1">
+                                <span className="text-[9px] font-bold text-slate-500 mb-0.5">كمية الحوض</span>
+                                <input 
+                                    type="text" 
+                                    value={dyehouseInfo} 
+                                    onChange={e => setDyehouseInfo(e.target.value)}
+                                    className="w-full text-center font-bold font-mono text-base bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
+                                />
+                           </div>
+                           <div className="flex-1 flex flex-col items-center justify-center p-1">
+                                <span className="text-[9px] font-bold text-slate-500 mb-0.5">الأحواض</span>
+                                <input 
+                                    type="text" 
+                                    value={numberOfBatches} 
+                                    onChange={e => setNumberOfBatches(e.target.value)}
+                                    className="w-full text-center font-bold font-mono text-base bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
+                                />
+                           </div>
+                     </div>
+
+                     {/* Left Side Part (Checkboxes) - Visually Left */}
+                     <div className="w-1/3 grid grid-cols-2 gap-1 p-1 bg-slate-50 font-bold text-xs items-center">
+                          <div onClick={() => setCheckboxes(prev => ({...prev, open: !prev.open}))} className="flex items-center gap-1 cursor-pointer select-none">
+                              <div className={`w-4 h-4 border-2 border-slate-800 flex items-center justify-center ${checkboxes.open ? 'bg-slate-800' : 'bg-white'}`}>
+                                {checkboxes.open && <span className="text-white text-[10px]">✓</span>}
+                              </div>
+                              مفتوح
+                          </div>
+                          <div onClick={() => setCheckboxes(prev => ({...prev, closed: !prev.closed}))} className="flex items-center gap-1 cursor-pointer select-none">
+                              <div className={`w-4 h-4 border-2 border-slate-800 flex items-center justify-center ${checkboxes.closed ? 'bg-slate-800' : 'bg-white'}`}>
+                                {checkboxes.closed && <span className="text-white text-[10px]">✓</span>}
+                              </div>
+                              مقفول
+                          </div>
+                          <div onClick={() => setCheckboxes(prev => ({...prev, production: !prev.production}))} className="flex items-center gap-1 cursor-pointer select-none">
+                              <div className={`w-4 h-4 border-2 border-slate-800 flex items-center justify-center ${checkboxes.production ? 'bg-slate-800' : 'bg-white'}`}>
+                                {checkboxes.production && <span className="text-white text-[10px]">✓</span>}
+                              </div>
+                              انتــاج
+                          </div>
+                          <div onClick={() => setCheckboxes(prev => ({...prev, sample: !prev.sample}))} className="flex items-center gap-1 cursor-pointer select-none">
+                              <div className={`w-4 h-4 border-2 border-slate-800 flex items-center justify-center ${checkboxes.sample ? 'bg-slate-800' : 'bg-white'}`}>
+                                {checkboxes.sample && <span className="text-white text-[10px]">✓</span>}
+                              </div>
+                              عينـــة
+                          </div>
+                     </div>
                 </div>
-              </div>
+
+                {/* Notes Area */}
+                <div className="border-x-2 border-b-2 border-slate-800 p-2 min-h-[80px] relative">
+                     <div className="absolute top-1 right-2 text-[10px] font-bold underline">ملاحظات:</div>
+                     <textarea
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                        className="w-full h-full min-h-[60px] text-center text-lg font-serif mt-2 mx-8 leading-relaxed overflow-hidden text-slate-700 bg-transparent border-none outline-none resize-none placeholder:text-slate-300 placeholder:italic placeholder:text-xs placeholder:font-sans"
+                        placeholder=""
+                    />
+                </div>
             </div>
 
-            {/* Notes Section */}
-            <div className="mb-4">
-              <h3 className="font-bold text-slate-800 border-b-2 border-black pb-1 mb-2 uppercase text-xs">
-                Production Notes
-              </h3>
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Enter any additional notes here..."
-                className="w-full min-h-[60px] p-2 border border-slate-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-              />
-              {order.notes && (
-                <div className="mt-2 p-2 bg-yellow-50 border border-yellow-100 rounded text-xs">
-                  <span className="font-bold block mb-1">Order Notes:</span>
-                  {order.notes}
-                </div>
-              )}
+            {/* 5. Knitting Data */}
+            <div className="grid grid-cols-1 border-2 border-slate-800 mb-4 mt-2">
+                 {/* Header */}
+                 <div className="bg-slate-200 font-bold border-b border-slate-800 py-0.5 text-xs px-2 text-center">بيانات ماكينة التريكو</div>
+                 
+                 {/* Grid */}
+                 <div className="p-2 grid grid-cols-2 gap-x-8 gap-y-1 text-xs bg-slate-50/30">
+                      <div className="flex justify-between items-center border-b border-slate-300 h-6">
+                          <span className="font-bold">عدد الإبر:</span>
+                          <span className="font-mono text-sm font-bold">2640</span>
+                      </div>
+                      <div className="flex justify-between items-center border-b border-slate-300 h-6">
+                          <span className="font-bold">بوصة:</span>
+                          <span className="font-mono text-sm font-bold">32</span>
+                      </div>
+                      <div className="flex justify-between items-center border-b border-slate-300 h-6">
+                          <span className="font-bold">عدد المواكيك:</span>
+                          <span className="font-mono text-sm font-bold">96</span>
+                      </div>
+                      <div className="flex justify-between items-center border-b border-slate-300 h-6">
+                          <span className="font-bold">جوج:</span>
+                          <span className="font-mono text-sm font-bold">28</span>
+                      </div>
+                      <div className="flex justify-between items-center border-b border-slate-300 h-6">
+                          <span className="font-bold">سرعة المكنة:</span>
+                          <span className="font-mono text-sm opacity-20">---</span>
+                      </div>
+                      <div className="flex justify-between items-center border-b border-slate-300 h-6">
+                          <span className="font-bold">عدد الغرز:</span>
+                          <span className="font-mono text-sm opacity-20">---</span>
+                      </div>
+                      <div className="flex justify-between items-center border-b border-slate-300 h-6">
+                          <span className="font-bold">عرض خام:</span>
+                          <span className="font-mono text-sm opacity-20">---</span>
+                      </div>
+                      <div className="flex justify-between items-center border-b border-slate-300 h-6">
+                          <span className="font-bold">وزن خام:</span>
+                          <span className="font-mono text-sm opacity-20">---</span>
+                      </div>
+                 </div>
             </div>
 
-            {/* Footer */}
-            <div className="mt-8 pt-4 border-t-2 border-black flex justify-between text-[10px] text-slate-500">
-              <div>
-                <span className="font-bold">Generated By:</span> System
-              </div>
-              <div>
-                <span className="font-bold">Approved By:</span> _______________________
-              </div>
+            {/* 6. Signature Area */}
+            <div className="flex justify-end mt-4 px-8">
+                 <div className="text-center">
+                     <div className="text-sm font-bold mb-8">توقيع المسؤول</div>
+                     <div className="w-48 border-b border-slate-800"></div>
+                 </div>
+            </div>
+
+            {/* Footer Text */}
+            <div className="mt-8 flex justify-between text-[10px] text-slate-400 font-mono">
+                <div>FO-PL-005</div>
+                <div>Rev: 02</div>
+                <div>Generated: {new Date().toLocaleDateString()}</div>
             </div>
 
           </div>

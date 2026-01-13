@@ -332,12 +332,14 @@ interface FetchDataPageProps {
   selectedDate?: string;
   machines?: any[];
   onNavigateToPlanning?: (mode: 'INTERNAL' | 'EXTERNAL') => void;
+  onNavigateToOrder?: (client: string, fabric?: string) => void;
 }
 
 const FetchDataPage: React.FC<FetchDataPageProps> = ({ 
   selectedDate: propSelectedDate,
   machines = [],
-  onNavigateToPlanning
+  onNavigateToPlanning,
+  onNavigateToOrder
 }) => {
   const [selectedDate, setSelectedDate] = useState<string>(propSelectedDate || new Date().toISOString().split('T')[0]);
   const [importDate, setImportDate] = useState<string>(new Date().toISOString().split('T')[0]);
@@ -1544,8 +1546,10 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           machineName: machine.name,
           machineType: machine.type,
           machineBrand: machine.brand,
+          futurePlans: machine.futurePlans, // Include future plans to show "Next Up" in summary
           ...log,
-          id: log.date || log.id
+          // Use machineId as the unique ID for the row as there is only one log per machine per day
+          id: machine.id
         });
       });
     });
@@ -4468,7 +4472,10 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       <DailySummaryModal 
         isOpen={isSummaryModalOpen}
         onClose={() => setIsSummaryModalOpen(false)}
-        machines={machines}
+        machines={allLogs}
+        selectedDate={selectedDate}
+        onDateChange={setSelectedDate}
+        onNavigateToOrder={onNavigateToOrder}
       />
 
       {/* PDF Generation Overlay */}
