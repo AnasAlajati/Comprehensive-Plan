@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { OrderRow, MachineRow, PlanItem, MachineStatus, FabricDefinition, ExternalPlanAssignment } from '../types';
 import { DataService } from '../services/dataService';
-import { recalculateSchedule } from '../services/data';
+import { recalculateSchedule, parseFabricName } from '../services/data';
 import { db } from '../services/firebase';
 import { doc, getDoc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { 
@@ -39,6 +39,25 @@ interface ExistingPlan {
   idx?: number; // Index in futurePlans array (for internal)
   planRef?: any; // Reference to the plan object
 }
+
+// Helper to calculate default production based on machine type/name
+const getDefaultProduction = (machineName: string, machineType: string): number => {
+    const name = (machineName || '').toLowerCase().trim();
+    const type = (machineType || '').toLowerCase().trim();
+
+    // Specific Exceptions
+    if (name.includes('m 8') || name.includes('m8')) return 70;                // M8 Exception
+    if (name.includes('فل جاكار') || name.includes('full jacquard')) return 70; // Full Jacquard
+    if (name.includes('jac') || type.includes('jacquard')) return 70;           // Jacquard / JAC
+
+    // Type Defaults
+    if (type.includes('melton')) return 300;
+    if (type.includes('single')) return 180;
+    if (type.includes('double')) return 100;
+    if (type.includes('interlock')) return 70;
+
+    return 150; // Generic Fallback
+};
 
 // Helper to calculate changeover days
 const getChangeoverDays = (machineType: string): number => {
@@ -110,7 +129,7 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
      // Calculate remaining after existing plans
      const unplanned = Math.max(0, order.requiredQty - existingPlans.reduce((sum, p) => sum + p.quantity, 0));
      setAllocationQty(unplanned);
-  }, [order.requiredQty]); 
+  }, [order.requiredQty, existingPlans]);
 
   const loadData = async () => {
     setLoading(true);
@@ -122,14 +141,18 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
       }
       
       // Normalize Machines to ensure ID and Name exist
-      const normalizedMachines: MachineRow[] = rawMachines.map((m: any) => ({
-          ...m,
-          id: m.id !== undefined ? m.id : (m.machineid !== undefined ? m.machineid : Math.random()),
-          machineName: m.machineName || m.name || `Machine ${m.id || m.machineid}`,
-          avgProduction: Number(m.avgProduction) || 150,
-          remainingMfg: Number(m.remainingMfg) || 0,
-          type: m.type || 'Unknown'
-      }));
+      const normalizedMachines: MachineRow[] = rawMachines.map((m: any) => {
+          const mName = m.machineName || m.name || `Machine ${m.id || m.machineid}`;
+          const mType = m.type || 'Unknown';
+          return {
+            ...m,
+            id: m.id !== undefined ? m.id : (m.machineid !== undefined ? m.machineid : Math.random()),
+            machineName: mName,
+            type: mType,
+            avgProduction: Number(m.avgProduction) || getDefaultProduction(mName, mType),
+            remainingMfg: Number(m.remainingMfg) || 0,
+          };
+      });
 
       setMachines(normalizedMachines);
 
@@ -307,7 +330,7 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
       if (machine.futurePlans) {
         machine.futurePlans.forEach(p => totalRemaining += (Number(p.quantity) || 0));
       }
-      const dailyProd = Number(machine.avgProduction) || 150;
+      const dailyProd = Number(machine.avgProduction) || getDefaultProduction(machine.machineName, machine.type);
       let daysToFinish = dailyProd > 0 ? Math.ceil(totalRemaining / dailyProd) : 999;
       finishDate.setDate(finishDate.getDate() + daysToFinish);
       const daysUntilFree = daysToFinish;
@@ -361,7 +384,7 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
         const newPlan: PlanItem = {
             type: 'PRODUCTION',
             fabric: order.material,
-            productionPerDay: machine.avgProduction || 150,
+            productionPerDay: machine.avgProduction || getDefaultProduction(machine.machineName, machine.type),
             quantity: allocationQty,
             days: 0, // Recalculated
             startDate: '',
@@ -415,17 +438,34 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
             return rest;
         });
 
+        // --- OPTIMISTIC UPDATE ---
+        // 1. Update Machines State Locally
+        const updatedMachines = machines.map(m => 
+            String(m.id) === String(machine.id) 
+                ? { ...m, futurePlans: cleanPlans } 
+                : m
+        );
+        setMachines(updatedMachines);
+
+        // 2. Update Derived Lists Immediately
+        calculateRecommendations(updatedMachines, targetFabric);
+        findExistingPlans(updatedMachines, externalFactories);
+        
+        // 3. Close & Reset UI
+        setExpandedMachineId(null);
+        // allocationQty will be auto-updated by useEffect via existingPlans change
+        
+        // 4. Background Save
         await DataService.updateMachineInMachineSS(machine.firestoreId || String(machine.id), {
             futurePlans: cleanPlans,
             lastUpdated: new Date().toISOString()
         });
 
-        await loadData();
-        setExpandedMachineId(null);
-        setAllocationQty(0);
+        // No need to loadData() if successful
     } catch (err) {
         console.error(err);
         alert("Failed to save schedule");
+        loadData(); // Revert on error
     } finally {
         setProcessing(false);
     }
@@ -442,7 +482,7 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
         const newPlan: PlanItem = {
             type: 'PRODUCTION',
             fabric: order.material,
-            productionPerDay: machine.avgProduction || 150,
+            productionPerDay: machine.avgProduction || getDefaultProduction(machine.machineName, machine.type),
             quantity: allocationQty,
             days: 0,
             startDate: '',
@@ -517,13 +557,21 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
               const machine = machines.find(m => String(m.id) === plan.id);
               if (machine) {
                   const updatedPlans = [...(machine.futurePlans || [])];
-                  // Remove by index (careful if indices shift, but we re-read data so it should be ok)
-                  // Better to match by equality of object if possible, or re-find
-                   
-                  // Simplest: Remove at index if valid
+                  // Remove by index
                   if (plan.idx !== undefined && updatedPlans[plan.idx]) {
                       updatedPlans.splice(plan.idx, 1);
                       const recalculated = recalculateSchedule(updatedPlans, machine);
+
+                      // OPTIMISTIC UPDATE
+                      const updatedMachines = machines.map(m => 
+                          String(m.id) === String(machine.id) 
+                              ? { ...m, futurePlans: recalculated } 
+                              : m
+                      );
+                      setMachines(updatedMachines);
+                      calculateRecommendations(updatedMachines, targetFabric);
+                      findExistingPlans(updatedMachines, externalFactories);
+
                       await DataService.updateMachineInMachineSS(machine.firestoreId || String(machine.id), {
                           futurePlans: recalculated
                       });
@@ -531,18 +579,19 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
               }
           } else {
               // External
-              // arrayRemove requires exact object match, which we have in plan.planRef
               const factoryRef = doc(db, 'ExternalPlans', plan.id);
               if (plan.planRef) {
                   await updateDoc(factoryRef, {
                       plans: arrayRemove(plan.planRef)
                   });
               }
+              await loadData(); // Keep full reload for external for now
           }
-          await loadData();
+          // Internal skip loadData()
       } catch (err) {
           console.error(err);
           alert("Failed to delete plan");
+          loadData();
       } finally {
           setProcessing(false);
       }
@@ -608,7 +657,7 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
         <div className="flex-1 overflow-hidden flex flex-col lg:flex-row bg-slate-50">
             
             {/* LEFT PANEL: Allocation Helper (Tabs) */}
-            <div className="flex-1 flex flex-col border-r border-slate-200 bg-white overflow-hidden">
+            <div className="flex-1 flex flex-col border-r border-slate-200 bg-white overflow-hidden min-w-[350px]">
                 <div className="flex border-b border-slate-200">
                     <button 
                         onClick={() => setActiveTab('AI')}
@@ -734,7 +783,8 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
                                                                              <tr>
                                                                                  <th className="p-1 px-2 text-left w-24 border-r border-slate-200">Start</th>
                                                                                  <th className="p-1 px-2 text-left w-24 border-r border-slate-200">End</th>
-                                                                                 <th className="p-1 px-2 text-left border-r border-slate-200">Client / Ref</th>
+                                                                                 <th className="p-1 px-2 text-left border-r border-slate-200 w-32">Client / Ref</th>
+                                                                                 <th className="p-1 px-2 text-left border-r border-slate-200 w-32">Fabric</th>
                                                                                  <th className="p-1 px-2 text-center w-20 border-r border-slate-200 bg-slate-50">Qty (kg)</th>
                                                                                  <th className="p-1 px-2 text-center w-16 border-r border-slate-200">prod/day</th>
                                                                                  <th className="p-1 px-2 text-center w-14">Sort</th>
@@ -749,6 +799,9 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
                                                                                      <td className="p-1 px-2 border-r border-emerald-100 font-bold flex items-center gap-1">
                                                                                          {rec.machine.client} 
                                                                                          <span className="text-[9px] bg-emerald-200 text-emerald-800 px-1 rounded uppercase not-italic">Running</span>
+                                                                                     </td>
+                                                                                     <td className="p-1 px-2 border-r border-emerald-100 text-[10px] whitespace-normal break-words leading-tight" title={rec.machine.material}>
+                                                                                         {rec.machine.material ? parseFabricName(rec.machine.material).shortName : '-'}
                                                                                      </td>
                                                                                      <td className="p-1 px-2 text-center border-r border-emerald-100">-</td>
                                                                                      <td className="p-1 px-2 text-center border-r border-emerald-100">{rec.machine.dayProduction}</td>
@@ -770,6 +823,9 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
                                                                                              ) : (
                                                                                                  <span className="text-slate-700 font-medium">{plan.client}</span>
                                                                                              )}
+                                                                                         </td>
+                                                                                         <td className="p-1 px-2 border-r border-slate-200 text-[10px] text-slate-600 whitespace-normal break-words leading-tight" title={plan.fabric}>
+                                                                                             {plan.fabric ? parseFabricName(plan.fabric).shortName : '-'}
                                                                                          </td>
                                                                                          
                                                                                          {/* Editable Qty Cell */}
@@ -914,7 +970,7 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
             </div>
 
             {/* RIGHT PANEL: Current Schedule Overview */}
-            <div className="w-full lg:w-[45%] flex flex-col h-full bg-slate-50/50">
+            <div className="w-full lg:w-[350px] xl:w-[400px] flex flex-col h-full bg-slate-50/50 shrink-0 border-t lg:border-t-0 lg:border-l border-slate-200">
                 <div className="p-4 border-b border-slate-200 bg-white">
                     <h3 className="font-bold text-slate-800 flex items-center gap-2">
                         <Calendar size={18} className="text-slate-400" />

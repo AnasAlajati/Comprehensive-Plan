@@ -192,63 +192,95 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
-  // Presence tracking - heartbeat every 60 seconds
+  // Presence & Activity Tracking (Online, Idle, Background)
   useEffect(() => {
     if (!user?.email || !isAuthorized) return;
     
     const email = user.email.toLowerCase();
     const userDocRef = doc(db, 'users', email);
     
-    // Set online immediately
-    const setOnline = async () => {
+    // Mutable state for the effect closure
+    let lastActivity = Date.now();
+    let currentStatus = 'online'; 
+
+    // Helper: Update Firestore
+    const updatePresence = async (status: string) => {
+      currentStatus = status;
       try {
         await setDoc(userDocRef, {
-          isOnline: true,
+          isOnline: true, // User is technically connected
+          status: status, // 'online' | 'idle' | 'background'
           lastSeen: serverTimestamp()
         }, { merge: true });
       } catch (err) {
         console.error('Failed to update presence:', err);
       }
     };
-    
-    setOnline();
-    
-    // Heartbeat every 60 seconds
-    const heartbeatInterval = setInterval(setOnline, 60000);
-    
-    // Set offline on page close/unload
-    const setOffline = async () => {
-      try {
-        await setDoc(userDocRef, {
-          isOnline: false,
-          lastSeen: serverTimestamp()
-        }, { merge: true });
-      } catch (err) {
-        console.error('Failed to set offline:', err);
-      }
-    };
-    
-    // Handle tab visibility change
+
+    // 1. IDLE CHECKER (Heartbeat)
+    // Run every 60 seconds to check activity and send heartbeat
+    const heartbeatInterval = setInterval(() => {
+        const now = Date.now();
+        const isHidden = document.visibilityState === 'hidden';
+        
+        // Determine Status based on simple rules
+        let newStatus = currentStatus;
+
+        if (isHidden) {
+            newStatus = 'background';
+        } else {
+            // 5 minutes idle threshold
+            if (now - lastActivity > 5 * 60 * 1000) {
+                newStatus = 'idle';
+            } else {
+                newStatus = 'online';
+            }
+        }
+        
+        // Always send heartbeat to update 'lastSeen'
+        updatePresence(newStatus);
+    }, 60000);
+
+    // 2. VISIBILITY LISTENER (Immediate Background Detection)
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        setOnline();
-      }
+        if (document.visibilityState === 'hidden') {
+            updatePresence('background');
+        } else {
+            // Back to foreground - Reset activity if they come back
+            lastActivity = Date.now();
+            updatePresence('online');
+        }
     };
-    
-    // Handle beforeunload to set offline
-    const handleBeforeUnload = () => {
-      // Use sendBeacon for reliable offline status
-      navigator.sendBeacon && setOffline();
+
+    // 3. ACTIVITY LISTENER (Reset Idle Timer)
+    const handleActivity = () => {
+        lastActivity = Date.now();
+        // If we were idle, immediately switch back to online without waiting for heartbeat
+        if (currentStatus === 'idle' && document.visibilityState === 'visible') {
+            updatePresence('online');
+        }
     };
-    
-    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    // Initial Set
+    updatePresence('online');
+
+    // Attach Listeners
     document.addEventListener('visibilitychange', handleVisibility);
+    const events = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart'];
+    events.forEach(ev => window.addEventListener(ev, handleActivity));
     
+    // Cleanup
     return () => {
       clearInterval(heartbeatInterval);
-      window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibility);
-      setOffline(); // Set offline on cleanup
+      events.forEach(ev => window.removeEventListener(ev, handleActivity));
+      
+      // Set offline on exit
+      setDoc(userDocRef, {
+          isOnline: false,
+          status: 'offline',
+          lastSeen: serverTimestamp()
+      }, { merge: true }).catch(console.error);
     };
   }, [user?.email, isAuthorized]);
 

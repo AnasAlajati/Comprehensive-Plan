@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Printer, FileText, Download } from 'lucide-react';
-import { OrderRow, FabricDefinition, YarnAllocationItem, Yarn, DyeingBatch } from '../types';
+import { OrderRow, FabricDefinition, YarnAllocationItem, Yarn, DyeingBatch, MachineSS, Dyehouse } from '../types';
 import { toJpeg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
 
@@ -12,7 +12,9 @@ interface FabricProductionOrderModalProps {
   fabric: FabricDefinition | undefined;
   activeMachines: string[];
   plannedMachines: string[];
+  machines?: MachineSS[]; // Pass all machines to lookup specs
   allYarns: Yarn[];
+  dyehouses?: Dyehouse[]; // Optional list for debug matching
   onMarkPrinted: () => void;
 }
 
@@ -24,12 +26,16 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
   fabric,
   activeMachines,
   plannedMachines,
+  machines,
   allYarns,
+  dyehouses = [],
   onMarkPrinted
 }) => {
   const [selectedMachine, setSelectedMachine] = useState<string>('');
   const [manualMachine, setManualMachine] = useState<string>('');
   
+  const machineDetails = machines?.find(m => m.name === selectedMachine);
+
   // New State for Qty and Accessories
   const [editedTotalQty, setEditedTotalQty] = useState<string>('');
   const [accessoryName, setAccessoryName] = useState<string>('');
@@ -268,7 +274,65 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
                                 </div>
                            </div>
                            <div className="flex items-center gap-2 w-1/2">
-                                {/* Order Number Removed as requested */}
+                                <span className="font-bold whitespace-nowrap min-w-[60px]">المصبغة :</span>
+                                <span className="border-b border-dotted border-slate-400 w-full text-right px-2 font-bold relative group/debug">
+                                  {(() => {
+                                      // 1. Order Default
+                                      const orderDefault = order.dyehouse;
+                                      
+                                      // 2. Approvals
+                                      const approvalDyehouses = order.dyeingPlan?.flatMap(b => b.colorApprovals || []).map(a => a.dyehouseName).filter(Boolean) || [];
+                                      
+                                      // 3. Batch Manual Overrides
+                                      const batchDyehouses = order.dyeingPlan?.map(b => b.dyehouse).filter(Boolean) || [];
+                                      
+                                      // Combine all unique
+                                      const allSources = Array.from(new Set([
+                                          ...(orderDefault ? [orderDefault] : []),
+                                          ...approvalDyehouses,
+                                          ...batchDyehouses
+                                      ].map(s => s?.trim()).filter(Boolean)));
+                                      
+                                      return allSources.length > 0 ? allSources.join(' + ') : '---';
+                                  })()}
+                                   
+                                   {/* Debug Tooltip for PDF view (Only visible on hover in UI, print ignores it) */}
+                                   <button className="absolute top-0 left-0 w-3 h-3 rounded-full opacity-0 group-hover/debug:opacity-100 cursor-help print:hidden z-50 transition-opacity"
+                                        style={{ backgroundColor: (() => {
+                                            const hasAny = order.dyehouse || 
+                                                           order.dyeingPlan?.some(b => b.dyehouse || b.colorApprovals?.some(a => a.dyehouseName));
+                                            return hasAny ? '#4ade80' : '#f87171';
+                                        })() }}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            
+                                            // Debug Logic
+                                            const orderDefault = order.dyehouse;
+                                            const approvalDyehouses = order.dyeingPlan?.flatMap(b => b.colorApprovals || []).map(a => a.dyehouseName).filter(Boolean) || [];
+                                            const batchDyehouses = order.dyeingPlan?.map(b => b.dyehouse).filter(Boolean) || [];
+                                            
+                                            const allSources = Array.from(new Set([
+                                                ...(orderDefault ? [orderDefault] : []),
+                                                ...approvalDyehouses,
+                                                ...batchDyehouses
+                                            ]));
+
+                                            alert(
+                                                `🔍 DYEHOUSE DEBUG REPORT (UPDATED)\n` + 
+                                                `-------------------------\n` +
+                                                `1. Order Default Field: "${orderDefault || '(Empty)'}"\n\n` +
+                                                
+                                                `2. Color Approvals: ${approvalDyehouses.length > 0 ? approvalDyehouses.join(', ') : '(None)'}\n\n` + 
+                                                
+                                                `3. Batch Manual Overrides: ${batchDyehouses.length > 0 ? batchDyehouses.join(', ') : '(None)'}\n\n` +
+                                                
+                                                `✅ FINAL DISPLAY: "${allSources.length > 0 ? allSources.join(' + ') : '---'}"`
+                                            );
+                                        }}
+                                        title="Click for detailed debug report"
+                                   ></button>
+                                </span>
                            </div>
                       </div>
                  </div>
@@ -322,127 +386,157 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
                  ))}
             </div>
 
-            {/* 4. Specifications Section */}
+            {/* 4. Specifications Section (Matrix Table) */}
             <div className="mb-4 mt-4">
                 <div className="border-2 border-slate-800 bg-slate-200 text-center font-bold py-0.5 text-xs w-full mb-2">المواصفة</div>
                 
-                {/* Row 1: Weight & Width */}
-                <div className="flex gap-8 mb-2 px-2">
-                     <div className="flex items-center gap-2 w-1/2">
-                          <span className="font-bold text-base min-w-[70px]">وزن مجهز :</span>
-                          <div className="border-b border-dotted border-slate-400 flex-1 text-center font-bold text-lg font-mono relative">
-                            {order.requiredGsm}
-                            <span className="absolute right-0 bottom-0 text-[10px] font-sans font-normal text-slate-500">gm/m²</span>
+                {/* Specs Grid */}
+                <div className="border-2 border-slate-800 text-sm">
+                     {/* Header Row */}
+                     <div className="flex bg-slate-100 font-bold border-b border-slate-800 text-xs">
+                          <div className="flex-1 p-1 text-center border-l border-slate-400">---</div>
+                          <div className="flex-1 p-1 text-center border-l border-slate-400">مجهز</div>
+                          <div className="flex-1 p-1 text-center border-l border-slate-400">خام</div>
+                          <div className="flex-1 p-1 text-center">غسيل</div>
+                     </div>
+                     {/* Row: Weight */}
+                     <div className="flex border-b border-slate-400">
+                          <div className="flex-1 p-1 text-center font-bold bg-slate-50 border-l border-slate-400 flex items-center justify-center">الوزن</div>
+                          <div className="flex-1 p-1 text-center font-mono font-bold text-lg border-l border-slate-400 flex items-center justify-center">
+                              {/* Finished Weight */}
+                              {order.requiredGsm}
+                          </div>
+                          <div className="flex-1 p-1 text-center font-mono border-l border-slate-400 flex items-center justify-center">
+                              {/* Raw Weight (Empty) */}
+                          </div>
+                          <div className="flex-1 p-1 text-center font-mono flex items-center justify-center">
+                              {/* Washing Weight (Empty) */}
                           </div>
                      </div>
-                     <div className="flex items-center gap-2 w-1/2">
-                          <span className="font-bold text-base min-w-[70px]">عرض مجهز:</span>
-                          <div className="border-b border-dotted border-slate-400 flex-1 text-center font-bold text-lg font-mono relative">
-                            {order.requiredWidth}
-                            <span className="absolute right-0 bottom-0 text-[10px] font-sans font-normal text-slate-500">cm</span>
+                     {/* Row: Width */}
+                     <div className="flex">
+                          <div className="flex-1 p-1 text-center font-bold bg-slate-50 border-l border-slate-400 flex items-center justify-center">العرض</div>
+                          <div className="flex-1 p-1 text-center font-mono font-bold text-lg border-l border-slate-400 flex items-center justify-center">
+                              {/* Finished Width */}
+                              {order.requiredWidth}
                           </div>
-                     </div>
-                </div>
-
-                {/* Row 2: Grid & Checkboxes */}
-                <div className="flex border-2 border-slate-800 min-h-[70px]">
-                     {/* Checkboxes */}
-                     
-                     {/* Right Side Part (Data) */}
-                     <div className="w-2/3 border-l-2 border-slate-800 flex">
-                           <div className="flex-1 border-l border-slate-400 flex flex-col items-center justify-center p-1">
-                                <span className="text-[9px] font-bold text-slate-500 mb-0.5">إجمالي الكمية</span>
-                                <input 
-                                    type="text" 
-                                    value={editedTotalQty} 
-                                    onChange={e => setEditedTotalQty(e.target.value)}
-                                    className="w-full text-center font-bold font-mono text-base bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
-                                />
-                           </div>
-                           
-                           {/* Accessory Column 1: Name */}
-                           <div className="flex-1 border-l border-slate-400 flex flex-col items-center justify-center p-1">
-                                <span className="text-[9px] font-bold text-slate-500 mb-0.5">اسم الإكسسوار</span>
-                                <input 
-                                    type="text" 
-                                    value={accessoryName} 
-                                    onChange={e => setAccessoryName(e.target.value)}
-                                    className="w-full text-center font-bold text-[10px] bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
-                                    placeholder="-"
-                                />
-                           </div>
-
-                           {/* Accessory Column 2: Quantity */}
-                           <div className="flex-1 border-l border-slate-400 flex flex-col items-center justify-center p-1">
-                                <span className="text-[9px] font-bold text-slate-500 mb-0.5">كمية إكسسوار</span>
-                                <input 
-                                    type="text" 
-                                    value={accessoryQty} 
-                                    onChange={e => setAccessoryQty(e.target.value)}
-                                    className="w-full text-center font-bold font-mono text-base bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
-                                    placeholder="-"
-                                />
-                           </div>
-
-                           <div className="flex-1 border-l border-slate-400 flex flex-col items-center justify-center p-1">
-                                <span className="text-[9px] font-bold text-slate-500 mb-0.5">كمية الحوض</span>
-                                <input 
-                                    type="text" 
-                                    value={dyehouseInfo} 
-                                    onChange={e => setDyehouseInfo(e.target.value)}
-                                    className="w-full text-center font-bold font-mono text-base bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
-                                />
-                           </div>
-                           <div className="flex-1 flex flex-col items-center justify-center p-1">
-                                <span className="text-[9px] font-bold text-slate-500 mb-0.5">الأحواض</span>
-                                <input 
-                                    type="text" 
-                                    value={numberOfBatches} 
-                                    onChange={e => setNumberOfBatches(e.target.value)}
-                                    className="w-full text-center font-bold font-mono text-base bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
-                                />
-                           </div>
-                     </div>
-
-                     {/* Left Side Part (Checkboxes) - Visually Left */}
-                     <div className="w-1/3 grid grid-cols-2 gap-1 p-1 bg-slate-50 font-bold text-xs items-center">
-                          <div onClick={() => setCheckboxes(prev => ({...prev, open: !prev.open}))} className="flex items-center gap-1 cursor-pointer select-none">
-                              <div className={`w-4 h-4 border-2 border-slate-800 flex items-center justify-center ${checkboxes.open ? 'bg-slate-800' : 'bg-white'}`}>
-                                {checkboxes.open && <span className="text-white text-[10px]">✓</span>}
-                              </div>
-                              مفتوح
+                          <div className="flex-1 p-1 text-center font-mono border-l border-slate-400 flex items-center justify-center">
+                              {/* Raw Width (Empty) */}
                           </div>
-                          <div onClick={() => setCheckboxes(prev => ({...prev, closed: !prev.closed}))} className="flex items-center gap-1 cursor-pointer select-none">
-                              <div className={`w-4 h-4 border-2 border-slate-800 flex items-center justify-center ${checkboxes.closed ? 'bg-slate-800' : 'bg-white'}`}>
-                                {checkboxes.closed && <span className="text-white text-[10px]">✓</span>}
-                              </div>
-                              مقفول
-                          </div>
-                          <div onClick={() => setCheckboxes(prev => ({...prev, production: !prev.production}))} className="flex items-center gap-1 cursor-pointer select-none">
-                              <div className={`w-4 h-4 border-2 border-slate-800 flex items-center justify-center ${checkboxes.production ? 'bg-slate-800' : 'bg-white'}`}>
-                                {checkboxes.production && <span className="text-white text-[10px]">✓</span>}
-                              </div>
-                              انتــاج
-                          </div>
-                          <div onClick={() => setCheckboxes(prev => ({...prev, sample: !prev.sample}))} className="flex items-center gap-1 cursor-pointer select-none">
-                              <div className={`w-4 h-4 border-2 border-slate-800 flex items-center justify-center ${checkboxes.sample ? 'bg-slate-800' : 'bg-white'}`}>
-                                {checkboxes.sample && <span className="text-white text-[10px]">✓</span>}
-                              </div>
-                              عينـــة
+                          <div className="flex-1 p-1 text-center font-mono flex items-center justify-center">
+                              {/* Washing Width (Empty) */}
                           </div>
                      </div>
                 </div>
 
-                {/* Notes Area */}
-                <div className="border-x-2 border-b-2 border-slate-800 p-2 min-h-[80px] relative">
-                     <div className="absolute top-1 right-2 text-[10px] font-bold underline">ملاحظات:</div>
+                {/* Lycra/Viscose Data Section (Attached under grid) */}
+                <div className="border-x-2 border-b-2 border-slate-800 p-2 min-h-[60px] relative mt-1">
+                     <div className="absolute top-1 right-2 text-[10px] font-bold underline">بيانات الويسكو:</div>
                      <textarea
-                        value={notes}
-                        onChange={(e) => setNotes(e.target.value)}
-                        className="w-full h-full min-h-[60px] text-center text-lg font-serif mt-2 mx-8 leading-relaxed overflow-hidden text-slate-700 bg-transparent border-none outline-none resize-none placeholder:text-slate-300 placeholder:italic placeholder:text-xs placeholder:font-sans"
-                        placeholder=""
-                    />
+                        className="w-full h-full min-h-[40px] bg-transparent resize-none outline-none text-sm text-right mt-4 pr-1 scrollbar-hide"
+                        placeholder="..."
+                     />
                 </div>
+            </div>
+
+            {/* Notes Area */}
+            <div className="border-2 border-slate-800 p-2 min-h-[80px] relative mb-4">
+                 <div className="absolute top-1 right-2 text-[10px] font-bold underline">ملاحظات:</div>
+                 <textarea
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    className="w-full h-full min-h-[60px] bg-transparent resize-none outline-none text-sm text-right mt-4 pr-1 scrollbar-hide"
+                    placeholder="أدخل ملاحظات..."
+                 />
+            </div>
+            
+            {/* Quantities & Checkboxes (Moved to bottom) */}
+            <div className="flex border-2 border-slate-800 min-h-[70px] mb-4">
+                 {/* Checkboxes */}
+                 
+                 {/* Right Side Part (Data) */}
+                 <div className="w-2/3 border-l-2 border-slate-800 flex">
+                       <div className="flex-1 border-l border-slate-400 flex flex-col items-center justify-center p-1">
+                            <span className="text-[9px] font-bold text-slate-500 mb-0.5">إجمالي الكمية</span>
+                            <input 
+                                type="text" 
+                                value={editedTotalQty} 
+                                onChange={e => setEditedTotalQty(e.target.value)}
+                                className="w-full text-center font-bold font-mono text-base bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
+                            />
+                       </div>
+                       
+                       {/* Accessory Column 1: Name */}
+                       <div className="flex-1 border-l border-slate-400 flex flex-col items-center justify-center p-1">
+                            <span className="text-[9px] font-bold text-slate-500 mb-0.5">اسم الإكسسوار</span>
+                            <input 
+                                type="text" 
+                                value={accessoryName} 
+                                onChange={e => setAccessoryName(e.target.value)}
+                                className="w-full text-center font-bold text-[10px] bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
+                                placeholder="-"
+                            />
+                       </div>
+
+                       {/* Accessory Column 2: Quantity */}
+                       <div className="flex-1 border-l border-slate-400 flex flex-col items-center justify-center p-1">
+                            <span className="text-[9px] font-bold text-slate-500 mb-0.5">كمية إكسسوار</span>
+                            <input 
+                                type="text" 
+                                value={accessoryQty} 
+                                onChange={e => setAccessoryQty(e.target.value)}
+                                className="w-full text-center font-bold font-mono text-base bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
+                                placeholder="-"
+                            />
+                       </div>
+
+                       <div className="flex-1 border-l border-slate-400 flex flex-col items-center justify-center p-1">
+                            <span className="text-[9px] font-bold text-slate-500 mb-0.5">كمية الحوض</span>
+                            <input 
+                                type="text" 
+                                value={dyehouseInfo} 
+                                onChange={e => setDyehouseInfo(e.target.value)}
+                                className="w-full text-center font-bold font-mono text-base bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
+                            />
+                       </div>
+                       <div className="flex-1 flex flex-col items-center justify-center p-1">
+                            <span className="text-[9px] font-bold text-slate-500 mb-0.5">الأحواض</span>
+                            <input 
+                                type="text" 
+                                value={numberOfBatches} 
+                                onChange={e => setNumberOfBatches(e.target.value)}
+                                className="w-full text-center font-bold font-mono text-base bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
+                            />
+                       </div>
+                 </div>
+
+                 {/* Left Side Part (Checkboxes) - Visually Left */}
+                 <div className="w-1/3 grid grid-cols-2 gap-1 p-1 bg-slate-50 font-bold text-xs items-center">
+                      <div onClick={() => setCheckboxes(prev => ({...prev, open: !prev.open}))} className="flex items-center gap-1 cursor-pointer select-none">
+                          <div className={`w-4 h-4 border-2 border-slate-800 flex items-center justify-center ${checkboxes.open ? 'bg-slate-800' : 'bg-white'}`}>
+                            {checkboxes.open && <span className="text-white text-[10px]">✓</span>}
+                          </div>
+                          مفتوح
+                      </div>
+                      <div onClick={() => setCheckboxes(prev => ({...prev, closed: !prev.closed}))} className="flex items-center gap-1 cursor-pointer select-none">
+                          <div className={`w-4 h-4 border-2 border-slate-800 flex items-center justify-center ${checkboxes.closed ? 'bg-slate-800' : 'bg-white'}`}>
+                            {checkboxes.closed && <span className="text-white text-[10px]">✓</span>}
+                          </div>
+                          مقفول
+                      </div>
+                      <div onClick={() => setCheckboxes(prev => ({...prev, production: !prev.production}))} className="flex items-center gap-1 cursor-pointer select-none">
+                          <div className={`w-4 h-4 border-2 border-slate-800 flex items-center justify-center ${checkboxes.production ? 'bg-slate-800' : 'bg-white'}`}>
+                            {checkboxes.production && <span className="text-white text-[10px]">✓</span>}
+                          </div>
+                          انتــاج
+                      </div>
+                      <div onClick={() => setCheckboxes(prev => ({...prev, sample: !prev.sample}))} className="flex items-center gap-1 cursor-pointer select-none">
+                          <div className={`w-4 h-4 border-2 border-slate-800 flex items-center justify-center ${checkboxes.sample ? 'bg-slate-800' : 'bg-white'}`}>
+                            {checkboxes.sample && <span className="text-white text-[10px]">✓</span>}
+                          </div>
+                          عينـــة
+                      </div>
+                 </div>
             </div>
 
             {/* 5. Knitting Data */}
@@ -454,23 +548,23 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
                  <div className="p-2 grid grid-cols-2 gap-x-8 gap-y-1 text-xs bg-slate-50/30">
                       <div className="flex justify-between items-center border-b border-slate-300 h-6">
                           <span className="font-bold">عدد الإبر:</span>
-                          <span className="font-mono text-sm font-bold">2640</span>
+                          <span className="font-mono text-sm font-bold">{machineDetails?.needles || '---'}</span>
                       </div>
                       <div className="flex justify-between items-center border-b border-slate-300 h-6">
                           <span className="font-bold">بوصة:</span>
-                          <span className="font-mono text-sm font-bold">32</span>
+                          <span className="font-mono text-sm font-bold">{machineDetails?.dia || '---'}</span>
                       </div>
                       <div className="flex justify-between items-center border-b border-slate-300 h-6">
                           <span className="font-bold">عدد المواكيك:</span>
-                          <span className="font-mono text-sm font-bold">96</span>
+                          <span className="font-mono text-sm font-bold">{machineDetails?.feeders || '---'}</span>
                       </div>
                       <div className="flex justify-between items-center border-b border-slate-300 h-6">
                           <span className="font-bold">جوج:</span>
-                          <span className="font-mono text-sm font-bold">28</span>
+                          <span className="font-mono text-sm font-bold">{machineDetails?.gauge || '---'}</span>
                       </div>
                       <div className="flex justify-between items-center border-b border-slate-300 h-6">
                           <span className="font-bold">سرعة المكنة:</span>
-                          <span className="font-mono text-sm opacity-20">---</span>
+                          <span className="font-mono text-sm opacity-20">{machineDetails?.speed || '---'}</span>
                       </div>
                       <div className="flex justify-between items-center border-b border-slate-300 h-6">
                           <span className="font-bold">عدد الغرز:</span>

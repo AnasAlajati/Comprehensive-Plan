@@ -19,6 +19,7 @@ interface LinkedItem {
   fabric: string;
   fabricShortName?: string;
   color: string;
+  colorHex?: string; // Added colorHex
   quantity: number; // Batch quantity (مطلوب)
   quantitySent?: number; // Total sent (raw + accessory)
   quantitySentRaw?: number;
@@ -32,6 +33,7 @@ interface LinkedItem {
   notes?: string;
   status: 'Pending' | 'Sent' | 'Received';
   accessoryType?: string;
+  batchGroupId?: string;
 }
 
 export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
@@ -130,11 +132,17 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
             const isMatch = isDyehouseMatch && (isPlannedCapacityMatch || isQuantityMatch || isMachineNameMatch);
 
             // Calculate totals from events
+            let totalSent = 0;
+            if (batch.sentEvents && Array.isArray(batch.sentEvents) && batch.sentEvents.length > 0) {
+              totalSent = batch.sentEvents.reduce((s: number, e: any) => s + (e.quantity || 0) + (e.accessorySent || 0), 0);
+            } else {
+              totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
+            }
+
             const events = batch.receiveEvents || [];
             const totalReceivedRaw = events.reduce((s: number, e: any) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
             const totalReceivedAccessory = events.reduce((s: number, e: any) => s + (e.quantityAccessory || 0), 0);
             const totalReceived = totalReceivedRaw + totalReceivedAccessory;
-            const totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
 
             // LOG EVERY BATCH
             allScannedBatches.push(
@@ -154,6 +162,7 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
                 fabric: order.material,
                 fabricShortName: fabricMap[order.material] || order.material,
                 color: batch.color,
+                colorHex: batch.colorHex, // Mapped hex
                 quantity: batch.quantity,
                 quantitySent: totalSent,
                 quantitySentRaw: batch.quantitySentRaw || batch.quantitySent,
@@ -165,8 +174,12 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
                 dateSent: batch.dateSent,
                 formationDate: batch.formationDate,
                 notes: batch.notes,
-                status: totalSent > 0 && totalReceived / totalSent >= 0.89 ? 'Received' : (batch.dateSent ? 'Sent' : 'Pending'),
-                accessoryType: batch.accessoryType
+                // Prioritize explicit batch.status, falling back to calculation only if needed
+                status: (totalSent > 0 && totalReceived / totalSent >= 0.89) || batch.status === 'received' ? 'Received' : 
+                        (batch.status === 'sent' || batch.status === 'Sent') ? 'Sent' : 
+                        'Pending',
+                accessoryType: batch.accessoryType,
+                batchGroupId: batch.batchGroupId
               });
             } else {
                 // Log near misses
@@ -215,133 +228,211 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
       setLoading(false);
     }
   };
+
+  // Group items by Client -> Fabric
+  const groupedItems = React.useMemo(() => {
+    const groups: Record<string, { clientName: string, fabrics: Record<string, { fabricName: string, items: LinkedItem[] }> }> = {};
+
+    items.forEach(item => {
+      // 1. Client Group
+      if (!groups[item.clientId]) {
+        groups[item.clientId] = {
+          clientName: item.clientName,
+          fabrics: {}
+        };
+      }
+      
+      // 2. Fabric Group (Key by fabric name to merge same fabrics)
+      const fabricKey = item.fabricShortName || item.fabric || 'Unknown Fabric';
+      if (!groups[item.clientId].fabrics[fabricKey]) {
+        groups[item.clientId].fabrics[fabricKey] = {
+          fabricName: fabricKey,
+          items: []
+        };
+      }
+
+      groups[item.clientId].fabrics[fabricKey].items.push(item);
+    });
+
+    return groups;
+  }, [items]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         
         {/* Header */}
-        <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 rounded-t-xl">
+        <div className="flex justify-between items-center p-6 border-b border-slate-100 bg-slate-50/50">
           <div>
             <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-              <Droplets className="text-indigo-600" />
+              <span className="p-2 bg-purple-100 text-purple-700 rounded-lg">
+                <Droplets size={20} />
+              </span>
               {dyehouseName}
             </h2>
-            <p className="text-sm text-slate-500 mt-1">
-              Machine Capacity: <span className="font-mono font-bold text-slate-700">{machineCapacity} kg</span>
-            </p>
+            <div className="flex items-center gap-2 mt-1 text-slate-500 text-sm">
+               <span className="font-medium">Machine Capacity:</span>
+               <span className="font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-700 font-bold">{machineCapacity} kg</span>
+            </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
-            <X size={20} className="text-slate-500" />
+          <button 
+            onClick={onClose}
+            className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
+          >
+            <X size={24} />
           </button>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-6 bg-slate-50/30">
           {loading ? (
-            <div className="flex justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+            <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600 mb-3"></div>
+              <p>Scanning orders...</p>
             </div>
           ) : items.length === 0 ? (
-            <div className="flex flex-col gap-4">
-              <div className="text-center py-12 text-slate-400 border-2 border-dashed border-slate-200 rounded-xl">
-                <Package size={48} className="mx-auto mb-4 text-slate-300" />
-                <p className="font-medium text-slate-600">No active batches found for this machine.</p>
-                <p className="text-sm mt-1">Check the debug log below for details.</p>
-              </div>
-              
-              {/* Debug Log */}
-              <div className="bg-slate-50 rounded-lg border border-slate-200 p-4 font-mono text-xs text-slate-600 overflow-x-auto">
-                <h4 className="font-bold text-slate-700 mb-2 uppercase tracking-wider">Debug Log</h4>
-                <div className="space-y-1">
-                  {debugLog.map((log, i) => (
-                    <div key={i} className={`
-                      ${log.startsWith('[Miss]') ? 'text-amber-600' : ''}
-                      ${log.startsWith('Error') ? 'text-red-600 font-bold' : ''}
-                      ${log.startsWith('Found') ? 'text-blue-600' : ''}
-                    `}>
-                      {log}
+             <div className="flex flex-col items-center justify-center py-16 text-slate-400 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50">
+               <Package size={48} className="mb-4 text-slate-300" />
+               <p className="font-medium">No active batches found</p>
+               <p className="text-sm">This machine is currently empty in the system.</p>
+               
+               {/* Debug Toggle */}
+               <div className="mt-8 w-full max-w-md px-4">
+                  <details className="text-xs text-left">
+                    <summary className="cursor-pointer text-blue-500 hover:underline mb-2">View Debug Logs</summary>
+                    <div className="bg-slate-900 text-slate-200 p-4 rounded font-mono h-48 overflow-auto whitespace-pre-wrap">
+                      {debugLog.join('\n')}
                     </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+                  </details>
+               </div>
+             </div>
           ) : (
-            <div className="space-y-4">
-              {/* Group by Client? Or just list? Let's list for now with clear badges */}
-              <table className="w-full text-sm text-left">
-                <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
-                  <tr>
-                    <th className="px-4 py-3">Client / Order</th>
-                    <th className="px-4 py-3">Fabric / Color</th>
-                    <th className="px-4 py-3 text-center">Sent</th>
-                    <th className="px-4 py-3 text-center">Received</th>
-                    <th className="px-4 py-3">Dispatch Info</th>
-                    <th className="px-4 py-3">Dates</th>
-                    <th className="px-4 py-3 text-center">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {items.map((item, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-slate-800">{item.clientName}</div>
-                        <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-1">
-                          <FileText size={10} />
-                          {item.orderReference || item.orderId}
+            <div className="space-y-8">
+              {Object.values(groupedItems).map((clientGroup, i) => (
+                <div key={clientGroup.clientName + i} className="animate-in slide-in-from-bottom-2 duration-500" style={{ animationDelay: `${i * 100}ms` }}>
+                  
+                  {/* Client Header */}
+                  <div className="flex items-center gap-3 mb-4 pl-1">
+                    <div className="bg-blue-600 text-white p-2 rounded-lg shadow-sm shadow-blue-200">
+                      <User size={20} />
+                    </div>
+                    <h3 className="text-lg font-bold text-slate-800 border-b-2 border-blue-100 pb-1 pr-6">
+                      {clientGroup.clientName}
+                    </h3>
+                  </div>
+
+                  {/* Fabrics Grid */}
+                  <div className="grid grid-cols-1 gap-4 pl-4 border-l-2 border-slate-100 ml-4">
+                    {Object.values(clientGroup.fabrics).map((fabricGroup, j) => (
+                      <div key={fabricGroup.fabricName + j} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                        
+                        {/* Fabric Header */}
+                        <div className="bg-slate-50/80 border-b border-slate-100 px-4 py-3 flex justify-between items-center backdrop-blur-sm">
+                          <h4 className="font-bold text-slate-700 flex items-center gap-2 text-sm">
+                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                            {fabricGroup.fabricName}
+                          </h4>
+                          <span className="text-xs font-medium text-slate-400 bg-white px-2 py-1 rounded border border-slate-100">
+                            {fabricGroup.items.length} Batch{fabricGroup.items.length > 1 ? 'es' : ''}
+                          </span>
                         </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="text-slate-700 font-medium">{item.fabricShortName || item.fabric}</div>
-                        <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-xs font-medium mt-1">
-                          <div className="w-2 h-2 rounded-full bg-indigo-500"></div>
-                          {item.color}
+
+                        {/* Batches List */}
+                        <div className="divide-y divide-slate-100">
+                          {fabricGroup.items.map((item, k) => (
+                            <div key={k} className="p-4 hover:bg-slate-50/50 transition-colors group">
+                                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                  
+                                  {/* Color & ID */}
+                                  <div className="flex-1 min-w-[200px]">
+                                    <div className="flex items-center gap-3 mb-1">
+                                      <div 
+                                        className="w-4 h-4 rounded-full border border-slate-200 shadow-sm"
+                                        style={{ backgroundColor: item.colorHex || 'white' }}
+                                      ></div>
+                                      <span className="font-bold text-slate-800 text-base">{item.color}</span>
+                                      
+                                      <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                                          item.status === 'Received' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                                          item.status === 'Sent' ? 'bg-blue-50 text-blue-700 border-blue-100' :
+                                          'bg-amber-50 text-amber-700 border-amber-100'
+                                        }`}>
+                                          {item.status === 'Received' ? 'تم الاستلام' : item.status === 'Sent' ? 'تم الإرسال' : 'قيد الانتظار'}
+                                      </span>
+
+                                      {item.batchGroupId && (
+                                        <span className="text-[10px] font-bold bg-indigo-600 text-white px-2 py-0.5 rounded-full shadow-sm" title={`Shared Load: ${item.batchGroupId}`}>
+                                            Group
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-2 text-xs text-slate-500 pl-7">
+                                      <span>رقم الطلب:</span>
+                                      <span className="font-mono bg-slate-100 px-1 rounded text-slate-600">
+                                        {item.orderReference || item.orderId.substring(0, 8)}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  {/* Stats */}
+                                  <div className="flex items-center gap-6">
+                                    {/* Planned/Sent */}
+                                    <div className="text-right">
+                                      <div className="text-[10px] uppercase text-slate-400 font-bold tracking-wider mb-0.5">
+                                         {item.status === 'Pending' ? 'الكمية (مخطط)' : 'الكمية (تم الإرسال)'}
+                                      </div>
+                                      <div className="font-mono text-sm font-medium">
+                                        {item.status === 'Pending' ? (
+                                           <span className="text-slate-600">{item.plannedCapacity || item.quantity} kg</span>
+                                        ) : (
+                                           <span className="text-blue-600">{item.quantitySent} kg</span>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* Received if any */}
+                                    {(item.totalReceived || 0) > 0 && (
+                                      <div className="text-right border-l border-slate-100 pl-4 hidden sm:block">
+                                        <div className="text-[10px] uppercase text-slate-400 font-bold tracking-wider mb-0.5">تم الاستلام</div>
+                                        <div className="font-mono text-sm font-medium text-emerald-600">
+                                          {item.totalReceived} kg
+                                        </div>
+                                      </div>
+                                    )}
+                                    
+                                    {/* Date */}
+                                    <div className="text-right border-l border-slate-100 pl-4 min-w-[100px] hidden sm:block">
+                                      <div className="text-[10px] uppercase text-slate-400 font-bold tracking-wider mb-0.5">التاريخ</div>
+                                      <div className="text-xs text-slate-600 flex items-center justify-end gap-1">
+                                        {item.dateSent || item.formationDate || '-'}
+                                      </div>
+                                    </div>
+
+                                    {/* Dispatch # */}
+                                    {item.dispatchNumber && (
+                                       <div className="text-xs font-mono bg-slate-100 px-2 py-1 rounded text-slate-600 border border-slate-200">
+                                         #{item.dispatchNumber}
+                                       </div>
+                                    )}
+
+                                  </div>
+                                </div>
+                                
+                                {item.notes && (
+                                  <div className="mt-2 ml-7 text-xs text-slate-400 italic bg-amber-50/50 p-2 rounded border border-amber-50/50">
+                                    Note: {item.notes}
+                                  </div>
+                                )}
+                            </div>
+                          ))}
                         </div>
-                      </td>
-                      <td className="px-4 py-3 text-center font-mono font-bold text-blue-600">
-                        {item.quantitySent ? `${item.quantitySent} kg` : '-'}
-                      </td>
-                      <td className="px-4 py-3 text-center font-mono font-medium text-emerald-600">
-                        {item.receivedQuantity ? `${item.receivedQuantity} kg` : '-'}
-                      </td>
-                      <td className="px-4 py-3">
-                        {item.dispatchNumber ? (
-                          <div className="text-xs">
-                            <div className="font-medium text-slate-700">#{item.dispatchNumber}</div>
-                            {item.notes && <div className="text-slate-400 italic truncate max-w-[150px]">{item.notes}</div>}
-                          </div>
-                        ) : (
-                          <span className="text-slate-300 text-xs">-</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-xs text-slate-500">
-                        {item.dateSent && (
-                          <div className="flex items-center gap-1">
-                            <Calendar size={10} />
-                            Sent: {item.dateSent}
-                          </div>
-                        )}
-                        {item.formationDate && (
-                          <div className="flex items-center gap-1 mt-0.5">
-                            <Calendar size={10} />
-                            Form: {item.formationDate}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide ${
-                          item.status === 'Received' ? 'bg-emerald-100 text-emerald-700' :
-                          item.status === 'Sent' ? 'bg-blue-100 text-blue-700' :
-                          'bg-slate-100 text-slate-500'
-                        }`}>
-                          {item.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>

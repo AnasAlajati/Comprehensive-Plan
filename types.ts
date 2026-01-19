@@ -163,6 +163,20 @@ export interface MachineRow {
     lowStockAlertSent?: boolean; // NEW
   };
 
+  // Maintenance Log
+  lastMaintenance?: {
+    date: string;
+    notes: string;
+    technician?: string;
+  };
+  maintenanceHistory?: {
+    id: string;
+    date: string;
+    notes: string;
+    technician?: string;
+    createdAt: string;
+  }[];
+
   // Audit Info
   lastUpdatedBy?: string;
   lastUpdatedByEmail?: string;
@@ -215,6 +229,7 @@ export interface DyeingBatch {
   quantitySentAccessory?: number; // مرسل اكسسوار
   accessoryType?: string;       // نوع الاكسسوار
   sentEvents?: SentEvent[];     // NEW: Multiple sent events
+  batchGroupId?: string;        // NEW: ID for grouping multiple batches into one machine load
 
   
   // Receive events array (multiple receives over time)
@@ -256,6 +271,7 @@ export interface YarnAllocationItem {
 
 export interface OrderRow {
   id: string;
+  refPath?: string; // Optional path for updates
   material: string;        // الخامة
   machine: string;         // الماكينة
   requiredQty: number;     // الكمية المطلوبة
@@ -432,6 +448,12 @@ export interface MachineSS {
   name: string; // Machine name (static, doesn't change)
   brand: string; // Machine brand (static, doesn't change)
   machineid: number; // Machine ID (static, doesn't change)
+  // Technical Specs
+  needles?: number; // عدد الإبر
+  gauge?: number;   // جوج
+  dia?: number;     // بوصة (Diameter/Inch)
+  feeders?: number; // عدد المواكيك
+  speed?: number;   // سرعة المكنة
   dailyLogs: DailyLogEntry[]; // Array of daily logs
   futurePlans: FuturePlanEntry[]; // Array of future plans
 }

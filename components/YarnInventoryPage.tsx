@@ -10,7 +10,8 @@ import {
   updateDoc, 
   doc, 
   Timestamp,
-  writeBatch
+  writeBatch,
+  collectionGroup
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { 
@@ -28,11 +29,12 @@ import {
   LayoutGrid,
   List,
   ChevronDown,
-  Trash2
+  Trash2,
+  ArrowRight
 } from 'lucide-react';
 
 import { YarnService } from '../services/yarnService';
-import { YarnInventoryItem, Yarn } from '../types';
+import { YarnInventoryItem, Yarn, OrderRow } from '../types';
 
 interface GroupedYarn {
   name: string;
@@ -71,10 +73,13 @@ export const YarnInventoryPage: React.FC = () => {
   const [importPreview, setImportPreview] = useState<{
     added: any[];
     updated: any[];
+    discrepancies: any[]; // NEW: For robust detection of Plan vs Reality
     unchanged: number;
     duplicates: number;
     isOpen: boolean;
-  }>({ added: [], updated: [], unchanged: 0, duplicates: 0, isOpen: false });
+  }>({ added: [], updated: [], discrepancies: [], unchanged: 0, duplicates: 0, isOpen: false });
+  
+  const [previewTab, setPreviewTab] = useState<'all' | 'allocated' | 'analysis'>('all');
 
   useEffect(() => {
     fetchInventory();
@@ -316,7 +321,7 @@ export const YarnInventoryPage: React.FC = () => {
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -331,30 +336,54 @@ export const YarnInventoryPage: React.FC = () => {
         const ws = wb.Sheets[wsname];
         const data = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
 
-        // Get existing inventory to check for updates
+        // 1. Fetch Existing Inventory
         const existingSnapshot = await getDocs(collection(db, 'yarn_inventory'));
         const existingMap = new Map<string, YarnInventoryItem>(); // Key: Name-Lot-Location
-        const unknownLocationMap = new Map<string, YarnInventoryItem[]>(); // Key: Name-Lot -> [Items with unknown loc]
+        const unknownLocationMap = new Map<string, YarnInventoryItem[]>(); 
+        const itemsByLotMap = new Map<string, YarnInventoryItem[]>(); // Key: Name-Lot (for Split detection)
 
         existingSnapshot.docs.forEach(doc => {
             const data = doc.data() as YarnInventoryItem;
-            const name = data.yarnName.trim().toLowerCase();
-            const lot = data.lotNumber.trim().toLowerCase();
+            const name = (data.yarnName || '').trim().toLowerCase();
+            const lot = (data.lotNumber || '').trim().toLowerCase();
             const loc = data.location ? data.location.trim().toLowerCase() : 'unknown';
             
             const fullKey = `${name}-${lot}-${loc}`;
             existingMap.set(fullKey, { ...data, id: doc.id });
 
+            const lotKey = `${name}-${lot}`;
+            
             if (loc === 'unknown') {
-                const lotKey = `${name}-${lot}`;
                 const list = unknownLocationMap.get(lotKey) || [];
                 list.push({ ...data, id: doc.id });
                 unknownLocationMap.set(lotKey, list);
             }
+
+            const byLotList = itemsByLotMap.get(lotKey) || [];
+            byLotList.push({ ...data, id: doc.id });
+            itemsByLotMap.set(lotKey, byLotList);
+        });
+
+        // 2. Fetch Active Orders for Allocation Context
+        // We fetch ALL orders here to avoid "Index Required" errors with complex queries.
+        // Given the scale, fetching all orders once per import is acceptable.
+        const activeOrderIds = new Set<string>();
+        existingSnapshot.docs.forEach(doc => {
+            const data = doc.data() as YarnInventoryItem;
+            data.allocations?.forEach(a => activeOrderIds.add(a.orderId));
+        });
+
+        const ordersQuery = query(collectionGroup(db, 'orders'));
+        const ordersSnap = await getDocs(ordersQuery);
+        const ordersMap = new Map<string, OrderRow>();
+        ordersSnap.forEach(d => {
+             const data = d.data() as OrderRow;
+             ordersMap.set(d.id, { id: d.id, ...data });
         });
 
         const toAdd: any[] = [];
         const toUpdate: any[] = [];
+        const discrepancies: any[] = []; // NEW: Tracking Logic
         let unchangedCount = 0;
         let fileDuplicatesCount = 0;
         const processedKeys = new Set<string>();
@@ -368,62 +397,109 @@ export const YarnInventoryPage: React.FC = () => {
           if (!row || row.length === 0) continue;
 
           const firstCol = String(row[0] || '').trim();
-          
-          // Check for Header Row (starts with "BU/")
           if (firstCol.startsWith('BU/')) {
             currentSectionLocation = firstCol;
-            lastYarnName = ''; // Reset yarn name on section change
+            lastYarnName = ''; 
             continue; 
           }
 
-          // Normal Row Processing
           const lotNumber = String(row[1] || '').trim();
           const quantity = parseFloat(row[2]);
-
           if (!lotNumber || isNaN(quantity)) continue;
 
-          // Handle Yarn Name (Fill Down for merged cells)
           let yarnName = firstCol;
-          if (!yarnName && lastYarnName) {
-              yarnName = lastYarnName;
-          }
-          
-          if (!yarnName) continue; // Still no yarn name? Skip.
-          lastYarnName = yarnName; // Update last seen
+          if (!yarnName && lastYarnName) yarnName = lastYarnName;
+          if (!yarnName) continue; 
+          lastYarnName = yarnName;
 
-          // Handle Location
-          // Priority: Column D -> Section Header -> 'Unknown'
           let location = String(row[3] || '').trim();
-          if (!location) {
-              location = currentSectionLocation || 'Unknown';
-          }
+          if (!location) location = currentSectionLocation || 'Unknown';
 
-          // Unique Key now includes Location to allow same lot in multiple locations
           const key = `${yarnName.toLowerCase()}-${lotNumber.toLowerCase()}-${location.toLowerCase()}`;
+          const lotKey = `${yarnName.toLowerCase()}-${lotNumber.toLowerCase()}`;
           
-          // Check for duplicates within the file itself
-          if (processedKeys.has(key)) {
-            fileDuplicatesCount++;
-            continue; 
-          }
+          if (processedKeys.has(key)) { fileDuplicatesCount++; continue; }
           processedKeys.add(key);
 
           let existingItem = existingMap.get(key);
 
-          // If no exact match (Name+Lot+Loc), try to find an unclaimed 'Unknown' location item to migrate
+          // Matching Logic
           if (!existingItem) {
-             const lotKey = `${yarnName.toLowerCase()}-${lotNumber.toLowerCase()}`;
              const unknowns = unknownLocationMap.get(lotKey);
              if (unknowns && unknowns.length > 0) {
-                 existingItem = unknowns.shift(); // Take one and remove it from pool
-                 // We found a match to migrate!
+                 existingItem = unknowns.shift();
              }
           }
 
           if (existingItem) {
-            // Update if quantity OR location changed
+            // Update Logic
             const qtyChanged = Math.abs(existingItem.quantity - quantity) > 0.01;
             const locChanged = existingItem.location !== location;
+            
+            // Calculate Total Allocated for this existing item
+            // Enrich allocations with Order Details
+            const currentAllocations = (existingItem.allocations || []).map(alloc => {
+                const order = ordersMap.get(alloc.orderId);
+                return {
+                    ...alloc,
+                    _orderDetails: order ? {
+                        material: order.material,
+                        quantity: order.requiredQty || 0,
+                        remaining: order.remainingQty || 0,
+                        clientName: alloc.clientName // Use persisted client name or could fetch from parent collection if structure allowed
+                    } : null
+                };
+            });
+            const totalAllocated = currentAllocations.reduce((sum, a) => sum + (a.quantity || 0), 0);
+
+            // ROBUSTNESS LOGIC: Detect Plan vs Reality Discrepancies
+            // Calculate actual consumption from the file (Old - New)
+            // If Old < New, consumption is negative (increase/return), which we ignore for this check
+            const actualConsumption = Math.max(0, existingItem.quantity - quantity);
+            
+            // 1. Stale Allocation (Ghost Plan): Allocated but NOT Consumed
+            // Threshold: Allocated > 10kg, Consumption < 2kg (allowing for minor scale diffs)
+            if (totalAllocated > 10 && actualConsumption < 2) {
+                discrepancies.push({
+                    type: 'stale',
+                    yarnName,
+                    lotNumber,
+                    allocations: currentAllocations,
+                    allocated: totalAllocated,
+                    consumption: actualConsumption,
+                    reason: "Allocated stock was not touched. Possible Lot Swap."
+                });
+            }
+            
+            // 2. Ghost Consumption (Unplanned Usage): Consumed but NOT Allocated
+            // Threshold: Allocated == 0, Consumption > 10kg
+            else if (totalAllocated === 0 && actualConsumption > 10) {
+                discrepancies.push({
+                    type: 'ghost',
+                    yarnName,
+                    lotNumber,
+                    consumption: actualConsumption,
+                    reason: "Stock consumed without allocation. Possible Lot Swap target."
+                });
+            }
+            
+            // 3. Significant Deviation: Consumption differs greatly from Allocation
+            // Threshold: Diff > 20% and at least 10kg
+            else if (totalAllocated > 0) {
+                const diff = Math.abs(totalAllocated - actualConsumption);
+                if (diff > 10 && diff > (totalAllocated * 0.2)) {
+                     discrepancies.push({
+                        type: 'deviation',
+                        yarnName,
+                        lotNumber,
+                        allocated: totalAllocated,
+                        consumption: actualConsumption,
+                        reason: actualConsumption > totalAllocated 
+                             ? "Consumed more than allocated." 
+                             : "Consumed less than allocated."
+                    });
+                }
+            }
 
             if (qtyChanged || locChanged) {
               toUpdate.push({
@@ -433,13 +509,15 @@ export const YarnInventoryPage: React.FC = () => {
                 oldQuantity: existingItem.quantity,
                 newQuantity: quantity,
                 oldLocation: existingItem.location,
-                newLocation: location
+                newLocation: location,
+                allocations: currentAllocations, // Pass existing allocations to preview
+                totalAllocated: totalAllocated
               });
             } else {
               unchangedCount++;
             }
           } else {
-            // Add new
+            // New Item
             toAdd.push({
               yarnName,
               lotNumber,
@@ -449,16 +527,15 @@ export const YarnInventoryPage: React.FC = () => {
           }
         }
 
-        // Open Preview Modal instead of writing immediately
         setImportPreview({
             added: toAdd,
             updated: toUpdate,
+            discrepancies: discrepancies, // NEW
             unchanged: unchangedCount,
             duplicates: fileDuplicatesCount,
             isOpen: true
         });
         
-        // Reset file input
         if (fileInputRef.current) fileInputRef.current.value = '';
 
       } catch (error) {
@@ -479,6 +556,13 @@ export const YarnInventoryPage: React.FC = () => {
           let batchCount = 0;
           const MAX_BATCH_SIZE = 450;
 
+          const commitBatch = async () => {
+              if (batchCount > 0) {
+                  await batch.commit();
+                  batchCount = 0;
+              }
+          }
+
           // Process Adds
           for (const item of importPreview.added) {
               const ref = doc(collection(db, 'yarn_inventory'));
@@ -487,33 +571,36 @@ export const YarnInventoryPage: React.FC = () => {
                   lotNumber: item.lotNumber,
                   quantity: item.quantity,
                   location: item.location,
+                  allocations: [],
                   lastUpdated: new Date().toISOString()
               });
               batchCount++;
-              if (batchCount >= MAX_BATCH_SIZE) { await batch.commit(); batchCount = 0; }
+              if (batchCount >= MAX_BATCH_SIZE) await commitBatch();
           }
 
           // Process Updates
           for (const item of importPreview.updated) {
               const ref = doc(db, 'yarn_inventory', item.id);
-              batch.update(ref, {
+              const updates: any = {
                   quantity: item.newQuantity,
-                  location: item.newLocation,
+                  location: item.newLocation, // Ensure location is synced
                   lastUpdated: new Date().toISOString()
-              });
+              };
+              
+              batch.update(ref, updates);
               batchCount++;
-              if (batchCount >= MAX_BATCH_SIZE) { await batch.commit(); batchCount = 0; }
+              if (batchCount >= MAX_BATCH_SIZE) await commitBatch();
           }
-
+          
           if (batchCount > 0) await batch.commit();
 
+          alert(`Import Successful!\nAdded: ${importPreview.added.length}\nUpdated: ${importPreview.updated.length}`);
           setImportPreview(prev => ({ ...prev, isOpen: false }));
           fetchInventory();
-          alert("Inventory updated successfully!");
 
       } catch (error) {
-          console.error("Error committing import:", error);
-          alert("Error saving changes to database.");
+          console.error("Error saving import:", error);
+          alert("Failed to save changes.");
       } finally {
           setImporting(false);
       }
@@ -897,75 +984,242 @@ export const YarnInventoryPage: React.FC = () => {
       {/* Import Preview Modal */}
       {importPreview.isOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95 duration-200">
-                <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95 duration-200">
+                <div className="bg-gradient-to-r from-slate-50 to-white px-6 py-4 border-b border-slate-200 flex items-center justify-between">
                     <div>
                         <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                             <FileSpreadsheet className="w-6 h-6 text-indigo-600" />
-                            Import Preview
+                            Inventory Import Preview
                         </h2>
-                        <p className="text-sm text-slate-500">Review changes before applying</p>
+                        <p className="text-sm text-slate-500 mt-1">Review changes before syncing to database</p>
                     </div>
                     <button onClick={() => setImportPreview(prev => ({ ...prev, isOpen: false }))} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
                         <X className="w-6 h-6 text-slate-400" />
                     </button>
                 </div>
 
-                <div className="p-6 space-y-6 overflow-y-auto">
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                        <div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100 text-center">
-                            <div className="text-2xl font-bold text-emerald-600">{importPreview.added.length}</div>
-                            <div className="text-xs font-medium text-emerald-800 uppercase tracking-wide">New Items</div>
-                        </div>
-                        <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 text-center">
-                            <div className="text-2xl font-bold text-blue-600">{importPreview.updated.length}</div>
-                            <div className="text-xs font-medium text-blue-800 uppercase tracking-wide">Updates</div>
-                        </div>
-                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 text-center">
-                            <div className="text-2xl font-bold text-slate-600">{importPreview.unchanged}</div>
-                            <div className="text-xs font-medium text-slate-800 uppercase tracking-wide">Unchanged</div>
-                        </div>
-                        <div className="bg-orange-50 p-3 rounded-lg border border-orange-100 text-center">
-                            <div className="text-2xl font-bold text-orange-600">{importPreview.duplicates}</div>
-                            <div className="text-xs font-medium text-orange-800 uppercase tracking-wide">Duplicates</div>
-                        </div>
-                    </div>
+                <div className="flex border-b border-slate-200 bg-slate-50 px-6 pt-2 gap-4">
+                     <button
+                        onClick={() => setPreviewTab('all')}
+                        className={`pb-3 px-1 text-sm font-medium transition-colors relative ${
+                            previewTab === 'all' ? 'text-indigo-600' : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                     >
+                        Overview
+                        {previewTab === 'all' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600 rounded-t-full" />}
+                     </button>
+                     <button
+                        onClick={() => setPreviewTab('allocated')}
+                        className={`pb-3 px-1 text-sm font-medium transition-colors relative flex items-center gap-2 ${
+                            previewTab === 'allocated' ? 'text-amber-600' : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                     >
+                        Yarns with Allocations
+                        {importPreview.updated.some(i => i.totalAllocated > 0) && (
+                            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                        )}
+                        {previewTab === 'allocated' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-600 rounded-t-full" />}
+                     </button>
+                     <button
+                        onClick={() => setPreviewTab('analysis')}
+                        className={`pb-3 px-1 text-sm font-medium transition-colors relative flex items-center gap-2 ${
+                            previewTab === 'analysis' ? 'text-purple-600' : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                     >
+                        Smart Analysis
+                        {importPreview.discrepancies.length > 0 && (
+                            <span className="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full text-[10px] font-bold">
+                                {importPreview.discrepancies.length}
+                            </span>
+                        )}
+                        {previewTab === 'analysis' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-600 rounded-t-full" />}
+                     </button>
+                </div>
 
-                    {importPreview.updated.length > 0 && (
+                <div className="p-6 space-y-6 overflow-y-auto flex-1 bg-slate-50/30">
+                    
+                    {/* Stats Grid */}
+                    {previewTab === 'analysis' && (
+                        <div className="space-y-6">
+                            <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 flex gap-3 text-purple-900 text-sm">
+                                <div className="bg-purple-100 p-2 rounded-full h-fit">
+                                    <Star className="w-5 h-5 text-purple-600" />
+                                </div>
+                                <div>
+                                    <p className="font-bold mb-1 text-lg">Intelligent Reconciliation</p>
+                                    <p className="opacity-90 leading-relaxed">
+                                        The system has analyzed usage patterns to detect where Reality diverged from the Plan.
+                                        <br/>
+                                        Use these insights to identify <strong>Lot Swaps</strong> (Planned Lot A, used Lot B) or <strong>Ghost Consumption</strong>.
+                                    </p>
+                                </div>
+                            </div>
+
+                            {importPreview.discrepancies.length === 0 ? (
+                                <div className="text-center py-12 text-slate-400 bg-white rounded-xl border border-slate-200 border-dashed">
+                                    <CheckCircle2 className="w-12 h-12 mx-auto mb-3 text-emerald-200" />
+                                    <p>No significant planning discrepancies detected.</p>
+                                    <p className="text-xs text-slate-400 mt-1">Reality matches the Allocation Plan closely.</p>
+                                </div>
+                            ) : (
+                                <div className="grid gap-4">
+                                    {importPreview.discrepancies.map((item, idx) => (
+                                        <div key={idx} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col md:flex-row">
+                                            {/* Status Strip */}
+                                            <div className={`w-full md:w-2 ${
+                                                item.type === 'stale' ? 'bg-amber-400' : 
+                                                item.type === 'ghost' ? 'bg-rose-500' : 'bg-blue-400'
+                                            }`} />
+                                            
+                                            <div className="p-4 flex-1">
+                                                <div className="flex items-start justify-between mb-2">
+                                                    <div>
+                                                        <div className="flex items-center gap-2">
+                                                            <h4 className="font-bold text-slate-800 text-lg">{item.yarnName}</h4>
+                                                            <span className="text-xs font-mono px-2 py-0.5 bg-slate-100 text-slate-500 rounded border border-slate-200">
+                                                                {item.lotNumber}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex items-center gap-2 mt-1">
+                                                            {item.type === 'stale' && (
+                                                                <span className="text-[10px] uppercase font-bold tracking-wider bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+                                                                    Stale Plan
+                                                                </span>
+                                                            )}
+                                                            {item.type === 'ghost' && (
+                                                                <span className="text-[10px] uppercase font-bold tracking-wider bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full">
+                                                                    Ghost Usage
+                                                                </span>
+                                                            )}
+                                                            {item.type === 'deviation' && (
+                                                                <span className="text-[10px] uppercase font-bold tracking-wider bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
+                                                                    Deviation
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    {/* Impact Metric */}
+                                                    <div className="text-right">
+                                                        <div className="text-xs text-slate-400 uppercase font-bold">Unaccounted Diff</div>
+                                                        <div className="text-xl font-mono font-bold text-slate-700">
+                                                            {Math.abs((item.consumption || 0) - (item.allocated || 0)).toFixed(1)} kg
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div className="bg-slate-50 rounded-lg p-3 border border-slate-100 text-sm grid grid-cols-2 gap-4 my-3">
+                                                    <div>
+                                                        <span className="text-slate-400 text-xs uppercase block">Allocated (Plan)</span>
+                                                        <span className="font-bold text-slate-700">{(item.allocated || 0).toLocaleString()} kg</span>
+                                                    </div>
+                                                    <div>
+                                                        <span className="text-slate-400 text-xs uppercase block">Consumed (Reality)</span>
+                                                        <span className="font-bold text-slate-700">{(item.consumption || 0).toLocaleString()} kg</span>
+                                                    </div>
+                                                </div>
+
+                                                <p className="text-sm text-slate-600 bg-slate-50/50 italic border-l-2 border-slate-300 pl-3 py-1">
+                                                    " {item.reason} "
+                                                </p>
+                                                
+                                                {/* Action Suggestion */}
+                                                {item.type === 'stale' && (
+                                                    <div className="mt-3 pt-3 border-t border-slate-100">
+                                                        <p className="text-xs text-amber-700 font-medium flex items-center gap-1">
+                                                            <AlertCircle className="w-3 h-3" />
+                                                            Recommendation: Verify if this lot was swapped at the machine. The allocation might need to move.
+                                                        </p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {previewTab === 'all' && (
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="bg-white p-4 rounded-xl border border-emerald-100 shadow-sm relative overflow-hidden group">
+                                <div className="absolute top-0 right-0 p-2 opacity-10 group-hover:opacity-20 transition-opacity">
+                                    <Package className="w-12 h-12 text-emerald-600" />
+                                </div>
+                                <div className="text-3xl font-bold text-emerald-600 mb-1">{importPreview.added.length}</div>
+                                <div className="text-xs font-bold text-emerald-800 uppercase tracking-widest opacity-70">New Items</div>
+                            </div>
+                            
+                            <div className="bg-white p-4 rounded-xl border border-blue-100 shadow-sm relative overflow-hidden group">
+                                <div className="absolute top-0 right-0 p-2 opacity-10 group-hover:opacity-20 transition-opacity">
+                                    <RefreshCw className="w-12 h-12 text-blue-600" />
+                                </div>
+                                <div className="text-3xl font-bold text-blue-600 mb-1">{importPreview.updated.length}</div>
+                                <div className="text-xs font-bold text-blue-800 uppercase tracking-widest opacity-70">to Update</div>
+                            </div>
+
+                            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
+                                <div className="text-3xl font-bold text-slate-600 mb-1">{importPreview.unchanged}</div>
+                                <div className="text-xs font-bold text-slate-500 uppercase tracking-widest opacity-70">Unchanged</div>
+                            </div>
+
+                            <div className="bg-white p-4 rounded-xl border border-orange-100 shadow-sm relative overflow-hidden">
+                                <div className="text-3xl font-bold text-orange-600 mb-1">{importPreview.duplicates}</div>
+                                <div className="text-xs font-bold text-orange-800 uppercase tracking-widest opacity-70">Duplicates</div>
+                            </div>
+                        </div>
+                    )}
+
+                    {previewTab === 'all' && importPreview.updated.length > 0 && (
                         <div>
-                            <h3 className="font-bold text-slate-800 mb-2 text-sm uppercase tracking-wide">Updates Preview</h3>
-                            <div className="bg-slate-50 rounded-lg border border-slate-200 overflow-hidden max-h-60 overflow-y-auto">
+                            <h3 className="flex items-center gap-2 font-bold text-slate-700 mb-3 text-sm uppercase tracking-wider">
+                                <List className="w-4 h-4" />
+                                All Modification Details
+                            </h3>
+                            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden ring-1 ring-slate-100">
                                 <table className="w-full text-sm text-left">
-                                    <thead className="bg-slate-100 text-slate-500 font-medium text-xs uppercase">
+                                    <thead className="bg-slate-50/50 text-slate-500 font-medium text-xs uppercase border-b border-slate-100">
                                         <tr>
-                                            <th className="px-4 py-2">Yarn / Lot</th>
-                                            <th className="px-4 py-2 text-right">Old Qty</th>
-                                            <th className="px-4 py-2 text-right">New Qty</th>
-                                            <th className="px-4 py-2">Location</th>
+                                            <th className="px-5 py-3">Yarn / Lot</th>
+                                            <th className="px-5 py-3 text-right">Old Qty</th>
+                                            <th className="px-5 py-3 text-center"></th>
+                                            <th className="px-5 py-3 text-right">New Qty</th>
+                                            <th className="px-5 py-3">Location</th>
                                         </tr>
                                     </thead>
-                                    <tbody className="divide-y divide-slate-200">
+                                    <tbody className="divide-y divide-slate-100">
                                         {importPreview.updated.slice(0, 50).map((item, i) => (
-                                            <tr key={i}>
-                                                <td className="px-4 py-2">
-                                                    <div className="font-medium text-slate-700">{item.yarnName}</div>
-                                                    <div className="text-xs text-slate-500 font-mono">{item.lotNumber}</div>
+                                            <tr key={i} className="hover:bg-slate-50/50 transition-colors">
+                                                <td className="px-5 py-3">
+                                                    <div className="font-bold text-slate-700">{item.yarnName}</div>
+                                                    <div className="text-xs text-slate-400 font-mono mt-0.5">{item.lotNumber}</div>
                                                 </td>
-                                                <td className="px-4 py-2 text-right text-slate-500 line-through">{item.oldQuantity}</td>
-                                                <td className="px-4 py-2 text-right font-bold text-blue-600">{item.newQuantity}</td>
-                                                <td className="px-4 py-2 text-xs">
+                                                <td className="px-5 py-3 text-right text-slate-400 font-mono line-through decoration-slate-300">
+                                                    {item.oldQuantity.toLocaleString()}
+                                                </td>
+                                                <td className="px-1 py-3 text-center text-slate-300">
+                                                    <ArrowRight className="w-3 h-3 mx-auto" />
+                                                </td>
+                                                <td className="px-5 py-3 text-right font-mono font-bold text-indigo-600">
+                                                    {item.newQuantity.toLocaleString()}
+                                                </td>
+                                                <td className="px-5 py-3 text-xs">
                                                     {item.oldLocation !== item.newLocation ? (
-                                                        <span className="text-blue-600 font-medium">{item.newLocation}</span>
+                                                        <div className="flex flex-col">
+                                                            <span className="text-slate-400 line-through text-[10px]">{item.oldLocation}</span>
+                                                            <span className="text-emerald-600 font-medium mt-0.5 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100 w-fit">
+                                                                {item.newLocation}
+                                                            </span>
+                                                        </div>
                                                     ) : (
-                                                        <span className="text-slate-400">{item.newLocation}</span>
+                                                        <span className="text-slate-500">{item.newLocation}</span>
                                                     )}
                                                 </td>
                                             </tr>
                                         ))}
                                         {importPreview.updated.length > 50 && (
                                             <tr>
-                                                <td colSpan={4} className="px-4 py-2 text-center text-xs text-slate-500 italic">
-                                                    ...and {importPreview.updated.length - 50} more updates
+                                                <td colSpan={5} className="px-5 py-3 text-center text-xs text-slate-400 italic bg-slate-50/30">
+                                                    ...and {importPreview.updated.length - 50} more updates hidden
                                                 </td>
                                             </tr>
                                         )}
@@ -974,32 +1228,191 @@ export const YarnInventoryPage: React.FC = () => {
                             </div>
                         </div>
                     )}
+
+                    {previewTab === 'allocated' && (
+                        <div className="space-y-4">
+                            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex gap-3 text-amber-800 text-sm">
+                                <AlertCircle className="w-5 h-5 flex-shrink-0 text-amber-600" />
+                                <div>
+                                    <p className="font-bold mb-1">Impact Analysis</p>
+                                    <p className="opacity-90">
+                                        These items have active allocations (reserved for Orders). 
+                                        Verify that the <strong>New Available Stock</strong> is sufficient to cover these reserves.
+                                        If 'New Qty' is less than 'Allocated', you have a stock deficit.
+                                    </p>
+                                </div>
+                            </div>
+
+                            {importPreview.updated.filter(i => (i.totalAllocated || 0) > 0).length === 0 ? (
+                                <div className="text-center py-12 text-slate-400 bg-white rounded-xl border border-slate-200 border-dashed">
+                                    <CheckCircle2 className="w-12 h-12 mx-auto mb-3 text-slate-200" />
+                                    <p>No allocated items are being modified in this import.</p>
+                                </div>
+                            ) : (
+                                <div className="grid gap-4">
+                                    {importPreview.updated
+                                        .filter(i => (i.totalAllocated || 0) > 0)
+                                        .sort((a,b) => (b.totalAllocated || 0) - (a.totalAllocated || 0))
+                                        .map((item, idx) => {
+                                            const deficit = (item.totalAllocated || 0) > item.newQuantity;
+                                            const coverage = Math.min(100, (item.newQuantity / (item.totalAllocated || 1)) * 100);
+                                            
+                                            return (
+                                                <div key={idx} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${deficit ? 'border-red-200 ring-4 ring-red-50' : 'border-slate-200'}`}>
+                                                    <div className="p-4 flex flex-col md:flex-row gap-6 items-start md:items-center">
+                                                        <div className="flex-1">
+                                                            <div className="flex items-center gap-2 mb-1">
+                                                                <h4 className="font-bold text-slate-800">{item.yarnName}</h4>
+                                                                <span className="text-xs font-mono px-2 py-0.5 bg-slate-100 text-slate-500 rounded border border-slate-200">
+                                                                    {item.lotNumber}
+                                                                </span>
+                                                            </div>
+                                                            <div className="flex items-center gap-4 text-sm mt-2">
+                                                                <div className="flex flex-col">
+                                                                    <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">New Stock</span>
+                                                                    <span className="font-mono font-bold text-slate-700 text-lg">{item.newQuantity.toLocaleString()}</span>
+                                                                </div>
+                                                                <div className="h-8 w-px bg-slate-100 mx-2"></div>
+                                                                <div className="flex flex-col">
+                                                                    <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Allocated</span>
+                                                                    <span className="font-mono font-medium text-slate-600 text-lg">{item.totalAllocated.toLocaleString()}</span>
+                                                                </div>
+                                                                
+                                                                {deficit && (
+                                                                    <div className="ml-auto bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs font-bold border border-red-200 flex items-center gap-1">
+                                                                        <AlertCircle className="w-3 h-3" />
+                                                                        Deficit: {(item.totalAllocated - item.newQuantity).toFixed(1)} kg
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="w-full md:w-64 flex flex-col gap-1.5 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                                            <div className="flex justify-between text-xs font-medium">
+                                                                <span className={deficit ? 'text-red-600' : 'text-slate-500'}>Allocation Coverage</span>
+                                                                <span className={deficit ? 'text-red-700 font-bold' : 'text-indigo-600 font-bold'}>
+                                                                    {coverage.toFixed(0)}%
+                                                                </span>
+                                                            </div>
+                                                            <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                                                                <div 
+                                                                    className={`h-full rounded-full ${deficit ? 'bg-red-500' : 'bg-indigo-500'}`}
+                                                                    style={{ width: `${coverage}%` }} 
+                                                                />
+                                                            </div>
+                                                            <p className="text-[10px] text-slate-400 leading-tight mt-1">
+                                                                {deficit 
+                                                                    ? "Warning: Physical stock is lower than allocated amount." 
+                                                                    : "Allocations are fully covered by new stock level."}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    {/* Allocation Details Summary - ENHANCED */}
+                                                    {item.allocations && item.allocations.length > 0 && (
+                                                        <div className="bg-slate-50/50 px-4 py-3 border-t border-slate-100 text-xs">
+                                                            <div className="space-y-2">
+                                                                {item.allocations.map((a: any, k: number) => {
+                                                                    const orderDetails = a._orderDetails;
+                                                                    const isDeficit = orderDetails && orderDetails.remaining < a.quantity;
+                                                                    const suggestedAmt = isDeficit ? orderDetails.remaining : a.quantity;
+                                                                    
+                                                                    return (
+                                                                        <div key={k} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 rounded bg-white border border-slate-200 shadow-sm">
+                                                                            <div className="flex items-center gap-2">
+                                                                                <div className="font-bold text-slate-700 w-24 truncate" title={a.clientName}>
+                                                                                    {a.clientName || 'Unknown Client'}
+                                                                                </div>
+                                                                                <div className="w-px h-3 bg-slate-200"></div>
+                                                                                <div className="flex flex-col">
+                                                                                    <span className="font-medium text-indigo-700">
+                                                                                        {orderDetails?.material || a.fabricName || 'Unknown Fabric'}
+                                                                                    </span>
+                                                                                    <span className="text-[10px] text-slate-400">
+                                                                                        Reserved: {new Date(a.timestamp).toLocaleDateString()}
+                                                                                    </span>
+                                                                                </div>
+                                                                            </div>
+                                                                            
+                                                                            <div className="flex items-center gap-3 text-[11px] bg-slate-50 px-2 py-1 rounded border border-slate-100 ml-auto sm:ml-0 w-full sm:w-auto justify-between sm:justify-start">
+                                                                                <div title="Current Allocation">
+                                                                                    <span className="text-slate-400 block sm:inline mr-1">Allocated:</span>
+                                                                                    <span className="font-bold text-slate-700">{Number(a.quantity).toFixed(1)}kg</span>
+                                                                                </div>
+                                                                                
+                                                                                {orderDetails && (
+                                                                                    <>
+                                                                                        <div className="w-px h-3 bg-slate-200 hidden sm:block"></div>
+                                                                                        <div title="Total Order Qty">
+                                                                                            <span className="text-slate-400 block sm:inline mr-1">Ordered:</span>
+                                                                                            <span className="font-mono text-slate-600">{Number(orderDetails.quantity).toFixed(1)}kg</span>
+                                                                                        </div>
+                                                                                        <div className="w-px h-3 bg-slate-200 hidden sm:block"></div>
+                                                                                        <div title="Remaining to Produce">
+                                                                                            <span className="text-slate-400 block sm:inline mr-1">Remaining:</span>
+                                                                                            <span className={`font-mono font-bold ${orderDetails.remaining <= 0 ? 'text-green-600' : 'text-amber-600'}`}>
+                                                                                                {Number(orderDetails.remaining).toFixed(1)}kg
+                                                                                            </span>
+                                                                                        </div>
+                                                                                    </>
+                                                                                )}
+                                                                            </div>
+
+                                                                            {/* Suggestion / Status */}
+                                                                            {orderDetails && orderDetails.remaining < a.quantity && (
+                                                                                <div className="flex items-center gap-1 text-[10px] text-amber-700 bg-amber-50 px-2 py-1 rounded border border-amber-100 whitespace-nowrap">
+                                                                                    <AlertCircle className="w-3 h-3" />
+                                                                                    <span>
+                                                                                        Over-allocated!
+                                                                                        <span className="hidden sm:inline"> (Req: {orderDetails.remaining.toFixed(1)})</span>
+                                                                                    </span>
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                 </div>
                 
-                <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-3">
-                    <button 
-                        onClick={() => setImportPreview(prev => ({ ...prev, isOpen: false }))}
-                        className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-colors"
-                    >
-                        Cancel
-                    </button>
-                    <button 
-                        onClick={confirmImport}
-                        disabled={importing}
-                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium transition-colors shadow-sm flex items-center gap-2"
-                    >
-                        {importing ? (
-                            <>
-                                <RefreshCw className="w-4 h-4 animate-spin" />
-                                Importing...
-                            </>
-                        ) : (
-                            <>
-                                <CheckCircle2 className="w-4 h-4" />
-                                Confirm Import
-                            </>
-                        )}
-                    </button>
+                <div className="px-6 py-4 bg-white border-t border-slate-200 flex justify-between items-center shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10">
+                    <div className="text-xs text-slate-400 hidden sm:block">
+                        <strong>Note:</strong> Import will only update Quantities & Locations. Allocations are preserved.
+                    </div>
+                    <div className="flex gap-3">
+                        <button 
+                            onClick={() => setImportPreview(prev => ({ ...prev, isOpen: false }))}
+                            className="px-5 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-all hover:shadow-sm"
+                        >
+                            Cancel
+                        </button>
+                        <button 
+                            onClick={confirmImport}
+                            disabled={importing}
+                            className="px-6 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-bold transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5 flex items-center gap-2 disabled:opacity-70 disabled:hover:translate-y-0 disabled:shadow-none"
+                        >
+                            {importing ? (
+                                <>
+                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                    Processing Import...
+                                </>
+                            ) : (
+                                <>
+                                    <CheckCircle2 className="w-5 h-5" />
+                                    Confirm Update
+                                </>
+                            )}
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

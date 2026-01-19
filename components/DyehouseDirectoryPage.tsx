@@ -34,8 +34,8 @@ import {
 
 export const DyehouseDirectoryPage: React.FC = () => {
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
-  const [inventoryStats, setInventoryStats] = useState<Record<string, number>>({});
-  const [discoveredLocations, setDiscoveredLocations] = useState<string[]>([]);
+  // const [inventoryStats, setInventoryStats] = useState<Record<string, number>>({});
+  // const [discoveredLocations, setDiscoveredLocations] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
   const [newDyehouseName, setNewDyehouseName] = useState('');
@@ -45,7 +45,8 @@ export const DyehouseDirectoryPage: React.FC = () => {
   // New State
   const [viewMode, setViewMode] = useState<'directory' | 'global' | 'balance'>('directory');
   const [selectedMachine, setSelectedMachine] = useState<{ dyehouse: string, capacity: number } | null>(null);
-  const [machineCounts, setMachineCounts] = useState<Record<string, number>>({});
+  const [machineCounts, setMachineCounts] = useState<Record<string, { sent: number, planned: number }>>({});
+  const [dyehouseStock, setDyehouseStock] = useState<Record<string, number>>({});
 
   // Fetch Dyehouses
   useEffect(() => {
@@ -57,44 +58,57 @@ export const DyehouseDirectoryPage: React.FC = () => {
     return () => unsub();
   }, []);
 
-  // Fetch Inventory Stats & Discover Locations
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'dyehouse_inventory'), (snapshot) => {
-       const stats: Record<string, number> = {};
-       const locations = new Set<string>();
-       
-       snapshot.docs.forEach(doc => {
-         const data = doc.data();
-         const location = data.location || 'Unknown';
-         stats[location] = (stats[location] || 0) + (Number(data.quantity) || 0);
-         if (location !== 'Unknown') {
-           locations.add(location);
-         }
-       });
-       
-       setInventoryStats(stats);
-       setDiscoveredLocations(Array.from(locations));
-    });
-    return () => unsub();
-  }, []);
 
-  // Calculate Machine Counts
+  /* 
+  // Inventory Stats & Discovery Logic Removed upon request
+  // This blocked logic previously auto-discovered locations from inventory data
+  */
+
+
+  // Calculate Machine Counts and Stock
   useEffect(() => {
     const unsub = onSnapshot(query(collectionGroup(db, 'orders')), (snapshot) => {
-      const counts: Record<string, number> = {};
+      // Use map with Sets to handle grouping by batchGroupId
+      const countsMap: Record<string, { sentCmds: Set<string>, plannedCmds: Set<string> }> = {};
+      const stock: Record<string, number> = {};
       
       snapshot.docs.forEach(doc => {
         const order = doc.data() as any; // OrderRow
 
         if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
-            order.dyeingPlan.forEach((batch: any) => {
-              // Skip drafts - only count pending, sent, received
-              const batchStatus = batch.status || 'draft';
-              if (batchStatus === 'draft') return;
-              
-              // Determine Dyehouse (Batch override > Order default)
+            order.dyeingPlan.forEach((batch: any, bIdx: number) => {
               const dyehouseName = batch.dyehouse || order.dyehouse || '';
               if (!dyehouseName) return;
+
+              // --- Stock Calculation Logic (same as DyehouseBalanceReport) ---
+              let totalSent = 0;
+              if (batch.sentEvents && Array.isArray(batch.sentEvents) && batch.sentEvents.length > 0) {
+                 totalSent = batch.sentEvents.reduce((s: number, e: any) => s + (e.quantity || 0) + (e.accessorySent || 0), 0);
+              } else {
+                 totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
+              }
+              
+              if (batch.dateSent || totalSent > 0) {
+                 const events = batch.receiveEvents || [];
+                 const totalReceivedRaw = events.reduce((s: number, e: any) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
+                 const totalReceivedAccessory = events.reduce((s: number, e: any) => s + (e.quantityAccessory || 0), 0);
+                 const totalReceived = totalReceivedRaw + totalReceivedAccessory;
+
+                 let remaining = totalSent - totalReceived;
+                 if (remaining < 0) remaining = 0;
+
+                 if (remaining > 0) {
+                   stock[dyehouseName] = (stock[dyehouseName] || 0) + remaining;
+                 }
+              }
+
+              // --- Machine Count Logic ---
+              // Only count "Busy" status (Pending/Planned and Sent). Exclude Received/Draft.
+              const batchStatus = batch.status || 'draft';
+              if (batchStatus === 'draft' || batchStatus === 'received') return;
+
+              // Determine Unique ID for grouping (batchGroupId or docId-batchId)
+              const uniqueId = batch.batchGroupId || (batch.id ? `${doc.id}-${batch.id}` : `${doc.id}-${bIdx}`);
 
               // Determine Machine Capacities this batch belongs to
               // Primary: plannedCapacity (explicit machine selection)
@@ -116,31 +130,39 @@ export const DyehouseDirectoryPage: React.FC = () => {
               
               capacitiesToIncrement.forEach(cap => {
                 const key = `${dyehouseName}-${cap}`;
-                counts[key] = (counts[key] || 0) + 1;
+                if (!countsMap[key]) countsMap[key] = { sentCmds: new Set(), plannedCmds: new Set() };
+                
+                if (batchStatus === 'sent') {
+                    countsMap[key].sentCmds.add(uniqueId);
+                } else {
+                    // Assume 'pending' or others are 'planned'
+                    countsMap[key].plannedCmds.add(uniqueId);
+                }
               });
             });
           }
       });
       
+      // Convert Sets to counts
+      const counts: Record<string, { sent: number, planned: number }> = {};
+      Object.entries(countsMap).forEach(([key, val]) => {
+          counts[key] = {
+              sent: val.sentCmds.size,
+              planned: val.plannedCmds.size
+          };
+      });
+
       setMachineCounts(counts);
+      setDyehouseStock(stock);
     });
     return () => unsub();
   }, []);
 
   // Combine registered dyehouses with discovered ones
   const allDyehouses = React.useMemo(() => {
-    const registeredNames = new Set(dyehouses.map(d => d.name));
-    const discovered = discoveredLocations
-      .filter(loc => !registeredNames.has(loc))
-      .map(loc => ({
-        id: `temp-${loc}`,
-        name: loc,
-        machines: [] as DyehouseMachine[],
-        isDiscovered: true // Flag to identify auto-detected locations
-      }));
-    
-    return [...dyehouses, ...discovered].sort((a, b) => a.name.localeCompare(b.name));
-  }, [dyehouses, discoveredLocations]);
+    // Only return registered dyehouses, ignore discovered locations
+    return [...dyehouses].sort((a, b) => a.name.localeCompare(b.name));
+  }, [dyehouses]);
 
 
   const handleAddDyehouse = async () => {
@@ -174,19 +196,11 @@ export const DyehouseDirectoryPage: React.FC = () => {
   const saveEditing = async () => {
     if (!editForm || !editingId) return;
     try {
-      if (editingId.startsWith('temp-')) {
-        // Create new dyehouse from discovered location
-        await addDoc(collection(db, 'dyehouses'), {
-          name: editForm.name,
-          machines: editForm.machines
-        });
-      } else {
-        // Update existing dyehouse
-        await updateDoc(doc(db, 'dyehouses', editingId), {
-          name: editForm.name,
-          machines: editForm.machines
-        });
-      }
+      // Update existing dyehouse
+      await updateDoc(doc(db, 'dyehouses', editingId), {
+        name: editForm.name,
+        machines: editForm.machines
+      });
       setEditingId(null);
       setEditForm(null);
     } catch (error) {
@@ -372,16 +386,9 @@ export const DyehouseDirectoryPage: React.FC = () => {
                     <div>
                       <div className="flex items-center gap-2">
                         <h3 className="font-bold text-lg text-slate-800">{dyehouse.name}</h3>
-                        {dyehouse.id.startsWith('temp-') && (
-                          <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold uppercase rounded tracking-wide">
-                            Discovered
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">
-                          <Package size={12} />
-                          Stock: {(inventoryStats[dyehouse.name] || 0).toLocaleString()} kg
+                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-bold border border-blue-200">
+                           <Package size={12} />
+                           Stock: {(dyehouseStock[dyehouse.name] || 0).toLocaleString()} kg
                         </span>
                       </div>
                     </div>
@@ -389,11 +396,9 @@ export const DyehouseDirectoryPage: React.FC = () => {
                       <button onClick={() => startEditing(dyehouse)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors">
                         <Edit2 size={16} />
                       </button>
-                      {!dyehouse.id.startsWith('temp-') && (
-                        <button onClick={() => handleDeleteDyehouse(dyehouse.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
+                      <button onClick={() => handleDeleteDyehouse(dyehouse.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
                           <Trash2 size={16} />
-                        </button>
-                      )}
+                      </button>
                     </div>
                   </div>
                   
@@ -407,22 +412,36 @@ export const DyehouseDirectoryPage: React.FC = () => {
                       <div className="flex flex-wrap gap-2">
                         {dyehouse.machines.map((machine, idx) => {
                           const countKey = `${dyehouse.name}-${machine.capacity}`;
-                          const itemCount = machineCounts[countKey] || 0;
+                          const itemStats = machineCounts[countKey] || { sent: 0, planned: 0 };
+                          const totalActive = itemStats.sent + itemStats.planned;
                           
                           return (
                             <button 
                               key={idx} 
                               onClick={() => setSelectedMachine({ dyehouse: dyehouse.name, capacity: machine.capacity })}
-                              className="flex items-center bg-white border border-slate-200 rounded-lg px-3 py-1.5 shadow-sm hover:border-purple-300 hover:ring-1 hover:ring-purple-200 transition-all"
+                              className="flex items-center bg-white border border-slate-200 rounded-lg px-3 py-1.5 shadow-sm hover:border-purple-300 hover:ring-1 hover:ring-purple-200 transition-all gap-2"
                             >
                               <span className="font-mono font-bold text-slate-700">
                                 {machine.capacity}kg
-                                {itemCount > 0 && (
-                                  <span className="ml-1 text-purple-600">({itemCount})</span>
-                                )}
                               </span>
+                              
+                              {totalActive > 0 && (
+                                <div className="flex gap-1 text-xs font-medium">
+                                  {itemStats.sent > 0 && (
+                                    <span className="text-purple-600 bg-purple-50 px-1.5 rounded border border-purple-100">
+                                      {itemStats.sent} Sent
+                                    </span>
+                                  )}
+                                  {itemStats.planned > 0 && (
+                                    <span className="text-orange-600 bg-orange-50 px-1.5 rounded border border-orange-100">
+                                      {itemStats.planned} Planned
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+
                               {machine.count > 1 && (
-                                <span className="ml-2 px-1.5 py-0.5 bg-slate-100 text-slate-500 text-xs rounded-full font-medium">
+                                <span className="ml-1 px-1.5 py-0.5 bg-slate-100 text-slate-500 text-xs rounded-full font-medium">
                                   x{machine.count}
                                 </span>
                               )}
@@ -432,7 +451,7 @@ export const DyehouseDirectoryPage: React.FC = () => {
                       </div>
                     ) : (
                       <div className="text-slate-400 text-sm italic py-2">
-                        {dyehouse.id.startsWith('temp-') ? 'Click edit to configure machines' : 'No machines configured. Click edit to add.'}
+                        No machines configured. Click edit to add.
                       </div>
                     )}
                   </div>

@@ -224,7 +224,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
   const [activeDay, setActiveDay] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [fabricHistory, setFabricHistory] = useState<Record<string, string[]>>({});
+  const [fabricHistory, setFabricHistory] = useState<Record<string, Array<{machine: string; client: string}>>>({});
   
   // Filter State
   const [searchTerm, setSearchTerm] = useState('');
@@ -632,24 +632,33 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
         if (!isMounted) return;
 
         // Compute Fabric History (Proven Machines)
-        const history: Record<string, Set<string>> = {};
+        const history: Record<string, Array<{machine: string; client: string}>> = {};
+        const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+
         machineDocs.forEach((m: any) => {
             if (m.dailyLogs && Array.isArray(m.dailyLogs)) {
                 m.dailyLogs.forEach((log: any) => {
                     if (log.fabric && log.dayProduction > 0) {
-                        if (!history[log.fabric]) history[log.fabric] = new Set();
-                        history[log.fabric].add(m.name || m.machineName);
+                        const fabKey = log.fabric; // Keep original casing for key lookup? Or normalize?
+                        // Using raw fabric name as key to match plan.fabric
+                        
+                        if (!history[fabKey]) history[fabKey] = [];
+                        
+                        const machName = m.name || m.machineName;
+                        const clientName = log.client || '';
+                        
+                        // Check uniqueness
+                        const exists = history[fabKey].some(h => h.machine === machName && normalize(h.client) === normalize(clientName));
+                        
+                        if (!exists) {
+                            history[fabKey].push({ machine: machName, client: clientName });
+                        }
                     }
                 });
             }
         });
         
-        // Convert Sets to Arrays
-        const historyMap: Record<string, string[]> = {};
-        Object.entries(history).forEach(([fabric, machines]) => {
-            historyMap[fabric] = Array.from(machines).sort();
-        });
-        setFabricHistory(historyMap);
+        setFabricHistory(history);
 
         const mapped = machineDocs.map((machine: any, idx: number) => mapMachineSSDocToMachineRow(machine, idx, activeDay));
         setMachines(mapped);
@@ -1629,7 +1638,12 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                           {!isSettings && (
                              <SearchDropdown
                                 id={`orig-${machine.machineSSId}-${index}`}
-                                options={(fabricHistory[plan.fabric] || []).map(m => ({ name: m, id: m }))}
+                                options={(fabricHistory[plan.fabric] || [])
+                                    .map(e => e.machine)
+                                    .filter((v, i, a) => a.indexOf(v) === i) // Unique machines
+                                    .sort()
+                                    .map(m => ({ name: m, id: m }))
+                                }
                                 value={plan.originalSampleMachine || ''}
                                 onChange={(val) => handlePlanChange(machine, index, 'originalSampleMachine', val)}
                                 placeholder="-"
@@ -1715,8 +1729,8 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                                   type="button"
                                   onMouseDown={(e) => e.stopPropagation()}
                                   onClick={() => {
-                                    const hasHistory = fabricHistory[plan.fabric] && fabricHistory[plan.fabric].length > 0;
-                                    // Create a mock OrderRow for the history modal
+                                    // Logic handled inside history modal now
+                                    // Just open it
                                     const mockOrder: OrderRow = {
                                       id: `plan-${machine.machineSSId}-${index}`,
                                       material: plan.fabric,
@@ -1741,13 +1755,13 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                                     });
                                   }}
                                   className={`p-1 rounded transition-colors ${
-                                    fabricHistory[plan.fabric] && fabricHistory[plan.fabric].length > 0
+                                    (fabricHistory[plan.fabric] || []).some(h => (h.client || '').toLowerCase().trim() === (plan.client || '').toLowerCase().trim())
                                       ? "text-orange-600 bg-orange-50 hover:bg-orange-100 ring-1 ring-orange-200 shadow-sm"
                                       : "text-slate-300 hover:text-slate-500 hover:bg-slate-50 opacity-60 hover:opacity-100"
                                   }`}
-                                  title={fabricHistory[plan.fabric]?.length > 0 
-                                    ? `View History (${fabricHistory[plan.fabric].length} machines)` 
-                                    : "No Production History"}
+                                  title={(fabricHistory[plan.fabric] || []).filter(h => (h.client || '').toLowerCase().trim() === (plan.client || '').toLowerCase().trim()).length > 0 
+                                    ? `View History (${(fabricHistory[plan.fabric] || []).filter(h => (h.client || '').toLowerCase().trim() === (plan.client || '').toLowerCase().trim()).length} machines)` 
+                                    : "No Production History for this Client"}
                                 >
                                   <History className="w-4 h-4" />
                                 </button>

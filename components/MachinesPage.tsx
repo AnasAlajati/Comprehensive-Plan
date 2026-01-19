@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, arrayUnion, deleteField } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { MachineRow, FabricDefinition, MachineStatus } from '../types';
-import { Settings, Box, Info, Search, X, Layers, List, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Settings, Box, Info, Search, X, Layers, List, AlertTriangle, CheckCircle2, Wrench, Calendar, Plus } from 'lucide-react';
+import { MachineMaintenanceModal } from './MachineMaintenanceModal';
 
 interface MachinesPageProps {
   machines: MachineRow[];
@@ -99,11 +100,16 @@ const getEngineeringAdvice = (baseNeedles: number, targetNeedles: number) => {
 export const MachinesPage: React.FC<MachinesPageProps> = ({ machines }) => {
   const [fabrics, setFabrics] = useState<FabricDefinition[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [filterType, setFilterType] = useState<string>('all'); // 'all', 'single', 'double'
   const [viewMode, setViewMode] = useState<'list' | 'groups'>('list');
   
   // Related Fabrics Modal State
   const [viewingFabricsMachine, setViewingFabricsMachine] = useState<MachineRow | null>(null);
   const [relatedFabrics, setRelatedFabrics] = useState<FabricDefinition[]>([]);
+
+  // Maintenance Modal State
+  const [maintenanceMachine, setMaintenanceMachine] = useState<MachineRow | null>(null);
+  const [maintenanceInitialView, setMaintenanceInitialView] = useState<'form' | 'history'>('form');
 
   useEffect(() => {
     fetchAllFabrics();
@@ -129,6 +135,150 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines }) => {
     }
   };
 
+  const handleSaveMaintenance = async (machineId: string, date: string, notes: string) => {
+    try {
+      const docRef = doc(db, 'MachineSS', machineId);
+      // Create record
+      const record = {
+        id: crypto.randomUUID(),
+        date,
+        notes,
+        createdAt: new Date().toISOString()
+      };
+
+      await updateDoc(docRef, {
+        lastMaintenance: { date, notes },
+        maintenanceHistory: arrayUnion(record)
+      });
+    } catch (err) {
+      console.error("Error saving maintenance:", err);
+      throw err;
+    }
+  };
+
+  const handleUpdateMaintenanceLog = async (machineId: string, logId: string, date: string, notes: string) => {
+    try {
+      const machine = machines.find(m => (m.firestoreId === machineId) || (m.id.toString() === machineId));
+      if (!machine || !machine.maintenanceHistory) return;
+
+      const updatedHistory = machine.maintenanceHistory.map(log => {
+        if (log.id === logId) {
+          return { ...log, date, notes };
+        }
+        return log;
+      });
+      
+      // Sanitize history to remove undefined values
+      const sanitizedHistory = updatedHistory.map(h => {
+          const clean: any = {
+              id: h.id,
+              date: h.date,
+              notes: h.notes || '',
+              createdAt: h.createdAt || new Date().toISOString()
+          };
+          if (h.technician !== undefined && h.technician !== null) {
+              clean.technician = h.technician;
+          }
+          return clean;
+      });
+
+      const sorted = [...sanitizedHistory].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      
+      let newLast = null;
+      if (sorted.length > 0) {
+        const top = sorted[0];
+        newLast = { 
+            date: top.date, 
+            notes: top.notes
+        };
+        if (top.technician) {
+            (newLast as any).technician = top.technician;
+        }
+      }
+
+      const targetDocId = machine.firestoreId || machineId;
+
+      const docRef = doc(db, 'MachineSS', targetDocId);
+      
+      const updates: any = {
+        maintenanceHistory: sanitizedHistory
+      };
+      
+      if (newLast) {
+          updates.lastMaintenance = newLast;
+      } else {
+          updates.lastMaintenance = deleteField();
+      }
+
+      await updateDoc(docRef, updates);
+    } catch (err) {
+      console.error("Error editing log:", err);
+      alert('Failed to update log');
+      throw err;
+    }
+  };
+
+  const handleDeleteMaintenanceLog = async (machineId: string, logId: string) => {
+    try {
+      // Find machine by ID matching either firestoreId OR id (as string)
+      const machine = machines.find(m => (m.firestoreId === machineId) || (m.id.toString() === machineId));
+      
+      if (!machine || !machine.maintenanceHistory) {
+          console.error("Machine not found for delete log:", machineId); 
+          return;
+      }
+
+      const updatedHistory = machine.maintenanceHistory.filter(log => log.id !== logId);
+
+      // Sanitize history to remove undefined values
+      const sanitizedHistory = updatedHistory.map(h => {
+          const clean: any = {
+              id: h.id,
+              date: h.date,
+              notes: h.notes || '',
+              createdAt: h.createdAt || new Date().toISOString()
+          };
+          if (h.technician !== undefined && h.technician !== null) {
+              clean.technician = h.technician;
+          }
+          return clean;
+      });
+
+      const sorted = [...sanitizedHistory].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      
+      let newLast = null;
+      if (sorted.length > 0) {
+         const top = sorted[0];
+         newLast = { 
+            date: top.date, 
+            notes: top.notes
+         };
+         if (top.technician) {
+            (newLast as any).technician = top.technician;
+         }
+      }
+
+      // Ensure we use the correct Firestore ID if we found it via internal ID
+      const targetDocId = machine.firestoreId || machineId;
+
+      const docRef = doc(db, 'MachineSS', targetDocId);
+      
+      const updates: any = { maintenanceHistory: sanitizedHistory };
+      
+      if (newLast) {
+        updates.lastMaintenance = newLast;
+      } else {
+        updates.lastMaintenance = deleteField();
+      }
+      
+      await updateDoc(docRef, updates);
+    } catch (err) {
+      console.error("Error deleting log:", err);
+      alert('Failed to delete log');
+      throw err;
+    }
+  };
+
   const handleViewFabrics = (machine: MachineRow) => {
     const related = fabrics.filter(f => f.workCenters && f.workCenters.includes(machine.machineName));
     setRelatedFabrics(related);
@@ -137,11 +287,19 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines }) => {
 
   const sortedMachines = [...machines].sort((a, b) => (a.machineName || '').localeCompare(b.machineName || '', undefined, { numeric: true }));
 
-  const filteredMachines = sortedMachines.filter(m => 
-    (m.machineName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+  const filteredMachines = sortedMachines.filter(m => {
+    const matchesSearch = (m.machineName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     (m.brand || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (m.type || '').toLowerCase().includes(searchTerm.toLowerCase())
-  );
+    (m.type || '').toLowerCase().includes(searchTerm.toLowerCase());
+    
+    if (!matchesSearch) return false;
+
+    if (filterType === 'all') return true;
+    const cat = getMachineCategory(m.type).toLowerCase();
+    if (filterType === 'single') return cat.includes('single');
+    if (filterType === 'double') return cat.includes('double');
+    return true;
+  });
 
   // Grouping Logic
   const machineGroups = useMemo(() => {
@@ -236,23 +394,154 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines }) => {
               </button>
             </div>
 
-            <div className="relative w-64">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-              <input 
-                type="text" 
-                placeholder="Search machines..." 
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-              />
+            <div className="relative flex items-center gap-2">
+               {/* Filter Dropdown */}
+               <select
+                  value={filterType}
+                  onChange={(e) => setFilterType(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+               >
+                 <option value="all">All Types</option>
+                 <option value="single">Single Jersey</option>
+                 <option value="double">Double (Rib/Interlock)</option>
+               </select>
+
+              <div className="relative w-64">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                  <input 
+                    type="text" 
+                    placeholder="Search machines..." 
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+              </div>
             </div>
           </div>
         </div>
 
         {/* Content */}
         {viewMode === 'list' ? (
-          /* Table View */
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <>
+          {/* Mobile Card View (For Maintenance Focus) */}
+          <div className="block md:hidden space-y-3">
+             {filteredMachines.length === 0 ? (
+                <div className="text-center py-10 bg-white rounded-xl text-slate-400 border border-slate-200">
+                    No machines found
+                </div>
+             ) : filteredMachines.map(machine => (
+                 <div key={machine.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-3">
+                     <div className="flex justify-between items-start">
+                         <div>
+                             <h3 className="font-bold text-lg text-slate-800">{machine.machineName}</h3>
+                             <div className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+                                 <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded">{machine.brand}</span>
+                                 <span>•</span>
+                                 <span>{machine.type}</span>
+                             </div>
+                         </div>
+                         <div className={`px-2 py-1 rounded-full text-xs font-bold ${
+                            machine.status === MachineStatus.WORKING ? 'bg-green-100 text-green-700' :
+                            machine.status === MachineStatus.UNDER_OP ? 'bg-yellow-100 text-yellow-700' :
+                            machine.status === MachineStatus.NO_ORDER ? 'bg-slate-100 text-slate-600' :
+                            'bg-red-100 text-red-700'
+                          }`}>
+                            {machine.status}
+                         </div>
+                     </div>
+
+                     <div className="mt-2">
+                          {/* Maintenance Display Card */}
+                          {machine.lastMaintenance ? (
+                            <div className="bg-orange-50/60 border border-orange-100 p-4 rounded-xl mb-3">
+                                <div className="flex justify-between items-start mb-3">
+                                    <div>
+                                        <div className="text-[10px] font-bold text-orange-800/60 uppercase tracking-widest mb-0.5">Last Maintenance</div>
+                                        <div className="text-2xl font-bold text-slate-800 tracking-tight">
+                                           {new Date(machine.lastMaintenance.date).toLocaleDateString(undefined, {month: 'short', day: 'numeric', year: 'numeric'})}
+                                        </div>
+                                    </div>
+                                    <button 
+                                        onClick={() => { setMaintenanceMachine(machine); setMaintenanceInitialView('form'); }}
+                                        className="p-2 bg-orange-100 hover:bg-orange-200 rounded-lg text-orange-700 transition-colors"
+                                    >
+                                        <Wrench size={20} />
+                                    </button>
+                                </div>
+                                
+                                <div className="p-3 bg-white/80 rounded-lg border border-orange-100 shadow-sm mb-4">
+                                   <p className="text-sm text-slate-700 leading-relaxed font-medium">
+                                     {machine.lastMaintenance.notes}
+                                   </p>
+                                </div>
+                                
+                                {/* Recent Activity Section */}
+                                {(machine.maintenanceHistory || []).length > 1 && (
+                                    <div className="space-y-3">
+                                        <div className="text-[10px] font-bold text-orange-400 uppercase tracking-widest px-1">Recent Activity</div>
+                                        <div className="space-y-2">
+                                            {[...(machine.maintenanceHistory || [])]
+                                                .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                                                .slice(1, 4) // Show up to 3 previous logs
+                                                .map((hist, idx) => (
+                                                    <div key={idx} className="flex gap-3 items-center p-2.5 bg-white rounded-lg border border-orange-100 shadow-sm">
+                                                        <div className="shrink-0 flex flex-col items-center justify-center bg-orange-50 px-2 py-1 rounded border border-orange-100 min-w-[50px]">
+                                                            <span className="text-[10px] font-bold text-orange-400 uppercase leading-none">
+                                                                {new Date(hist.date).toLocaleDateString(undefined, {month: 'short'})}
+                                                            </span>
+                                                            <span className="text-sm font-bold text-orange-700 leading-none mt-0.5">
+                                                                {new Date(hist.date).toLocaleDateString(undefined, {day: 'numeric'})}
+                                                            </span>
+                                                        </div>
+                                                        <div className="min-w-0 flex-1">
+                                                            <p className="text-xs text-slate-600 line-clamp-1 leading-relaxed font-medium">
+                                                                {hist.notes}
+                                                            </p>
+                                                            <div className="text-[10px] text-slate-400 mt-0.5">
+                                                                {hist.technician || 'Technician'} • {new Date(hist.createdAt || hist.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            }
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                          ) : (
+                             <div className="bg-slate-50 border border-slate-200 border-dashed p-6 rounded-xl flex flex-col items-center justify-center gap-2 mb-3">
+                                <Wrench size={24} className="text-slate-300" />
+                                <span className="text-sm font-medium text-slate-400">No maintenance history</span>
+                             </div>
+                          )}
+
+                          {/* Action Buttons Row */}
+                          <div className="grid grid-cols-2 gap-3">
+                              {(machine.maintenanceHistory || []).length > 0 && (
+                                  <button 
+                                    onClick={() => { setMaintenanceMachine(machine); setMaintenanceInitialView('history'); }}
+                                    className="col-span-1 py-3 px-4 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 text-slate-600 rounded-xl font-bold text-sm shadow-sm transition-all flex items-center justify-center gap-2"
+                                  >
+                                      <Calendar size={16} />
+                                      View History ({machine.maintenanceHistory?.length})
+                                  </button>
+                              )}
+                              
+                              <button 
+                                onClick={() => { setMaintenanceMachine(machine); setMaintenanceInitialView('form'); }}
+                                className={`${(machine.maintenanceHistory || []).length > 0 ? 'col-span-1' : 'col-span-2'} py-3 px-4 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-orange-200 transition-all flex items-center justify-center gap-2`}
+                              >
+                                 <Plus size={18} strokeWidth={3} />
+                                 Add Log
+                              </button>
+                          </div>
+                     </div>
+                 </div>
+             ))}
+          </div>
+
+          {/* Desktop Table View */}
+          <div className="hidden md:block bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm text-left">
                 <thead className="bg-slate-50 text-slate-700 font-bold uppercase text-xs">
@@ -268,6 +557,7 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines }) => {
                     <th className="p-4 border-b border-slate-200 w-32">Origin</th>
                     <th className="p-4 border-b border-slate-200 w-32">Tubular/Open</th>
                     <th className="p-4 border-b border-slate-200 w-24">Tracks</th>
+                    <th className="p-4 border-b border-slate-200 text-center w-32">Maintenance</th>
                     <th className="p-4 border-b border-slate-200 text-center w-32">Linked Fabrics</th>
                   </tr>
                 </thead>
@@ -340,6 +630,25 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines }) => {
                             onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'tracks', val)} 
                           />
                         </td>
+                        
+                        {/* Maintenance */}
+                        <td className="p-2 text-center">
+                          <button
+                            onClick={() => { setMaintenanceMachine(machine); setMaintenanceInitialView('form'); }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 mx-auto ${
+                              machine.lastMaintenance 
+                                ? 'bg-orange-50 text-orange-600 border border-orange-200 hover:bg-orange-100'
+                                : 'bg-slate-50 text-slate-400 border border-slate-200 hover:bg-slate-100 hover:text-slate-600'
+                            }`}
+                          >
+                            <Wrench size={12} />
+                            {machine.lastMaintenance ? (
+                              <span className="font-mono">{new Date(machine.lastMaintenance.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+                            ) : (
+                              'Log'
+                            )}
+                          </button>
+                        </td>
 
                         <td className="p-4 text-center">
                           <button 
@@ -360,6 +669,7 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines }) => {
               </table>
             </div>
           </div>
+          </>
         ) : (
           /* Groups View */
           <div className="space-y-8">
@@ -519,6 +829,19 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines }) => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Maintenance Modal */}
+      {maintenanceMachine && (
+        <MachineMaintenanceModal
+          isOpen={!!maintenanceMachine}
+          onClose={() => setMaintenanceMachine(null)}
+          machine={maintenanceMachine}
+          initialView={maintenanceInitialView}
+          onSave={handleSaveMaintenance}
+          onUpdateLog={handleUpdateMaintenanceLog}
+          onDelete={handleDeleteMaintenanceLog}
+        />
       )}
     </div>
   );

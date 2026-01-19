@@ -7,6 +7,7 @@ import {
   Filter, 
   Calendar, 
   Download, 
+  Upload,
   RefreshCw,
   Droplets,
   Factory,
@@ -14,6 +15,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { DyehouseImportModal } from './DyehouseImportModal';
 
 interface GlobalBatchItem {
   id: string;
@@ -43,6 +45,7 @@ interface GlobalBatchItem {
 
 export const DyehouseGlobalSchedule: React.FC = () => {
   const [batches, setBatches] = useState<GlobalBatchItem[]>([]);
+  const [allDyehouses, setAllDyehouses] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   
@@ -51,6 +54,8 @@ export const DyehouseGlobalSchedule: React.FC = () => {
   const [filterClient, setFilterClient] = useState('All');
   const [filterStatus, setFilterStatus] = useState('Sent');
   const [includeDrafts, setIncludeDrafts] = useState(false);
+  
+  const [showImportModal, setShowImportModal] = useState(false);
 
   useEffect(() => {
     fetchGlobalData();
@@ -59,6 +64,11 @@ export const DyehouseGlobalSchedule: React.FC = () => {
   const fetchGlobalData = async () => {
     setLoading(true);
     try {
+      // 0. Fetch Dyehouses Directory (Authoritative List)
+      const dyehousesSnapshot = await getDocs(collection(db, 'dyehouses'));
+      const dyehouseList = dyehousesSnapshot.docs.map(doc => doc.data().name).sort();
+      setAllDyehouses(dyehouseList);
+
       // 1. Fetch Clients for Name Lookup
       const clientsSnapshot = await getDocs(collection(db, 'CustomerSheets'));
       const clientMap: Record<string, string> = {};
@@ -142,7 +152,7 @@ export const DyehouseGlobalSchedule: React.FC = () => {
   };
 
   // Derived Lists for Filters
-  const uniqueDyehouses = useMemo(() => Array.from(new Set(batches.map(b => b.dyehouse))).sort(), [batches]);
+  // const uniqueDyehouses = useMemo(() => Array.from(new Set(batches.map(b => b.dyehouse))).sort(), [batches]); // Replaced by allDyehouses
   const uniqueClients = useMemo(() => Array.from(new Set(batches.map(b => b.clientName))).sort(), [batches]);
 
   // Filtered Data - Exclude drafts by default unless includeDrafts is true
@@ -229,7 +239,7 @@ export const DyehouseGlobalSchedule: React.FC = () => {
             className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white outline-none"
           >
             <option value="All">All Dyehouses</option>
-            {uniqueDyehouses.map(d => <option key={d} value={d}>{d}</option>)}
+            {allDyehouses.map(d => <option key={d} value={d}>{d}</option>)}
           </select>
 
           <select 
@@ -263,6 +273,14 @@ export const DyehouseGlobalSchedule: React.FC = () => {
             />
             <span className="text-slate-600">اظهار المسودات</span>
           </label>
+
+          <button 
+            onClick={() => setShowImportModal(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+          >
+            <Upload size={16} />
+            Import
+          </button>
 
           <button 
             onClick={exportToExcel}
@@ -436,6 +454,16 @@ export const DyehouseGlobalSchedule: React.FC = () => {
            })}
         </div>
       )}
+
+      <DyehouseImportModal 
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        dyehouses={allDyehouses}
+        onImportComplete={() => {
+            setShowImportModal(false);
+            fetchGlobalData();
+        }}
+      />
     </div>
   );
 };

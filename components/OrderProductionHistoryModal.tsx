@@ -141,12 +141,15 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
       debug.push(`Found ${logsData.length} total matching logs.`);
       
       // Add helpful debug info if no matches but fabric exists elsewhere
+      // DISABLED: User requested to hide "Different Clients" warning as it causes confusion
+      /*
       if (logsData.length === 0 && totalLogsWithFabric > 0) {
           debug.push(`---`);
           debug.push(`⚠️ This fabric was found ${totalLogsWithFabric} times but for DIFFERENT clients:`);
           debug.push(`Clients with this fabric: ${Array.from(fabricFoundOnClients).join(', ')}`);
           debug.push(`Machines that produced it: ${Array.from(fabricFoundOnMachines).join(', ')}`);
       }
+      */
 
       // Sort by date descending for display
       logsData.sort((a, b) => b.date.localeCompare(a.date));

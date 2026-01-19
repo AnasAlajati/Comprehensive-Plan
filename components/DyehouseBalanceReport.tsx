@@ -97,7 +97,13 @@ export const DyehouseBalanceReport: React.FC = () => {
         if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
           order.dyeingPlan.forEach(batch => {
             // Only count if sent
-            const totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
+            let totalSent = 0;
+            if (batch.sentEvents && Array.isArray(batch.sentEvents) && batch.sentEvents.length > 0) {
+              totalSent = batch.sentEvents.reduce((s: number, e: any) => s + (e.quantity || 0) + (e.accessorySent || 0), 0);
+            } else {
+              totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
+            }
+            
             if (batch.dateSent || totalSent > 0) {
               const dyehouse = batch.dyehouse || 'Unassigned';
               allDyehouses.add(dyehouse);
