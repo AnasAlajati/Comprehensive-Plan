@@ -434,7 +434,6 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
                      <div className="absolute top-1 right-2 text-[10px] font-bold underline">بيانات الويسكو:</div>
                      <textarea
                         className="w-full h-full min-h-[40px] bg-transparent resize-none outline-none text-sm text-right mt-4 pr-1 scrollbar-hide"
-                        placeholder="..."
                      />
                 </div>
             </div>
@@ -446,7 +445,6 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     className="w-full h-full min-h-[60px] bg-transparent resize-none outline-none text-sm text-right mt-4 pr-1 scrollbar-hide"
-                    placeholder="أدخل ملاحظات..."
                  />
             </div>
             

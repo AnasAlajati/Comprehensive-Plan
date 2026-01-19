@@ -22,6 +22,7 @@ import { MachineRow } from './types';
 import { StatusBadge } from './components/StatusBadge';
 import { PlanningSchedule } from './components/PlanningSchedule';
 import { MaintenanceDashboard } from './components/MaintenanceDashboard';
+import { MaintenancePage } from './components/MaintenancePage';
 import { IdleMachineMonitor } from './components/IdleMachineMonitor';
 import { AIInsightsModal } from './components/AIInsightsModal';
 import { getScheduleRecommendations } from './services/ai';
@@ -94,7 +95,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'fabrics' | 'machines' | 'users'>('excel'); 
+  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'real-maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'fabrics' | 'machines' | 'users'>('excel'); 
   const [planningInitialViewMode, setPlanningInitialViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
   
   // Navigation State
@@ -827,8 +828,15 @@ const App: React.FC = () => {
                           onClick={() => { setViewMode('maintenance'); setIsMenuOpen(false); }}
                           className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'maintenance' ? 'bg-slate-100 text-slate-800 ring-1 ring-slate-300' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
                         >
-                           <div className={`p-2 rounded-md ${viewMode === 'maintenance' ? 'bg-slate-200 text-slate-700' : 'bg-slate-100 text-slate-500'}`}><Wrench size={20} /></div>
-                           <div className="font-semibold text-sm">Maintenance</div>
+                           <div className={`p-2 rounded-md ${viewMode === 'maintenance' ? 'bg-slate-200 text-slate-700' : 'bg-slate-100 text-slate-500'}`}><Calendar size={20} /></div>
+                           <div className="font-semibold text-sm">Switch Schedule</div>
+                        </button>
+                        <button 
+                          onClick={() => { setViewMode('real-maintenance'); setIsMenuOpen(false); }}
+                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'real-maintenance' ? 'bg-orange-50 text-orange-800 ring-1 ring-orange-300' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                        >
+                           <div className={`p-2 rounded-md ${viewMode === 'real-maintenance' ? 'bg-orange-200 text-orange-700' : 'bg-slate-100 text-slate-500'}`}><Wrench size={20} /></div>
+                           <div className="font-semibold text-sm">Maintenance Logs</div>
                         </button>
                         <button 
                           onClick={() => { setViewMode('fabrics'); setIsMenuOpen(false); }}
@@ -881,6 +889,12 @@ const App: React.FC = () => {
 
             {viewMode === 'maintenance' && (
               <MaintenanceDashboard 
+                machines={machines}
+              />
+            )}
+
+            {viewMode === 'real-maintenance' && (
+              <MaintenancePage 
                 machines={machines}
               />
             )}
