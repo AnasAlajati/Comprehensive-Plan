@@ -52,6 +52,15 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
   });
   const [isDownloading, setIsDownloading] = useState(false);
   const printRef = useRef<HTMLDivElement>(null);
+  const accessoryInputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-resize accessory text area
+  useEffect(() => {
+    if (accessoryInputRef.current) {
+      accessoryInputRef.current.style.height = 'auto';
+      accessoryInputRef.current.style.height = `${accessoryInputRef.current.scrollHeight}px`;
+    }
+  }, [accessoryName]);
 
   useEffect(() => {
     if (isOpen) {
@@ -285,10 +294,16 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
                                       
                                       // 3. Batch Manual Overrides
                                       const batchDyehouses = order.dyeingPlan?.map(b => b.dyehouse).filter(Boolean) || [];
+
+                                      // Logic: Only include 'orderDefault' if there are batches that DO NOT have an override
+                                      // If every batch has a manual dyehouse, the default is effectively unused for bulk production.
+                                      const hasUnassignedBatches = !order.dyeingPlan || order.dyeingPlan.length === 0 || order.dyeingPlan.some(b => !b.dyehouse);
+                                      
+                                      const effectivelyUsedDefault = hasUnassignedBatches ? orderDefault : null;
                                       
                                       // Combine all unique
                                       const allSources = Array.from(new Set([
-                                          ...(orderDefault ? [orderDefault] : []),
+                                          ...(effectivelyUsedDefault ? [effectivelyUsedDefault] : []),
                                           ...approvalDyehouses,
                                           ...batchDyehouses
                                       ].map(s => s?.trim()).filter(Boolean)));
@@ -465,18 +480,18 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
                        </div>
                        
                        {/* Accessory Column 1: Name */}
-                       <div className="flex-1 border-l border-slate-400 flex flex-col items-center justify-center p-1">
+                       <div className="flex-[1.5] border-l border-slate-400 flex flex-col items-center justify-center p-1">
                             <span className="text-[9px] font-bold text-slate-500 mb-0.5">اسم الإكسسوار</span>
-                            <input 
-                                type="text" 
+                            <textarea 
+                                ref={accessoryInputRef}
                                 value={accessoryName} 
                                 onChange={e => setAccessoryName(e.target.value)}
-                                className="w-full text-center font-bold text-[10px] bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500"
+                                className="w-full text-center font-bold text-[10px] bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-blue-500 resize-none overflow-hidden"
                                 placeholder="-"
+                                style={{ minHeight: '24px' }}
                             />
                        </div>
 
-                       {/* Accessory Column 2: Quantity */}
                        <div className="flex-1 border-l border-slate-400 flex flex-col items-center justify-center p-1">
                             <span className="text-[9px] font-bold text-slate-500 mb-0.5">كمية إكسسوار</span>
                             <input 
