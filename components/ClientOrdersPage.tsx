@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import * as XLSX from 'xlsx-js-style';
 import { createPortal } from 'react-dom';
 import { 
   collection, 
@@ -73,6 +74,8 @@ import {
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
 const ALL_REMAINING_WORK_ID = 'ALL_REMAINING_WORK';
 const ALL_YARNS_ID = 'ALL_YARNS';
+
+
 
 // Global CSS to hide number input spinners
 const globalStyles = `
@@ -1800,13 +1803,13 @@ const MemoizedOrderRow = React.memo(({
                     : "text-slate-400 hover:text-purple-600 hover:bg-purple-50"
                 }`}
                 title={row.isPrinted 
-                  ? `Printed on ${row.printedAt ? new Date(row.printedAt).toLocaleDateString('en-GB') : 'Unknown Date'}` 
+                  ? `Printed on ${row.lastPrintedAt || row.printedAt ? new Date(row.lastPrintedAt || row.printedAt || '').toLocaleDateString('en-GB') : 'Unknown Date'}` 
                   : "Print Production Order"}
               >
                 <FileText className="w-4 h-4" />
-                {row.isPrinted && row.printedAt && (
+                {row.isPrinted && (row.lastPrintedAt || row.printedAt) && (
                   <span className="text-[10px] font-medium">
-                    {new Date(row.printedAt).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })}
+                    {new Date(row.lastPrintedAt || row.printedAt || '').toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })}
                   </span>
                 )}
               </button>
@@ -2710,20 +2713,29 @@ interface ClientOrdersPageProps {
   userRole?: 'admin' | 'editor' | 'viewer' | null;
   highlightTarget?: { client: string; fabric?: string } | null;
   onHighlightComplete?: () => void;
+  userName?: string;
 }
 
 export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ 
   userRole,
   highlightTarget,
-  onHighlightComplete
+  onHighlightComplete,
+  userName: propUserName
 }) => {
   const [customers, setCustomers] = useState<CustomerSheet[]>([]);
   const [rawCustomers, setRawCustomers] = useState<CustomerSheet[]>([]);
   const [flatOrders, setFlatOrders] = useState<OrderRow[]>([]);
-  const [userName, setUserName] = useState<string>(''); // NEW: Store display name from Firestore
+  const [userName, setUserName] = useState<string>(propUserName || ''); // NEW: Store display name from Firestore
 
-  // Fetch User Name
+  // Sync with prop
   useEffect(() => {
+    if (propUserName) setUserName(propUserName);
+  }, [propUserName]);
+
+  // Fetch User Name if not provided via prop
+  useEffect(() => {
+    if (propUserName) return;
+
     const fetchUserName = async () => {
       const user = auth.currentUser;
       if (user?.email) {
@@ -2815,6 +2827,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const [showYarnRequirements, setShowYarnRequirements] = useState(false);
   const [selectedYarnDetails, setSelectedYarnDetails] = useState<any>(null);
   const [showDyehouse, setShowDyehouse] = useState(false);
+//   const [showDyehouseImport, setShowDyehouseImport] = useState(false);
   // const [showRemainingWork, setShowRemainingWork] = useState(false); // Removed
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
   const [externalFactories, setExternalFactories] = useState<any[]>([]);
@@ -2998,6 +3011,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
   // Import/Export State
   const [showImportModal, setShowImportModal] = useState(false);
+
   const [importData, setImportData] = useState<{
     customerName: string;
     exportedAt: string;
@@ -4351,6 +4365,302 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     return best ? best.capacity : sorted[sorted.length - 1].capacity;
   };
 
+  const exportDyehouseInfoExcel = () => {
+    // 1. Create Workbook
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = {
+      Views: [{ RTL: true }]
+    };
+
+    // 2. Define Styles
+    const headerStyle = {
+      font: { name: "Calibri", sz: 12, bold: true, color: { rgb: "FFFFFF" } },
+      fill: { fgColor: { rgb: "4F46E5" } }, // Indigo 600
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      border: {
+        top: { style: "thin", color: { auto: 1 } },
+        bottom: { style: "thin", color: { auto: 1 } },
+        left: { style: "thin", color: { auto: 1 } },
+        right: { style: "thin", color: { auto: 1 } }
+      }
+    };
+
+    const fabricHeaderStyle = {
+      font: { name: "Calibri", sz: 14, bold: true, color: { rgb: "1E293B" } }, // Slate 800
+      fill: { fgColor: { rgb: "E2E8F0" } }, // Slate 200
+      alignment: { horizontal: "center", vertical: "center" }, // Changed to center
+      border: {
+        top: { style: "medium", color: { rgb: "64748B" } },
+        bottom: { style: "medium", color: { rgb: "64748B" } }
+      }
+    };
+
+    const clientHeaderStyle = {
+      font: { name: "Calibri", sz: 16, bold: true, color: { rgb: "FFFFFF" } },
+      fill: { fgColor: { rgb: "1E293B" } }, // Slate 800
+      alignment: { horizontal: "center", vertical: "center" },
+      border: {
+        bottom: { style: "thick", color: { auto: 1 } }
+      }
+    };
+    
+    const cellStyle = {
+      font: { name: "Calibri", sz: 11 },
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      border: {
+        top: { style: "thin", color: { rgb: "E2E8F0" } },
+        bottom: { style: "thin", color: { rgb: "E2E8F0" } },
+        left: { style: "thin", color: { rgb: "E2E8F0" } },
+        right: { style: "thin", color: { rgb: "E2E8F0" } }
+      }
+    };
+
+    // Helper: Determine text color based on hex brightness
+    const getContrastYIQ = (hexcolor: string) => {
+        if (!hexcolor) return "000000";
+        hexcolor = hexcolor.replace("#", "");
+        var r = parseInt(hexcolor.substr(0,2),16);
+        var g = parseInt(hexcolor.substr(2,2),16);
+        var b = parseInt(hexcolor.substr(4,2),16);
+        var yiq = ((r*299)+(g*587)+(b*114))/1000;
+        return (yiq >= 128) ? "000000" : "FFFFFF";
+    };
+
+    // 3. Prepare Data
+    // Filter and sort
+    const ordersToExport = filteredOrders
+      .filter(o => o.material) // Must have material
+      .sort((a, b) => (a.material || '').localeCompare(b.material || ''));
+
+    const wsData: any[][] = [];
+    const merges: { s: { r: number, c: number }, e: { r: number, c: number } }[] = [];
+    
+    // Arabic Headers
+    const headers = [
+      "اللون", 
+      "موافقة اللون", 
+      "رقم الازن", 
+      "تاريخ التشكيل", 
+      "تاريخ الارسال", 
+      "المصبغة", 
+      "ماكينة", 
+      "مطلوب", 
+      "اكسسوار",
+      "مرسل", 
+      "مستلم", 
+      "الحالة", 
+      "ملاحظات"
+    ];
+
+    let currentRow = 0;
+
+    // Add Client Name Header Row at Top
+    const clientName = selectedCustomer?.name || 'Client Orders';
+    wsData.push([
+        { v: `العميل: ${clientName}`, s: clientHeaderStyle }
+    ]);
+    // Fill rest for merge
+    for(let i=1; i<headers.length; i++) wsData[currentRow].push(null);
+    merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: headers.length - 1 } });
+    currentRow++;
+    
+    // Spacer
+    wsData.push(Array(headers.length).fill(null));
+    currentRow++;
+
+    ordersToExport.forEach(order => {
+       if (!order.dyeingPlan || order.dyeingPlan.length === 0) return;
+
+       // Add Fabric Header (Center, No Client Name)
+       wsData.push([
+         { v: `${order.material}`, s: fabricHeaderStyle }
+       ]);
+       // Fill rest of row with nulls for merging
+       for(let i=1; i<headers.length; i++) wsData[currentRow].push(null);
+       
+       // Merge this row
+       merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: headers.length - 1 } });
+       currentRow++;
+
+       // Add Column Headers
+       wsData.push(headers.map(h => ({ v: h, s: headerStyle })));
+       currentRow++;
+
+       // Add Batch Rows
+       order.dyeingPlan.forEach(batch => {
+           // Color styling
+           const hex = batch.colorHex || '';
+           const textColor = getContrastYIQ(hex);
+           const colorCellStyle = {
+               ...cellStyle,
+               fill: hex ? { fgColor: { rgb: hex.replace('#', '') } } : undefined,
+               font: { ...cellStyle.font, color: { rgb: textColor } }
+           };
+
+           // Color Approval Flattening
+           let approvalText = batch.colorApproval || '-';
+           if (batch.colorApprovals && batch.colorApprovals.length > 0) {
+             const history = batch.colorApprovals.map(a => 
+               `[${a.status === 'approved' ? 'OK' : 'X'}] ${new Date(a.date).toLocaleDateString('ar-EG')}`
+             ).join('\n');
+             approvalText = `${approvalText}\n${history}`;
+           }
+
+           // Sent Flattening
+           let sentText = String((batch.quantitySent || 0) + (batch.quantitySentAccessory || 0));
+           if (batch.sentEvents && batch.sentEvents.length > 0) {
+              const details = batch.sentEvents.map(e => `${e.quantity} (${new Date(e.date).toLocaleDateString('ar-EG')})`).join('\n');
+              sentText = `${sentText}\n---\n${details}`;
+           }
+
+           // Received Flattening
+           let recvText = String(batch.receivedQuantity || 0);
+           if (batch.receiveEvents && batch.receiveEvents.length > 0) {
+              const details = batch.receiveEvents.map(e => `${(e.quantityRaw||0) + (e.quantityAccessory||0)} (${new Date(e.date).toLocaleDateString('ar-EG')})`).join('\n');
+              recvText = `${recvText}\n---\n${details}`;
+           }
+
+           const row = [
+             { v: batch.color || '', s: colorCellStyle }, // Use colored style
+             { v: approvalText, s: cellStyle },
+             { v: batch.dispatchNumber || '', s: cellStyle },
+             { v: batch.formationDate || '', s: cellStyle },
+             { v: batch.dateSent || '', s: cellStyle },
+             { v: batch.dyehouse || order.dyehouse || '', s: cellStyle },
+             { v: batch.plannedCapacity || batch.machine || '', s: cellStyle },
+             { v: batch.quantity || 0, s: cellStyle },
+             { v: batch.accessoryType ? `${batch.accessoryType}\n${batch.accessoryQty||0}` : '-', s: cellStyle },
+             { v: sentText, s: cellStyle },
+             { v: recvText, s: cellStyle },
+             { v: batch.status || 'Pending', s: cellStyle },
+             { v: batch.notes || '', s: cellStyle }
+           ];
+           wsData.push(row);
+           currentRow++;
+       });
+       
+       // Empty spacer row
+       wsData.push(Array(headers.length).fill({ v: "", s: { ...cellStyle, border: {} } }));
+       currentRow++;
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    
+    // Apply Merges
+    if(merges.length > 0) ws['!merges'] = merges;
+    
+    // Column Widths
+    ws['!cols'] = [
+      { wch: 15 }, // Color
+      { wch: 20 }, // Approval
+      { wch: 10 }, // Dispatch
+      { wch: 12 }, // Formation
+      { wch: 12 }, // Sent Date
+      { wch: 15 }, // Dyehouse
+      { wch: 10 }, // Machine
+      { wch: 10 }, // Qty
+      { wch: 12 }, // Accessory
+      { wch: 20 }, // Sent
+      { wch: 20 }, // Recv
+      { wch: 10 }, // Status
+      { wch: 25 }  // Notes
+    ];
+
+    ws['!views'] = [{ rightToLeft: true }];
+
+    XLSX.utils.book_append_sheet(wb, ws, "Dyehouse Plan");
+    XLSX.writeFile(wb, `${selectedCustomer?.name || 'Orders'}_DyehousePlan.xlsx`);
+  };
+
+  const handleSaveImportedData = async (importedClients: ParsedClient[]) => {
+       try {
+           const batch = writeBatch(db);
+           let updateCount = 0;
+
+           for (const client of importedClients) {
+               // 1. Find Customer
+               let customer = customers.find(c => c.name.trim() === client.clientName.trim());
+               if (!customer) {
+                   console.log(`Skipping unknown client: ${client.clientName}`);
+                   continue;
+               }
+
+               for (const fabric of client.fabrics) {
+                   // 2. Find Order by Customer ID + Fabric Name
+                   const ordersRef = collection(db, 'orders');
+                   const q = query(
+                       ordersRef, 
+                       where('customerId', '==', customer.id),
+                       where('material', '==', fabric.fabricName.trim())
+                   );
+                   const snapshot = await getDocs(q);
+
+                   if (snapshot.empty) {
+                       console.log(`Order not found for ${client.clientName} - ${fabric.fabricName}`);
+                       continue;
+                   }
+
+                   const orderDoc = snapshot.docs[0];
+                   const orderData = orderDoc.data() as OrderRow;
+                   const plan = orderData.dyeingPlan || [];
+                   let planModified = false;
+
+                   const updatedPlan = plan.map(existingBatch => {
+                        const matchingImport = fabric.batches.find(b => 
+                            b.color.trim().toLowerCase() === existingBatch.color.trim().toLowerCase() &&
+                            (b.dyehouse === existingBatch.dyehouse || (!b.dyehouse && !existingBatch.dyehouse)) // simplified matching
+                        );
+
+                        if (matchingImport) {
+                            planModified = true;
+                            return {
+                                ...existingBatch,
+                                quantity: matchingImport.quantity || existingBatch.quantity,
+                                status: (matchingImport.status as any) || existingBatch.status,
+                                dyehouse: matchingImport.dyehouse || existingBatch.dyehouse,
+                                machine: matchingImport.machine || existingBatch.machine,
+                                sentQty: matchingImport.quantitySent,
+                                receivedQty: matchingImport.quantityReceived,
+                                receiveEvents: matchingImport.receiveEvents?.length ? matchingImport.receiveEvents : existingBatch.receiveEvents,
+                                sentEvents: matchingImport.sentEvents?.length ? matchingImport.sentEvents : existingBatch.sentEvents,
+                                approval: matchingImport.approvalHistory?.length ? matchingImport.approvalHistory : existingBatch.approval
+                            };
+                        }
+                        return existingBatch;
+                   });
+                   
+                   if (planModified) {
+                       batch.update(doc(db, 'orders', orderDoc.id), {
+                           dyeingPlan: updatedPlan
+                       });
+                       updateCount++;
+                   }
+               }
+           }
+
+           if (updateCount > 0) {
+               await batch.commit();
+               alert(`Successfully updated ${updateCount} orders!`);
+               setShowDyehouseImport(false);
+           } else {
+               alert("No matching orders found to update.");
+           }
+
+       } catch (e) {
+           console.error("Error saving import:", e);
+           alert("Failed to save changes. Check console for details.");
+       }
+  };
+
+//   if (showDyehouseImport) {
+//        return (
+//            <DyehouseImportPage 
+//                onBack={() => setShowDyehouseImport(false)}
+//                onSaveToFirestore={handleSaveImportedData}
+//            />
+//        );
+//   }
+// 
   return (
     <div className="flex flex-col min-h-[calc(100vh-100px)] bg-slate-50 rounded-xl border border-slate-200 shadow-sm">
       <style>{globalStyles}</style>
@@ -4495,6 +4805,27 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                     <Droplets className="w-3.5 h-3.5" />
                     Dyehouse Info
                 </button>
+
+                {showDyehouse && (
+                  <div className="flex gap-1">
+                    <button 
+                         onClick={() => exportDyehouseInfoExcel()}
+                         className="flex items-center gap-2 px-3 py-1.5 border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 text-xs font-medium rounded-md shadow-sm transition-all whitespace-nowrap"
+                         title="Export Dyehouse/Color Info to Excel"
+                    >
+                         <Download className="w-3.5 h-3.5" />
+                         Export
+                    </button>
+                     <button 
+                         onClick={() => setShowDyehouseImport(true)}
+                         className="flex items-center gap-2 px-3 py-1.5 border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 text-xs font-medium rounded-md shadow-sm transition-all whitespace-nowrap"
+                         title="Import Updated Dyehouse Data"
+                    >
+                         <Upload className="w-3.5 h-3.5" />
+                         Import
+                    </button>
+                  </div>
+                )}
 
 
 
@@ -5736,10 +6067,40 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             machines={machines}
             allYarns={yarns}
             dyehouses={dyehouses}
+            userName={userName}
             onMarkPrinted={() => {
               if (productionOrderModal.order) {
                 const now = new Date().toISOString();
-                handleUpdateOrder(productionOrderModal.order.id, { isPrinted: true, printedAt: now });
+                
+                // 1. Create Production Ticket (Snapshot)
+                const ticket: any = { // Using any for partial ProductionTicket match to avoid strict type complex with yarn/allocations for now
+                   orderId: productionOrderModal.order.id,
+                   orderRefPath: productionOrderModal.order.refPath,
+                   customerName: selectedCustomer?.name || '',
+                   fabricName: productionOrderModal.order.material,
+                   snapshot: {
+                      requiredQty: productionOrderModal.order.requiredQty,
+                      plannedMachines: productionOrderModal.plannedMachines,
+                      activeMachines: productionOrderModal.activeMachines,
+                      notes: productionOrderModal.order.notes
+                   },
+                   printedBy: userName || 'Unknown',
+                   printedAt: now,
+                   status: 'In Production'
+                };
+                
+                DataService.createProductionTicket(ticket).then((id) => {
+                   console.log("Ticket Created:", id);
+                });
+
+                // 2. Update Order Status
+                DataService.updateOrderPrintingStatus(
+                  productionOrderModal.order.id,
+                  productionOrderModal.order.refPath || '',
+                  userName
+                ).then(() => {
+                  // Optimistic update if needed, though real-time listener handles it
+                }).catch(err => console.error("Failed to update print status", err));
               }
             }}
           />

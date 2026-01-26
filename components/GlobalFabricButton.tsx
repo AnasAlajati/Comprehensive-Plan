@@ -46,7 +46,7 @@ export const GlobalFabricButton: React.FC<GlobalFabricButtonProps> = ({ machines
         shortName: formData.shortName,
         workCenters: workCenterList,
         variants: formData.variants,
-        specs: specs
+        ...(specs ? { specs } : {})
       };
 
       await setDoc(doc(db, 'FabricSS', docId), fabricData, { merge: true });

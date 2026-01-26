@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Printer, FileText, Download } from 'lucide-react';
+import { X, Printer, FileText, Download, CheckCircle2 } from 'lucide-react';
 import { OrderRow, FabricDefinition, YarnAllocationItem, Yarn, DyeingBatch, MachineSS, Dyehouse } from '../types';
 import { toJpeg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
@@ -16,6 +16,7 @@ interface FabricProductionOrderModalProps {
   allYarns: Yarn[];
   dyehouses?: Dyehouse[]; // Optional list for debug matching
   onMarkPrinted: () => void;
+  userName?: string;
 }
 
 export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProps> = ({
@@ -29,7 +30,9 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
   machines,
   allYarns,
   dyehouses = [],
-  onMarkPrinted
+  onMarkPrinted,
+  userName
+
 }) => {
   const [selectedMachine, setSelectedMachine] = useState<string>('');
   const [manualMachine, setManualMachine] = useState<string>('');
@@ -190,10 +193,18 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
         
         {/* Header */}
         <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
-          <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-            <FileText className="w-6 h-6 text-blue-600" />
-            Fabric Production Order
-          </h2>
+          <div className="flex flex-col">
+            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+              <FileText className="w-6 h-6 text-blue-600" />
+              Fabric Production Order
+            </h2>
+            {order.lastPrintedAt && (
+              <span className="text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full border border-emerald-100 flex items-center gap-1 mt-1 w-fit">
+                 <CheckCircle2 className="w-3 h-3" />
+                 Active Ticket: Printed by {order.lastPrintedBy} on {new Date(order.lastPrintedAt).toLocaleDateString()}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <button 
               onClick={handleDownloadPDF}
@@ -205,7 +216,7 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
               ) : (
                 <>
                   <Download size={18} />
-                  Download PDF
+                  Download PDF & Create Ticket
                 </>
               )}
             </button>
@@ -241,7 +252,12 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
                      <div className="flex justify-end flex-col gap-1 text-xs font-bold">
                         <div className="flex items-center justify-end gap-2">
                              <span>التاريخ:</span>
-                             <span className="border-b border-dotted border-slate-400 min-w-[100px] text-center">{new Date().toLocaleDateString('en-GB')}</span>
+                             <span className="border-b border-dotted border-slate-400 min-w-[100px] text-center">
+                               {order.lastPrintedAt 
+                                 ? new Date(order.lastPrintedAt).toLocaleDateString('en-GB')
+                                 : new Date().toLocaleDateString('en-GB')
+                               }
+                             </span>
                         </div>
                         {/* Empty lines for manual dates if needed */}
                      </div>

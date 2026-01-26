@@ -14,11 +14,13 @@ import {
   User,
   ArrowRight
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import XLSX from 'xlsx-js-style';
 import { DyehouseImportModal } from './DyehouseImportModal';
+import { DyehouseScheduleImportPage, ImportedScheduleRow } from './DyehouseScheduleImportPage';
+import { writeBatch, doc } from 'firebase/firestore';
 
 interface GlobalBatchItem {
-  id: string;
+  id: string; // Internal Comp ID (orderId-index)
   clientId: string;
   clientName: string;
   orderId: string;
@@ -55,7 +57,8 @@ export const DyehouseGlobalSchedule: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState('Sent');
   const [includeDrafts, setIncludeDrafts] = useState(false);
   
-  const [showImportModal, setShowImportModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false); // Legacy modal
+  const [showImportPage, setShowImportPage] = useState(false); // NEW Full Page Import
 
   useEffect(() => {
     fetchGlobalData();
@@ -190,27 +193,378 @@ export const DyehouseGlobalSchedule: React.FC = () => {
 
   const sortedDyehouses = useMemo(() => Object.keys(groupedBatches).sort(), [groupedBatches]);
 
-  const exportToExcel = () => {
-    const data = filteredBatches.map(b => ({
-      'Client': b.clientName,
-      'Order Ref': b.orderReference || b.orderId,
-      'Fabric': b.fabric,
-      'Color': b.color,
-      'Quantity (kg)': b.quantity,
-      'Dyehouse': b.dyehouse,
-      'Machine': b.machine,
-      'Dispatch #': b.dispatchNumber,
-      'Date Sent': b.dateSent,
-      'Formation Date': b.formationDate,
-      'Status': b.status,
-      'Notes': b.notes
-    }));
+  const handleImportSave = async (importedRows: ImportedScheduleRow[]) => {
+      try {
+          const batchWrite = writeBatch(db);
+          let updateCount = 0;
+          
+          // Pre-fetch contexts if possible or optimize. 
+          // For safety, we'll query for each distinct Client+Fabric combo or just Scan all relevant orders.
+          // Given the size, let's fetch ALL active orders first to memory to avoid N+1 queries.
+          const ordersSnapshot = await getDocs(query(collectionGroup(db, 'orders')));
+          const allOrders = ordersSnapshot.docs.map(d => ({ id: d.id, ref: d.ref, ...d.data() } as OrderRow & { ref: any }));
+          
+          // Map for fuzzy lookup
+          // Key: "normalizedClient_normalizedFabric" -> OrderRow[]
+          const ordersMap: Record<string, typeof allOrders> = {};
+          
+          // Helper to fetch client name (we need the client name from ID inside OrderRow, but OrderRow only has customerId)
+          // We have clientMap in fetchGlobalData but it's local scope.
+          // Let's re-fetch customers quickly.
+          const clientsSnap = await getDocs(collection(db, 'CustomerSheets'));
+          const clientNameMap: Record<string, string> = {}; // ID -> Name
+          const clientNameToId: Record<string, string> = {}; // Name -> ID
+          clientsSnap.docs.forEach(d => {
+              const data = d.data();
+              if (data.name) {
+                  clientNameMap[d.id] = data.name.trim().toLowerCase();
+                  clientNameToId[data.name.trim().toLowerCase()] = d.id;
+              }
+          });
 
-    const ws = XLSX.utils.json_to_sheet(data);
+          allOrders.forEach(o => {
+              const cName = clientNameMap[o.customerId || ''] || '';
+              if (!cName) return;
+              const key = `${cName}_${o.material?.trim().toLowerCase()}`;
+              if (!ordersMap[key]) ordersMap[key] = [];
+              ordersMap[key].push(o);
+          });
+
+          for (const row of importedRows) {
+              const clientKey = row.client.trim().toLowerCase();
+              const fabricKey = row.fabric.trim().toLowerCase();
+              const lookupKey = `${clientKey}_${fabricKey}`;
+              
+              const potentialOrders = ordersMap[lookupKey];
+              if (!potentialOrders || potentialOrders.length === 0) {
+                  console.warn(`No matching order found for Client: ${row.client}, Fabric: ${row.fabric}`);
+                  continue;
+              }
+
+              // Find matching batch
+              let matchFound = false;
+              
+              // Sort potential orders (maybe by recent?) or iterate all
+              for (const order of potentialOrders) {
+                  if (!order.dyeingPlan) continue;
+                  
+                  const plan = [...order.dyeingPlan];
+                  let planModified = false;
+                  
+                  // Index of batch to update
+                  const batchIdx = plan.findIndex(b => {
+                      // Strong Match: Dispatch Number
+                      if (row.dispatchNumber && b.dispatchNumber === row.dispatchNumber) return true;
+                      
+                      // Weak Match: Color + Dyehouse (if assigned)
+                      // Normalized comparision
+                      const c1 = b.color.trim().toLowerCase();
+                      const c2 = row.color.trim().toLowerCase();
+                      const d1 = (b.dyehouse || '').trim().toLowerCase();
+                      const d2 = row.dyehouseName.trim().toLowerCase();
+                      
+                      // Match color AND (Matches dyehouse OR dyehouse was empty)
+                      if (c1 === c2) {
+                           if (b.dispatchNumber) return false; // If batch has dispatch but row doesn't match it (checked above), don't hijack it
+                           if (d1 === d2 || d1 === '') return true;
+                      }
+                      return false;
+                  });
+
+                  if (batchIdx !== -1) {
+                      const existing = plan[batchIdx];
+                      
+                      // Update Logic
+                      const updates: any = {};
+                      let hasChange = false;
+
+                      // Update Machine
+                      if (row.assignedMachine) {
+                          // Extract capacity number if it's "825" or similar
+                          const cap = parseInt(row.assignedMachine.replace(/\D/g, '')) || 0;
+                          if (existing.plannedCapacity !== cap || existing.machine !== row.assignedMachine) {
+                               updates.plannedCapacity = cap;
+                               updates.machine = row.assignedMachine; // Store string representation too just in case
+                               hasChange = true;
+                          }
+                      }
+
+                      // Update Status
+                      if (row.status && existing.status !== row.status.toLowerCase() && existing.status !== 'received') {
+                          // Allow moving forward to 'Sent' or 'Received'
+                          // Don't revert 'Received' to 'Pending' via import unless explicit
+                          updates.status = row.status.toLowerCase();
+                          hasChange = true;
+                      }
+                      
+                      // Update Dates
+                      if (row.sentDate && existing.dateSent !== row.sentDate) {
+                          updates.dateSent = row.sentDate;
+                          hasChange = true;
+                      }
+                      if (row.formationDate && existing.formationDate !== row.formationDate) {
+                          updates.formationDate = row.formationDate;
+                          hasChange = true;
+                      }
+
+                      // Update Dispatch #
+                      if (row.dispatchNumber && existing.dispatchNumber !== row.dispatchNumber) {
+                          updates.dispatchNumber = row.dispatchNumber;
+                          hasChange = true;
+                      }
+
+                      // Update Dyehouse
+                      if (row.dyehouseName && existing.dyehouse !== row.dyehouseName) {
+                          updates.dyehouse = row.dyehouseName;
+                          hasChange = true;
+                      }
+                      
+                      if (hasChange) {
+                          plan[batchIdx] = { ...existing, ...updates };
+                          planModified = true;
+                          matchFound = true;
+                      } else {
+                          matchFound = true; // Found but no changes needed
+                      }
+                  }
+                  
+                  if (planModified) {
+                      batchWrite.update(order.ref, { dyeingPlan: plan });
+                      updateCount++;
+                  }
+                  
+                  if (matchFound) break; // Found match for this row, move to next row
+              }
+          }
+
+          if (updateCount > 0) {
+              await batchWrite.commit();
+              alert(`Successfully updated orders from ${updateCount} matches.`);
+              setShowImportPage(false);
+              fetchGlobalData(); // Refresh
+          } else {
+              alert("No suitable updates found. Ensure Client/Fabric/Colors match active orders.");
+          }
+
+      } catch (e) {
+          console.error("Import Save Error:", e);
+          alert("Failed to save import data.");
+      }
+  };
+
+  const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Dyehouse Schedule");
+    wb.Workbook = {
+        Views: [{ RTL: true }]
+    };
+
+    // Styles
+    const baseStyle = { 
+        font: { name: "Calibri", sz: 12 },
+        alignment: { horizontal: "center", vertical: "center" },
+        border: {
+            top: { style: "thin", color: { rgb: "000000" } },
+            bottom: { style: "thin", color: { rgb: "000000" } },
+            left: { style: "thin", color: { rgb: "000000" } },
+            right: { style: "thin", color: { rgb: "000000" } }
+        }
+    };
+
+    const headerStyle = {
+        ...baseStyle,
+        fill: { fgColor: { rgb: "B4C6E7" } }, // Blue-ish
+        font: { ...baseStyle.font, bold: true }
+    };
+    
+    // Headers colored specifically
+    const headerGreenStyle = { ...headerStyle, fill: { fgColor: { rgb: "C6E0B4" } } }; // Received
+    const headerDarkGreenStyle = { ...headerStyle, fill: { fgColor: { rgb: "548235" } }, font: { ...headerStyle.font, color: { rgb: "FFFFFF" } } }; // Remaining (Total only?)
+    const headerPinkStyle = { ...headerStyle, fill: { fgColor: { rgb: "F8CBAD" } } }; // Wastage
+    
+    // Column Styles
+    const yellowStyle = { ...baseStyle, fill: { fgColor: { rgb: "FFFF00" } } }; // Dispatch #
+    const lightGreenStyle = { ...baseStyle, fill: { fgColor: { rgb: "E2EFDA" } } }; // Received
+    const lightBlueStyle = { ...baseStyle, fill: { fgColor: { rgb: "DDEBF7" } } }; // Remaining
+    const pinkStyle = { ...baseStyle, fill: { fgColor: { rgb: "FCE4D6" } } }; // Wastage
+    const whiteStyle = { ...baseStyle };
+    const machineAssignedStyle = { ... baseStyle, font: { bold: true }, fill: { fgColor: { rgb: "FFFFFF" } } }; // Just bold 1
+
+    // Helper to format date consistent with image (YYYY-MM-DD)
+    const extractDate = (dateStr?: string) => {
+        if (!dateStr) return '';
+        return new Date(dateStr).toISOString().split('T')[0];
+    };
+
+    if (sortedDyehouses.length === 0) {
+        alert("No data to export");
+        return;
+    }
+
+    sortedDyehouses.forEach(dyehouseName => {
+        const batches = groupedBatches[dyehouseName];
+        if (!batches || batches.length === 0) return;
+
+        // 1. Identify Machines
+        const machines: string[] = Array.from(new Set(batches.map(b => b.machine).filter((m): m is string => !!m)));
+        // Sort Machines: Numeric descending (capacity), then string
+        const sortedMachines: string[] = machines.sort((a, b) => {
+            const numA = parseInt(a.replace(/\D/g, '')) || 0;
+            const numB = parseInt(b.replace(/\D/g, '')) || 0;
+            if (numA !== numB) return numB - numA; // Descending
+            return a.localeCompare(b);
+        });
+
+        const machineCounts: Record<string, number> = {};
+        sortedMachines.forEach(m => {
+            machineCounts[m] = batches.filter(b => b.machine === m).length;
+        });
+
+        // 2. Prepare Data Rows
+        // Columns Order (Adjusted for RTL - Column A is First in Array):
+        // Dispatch | Date Sent | Days Raw | Formation Date | Days Form | Item | Color | Client | Quantity | Received | Remaining | Wastage | Machines...
+
+        const dataRows = batches.map(batch => {
+            const sentQty = batch.quantitySent || 0;
+            const receivedQty = batch.receivedQuantity || 0;
+            const remaining = sentQty - receivedQty;
+            
+            // Days calculations
+            const daysRaw = batch.dateSent 
+                ? Math.floor((new Date().getTime() - new Date(batch.dateSent).getTime()) / (1000 * 3600 * 24)) 
+                : '';
+            const daysFormation = batch.formationDate
+                ? Math.floor((new Date().getTime() - new Date(batch.formationDate).getTime()) / (1000 * 3600 * 24))
+                : '';
+
+            const row: any[] = [];
+            
+            // Fixed Columns (Values) - REORDERED
+            row.push({ v: batch.dispatchNumber || '', s: yellowStyle }); // Dispatch # (Col A)
+            row.push({ v: extractDate(batch.dateSent), s: whiteStyle }); // Date Sent (Col B)
+            row.push({ v: daysRaw, s: whiteStyle }); // Days Raw
+            row.push({ v: extractDate(batch.formationDate), s: whiteStyle }); // Formation Date
+            row.push({ v: daysFormation, s: whiteStyle }); // Days Formation
+            row.push({ v: batch.fabricShortName || batch.fabric, s: { ...whiteStyle, alignment: { horizontal: "right", vertical: "center" } } }); // Item
+            row.push({ v: batch.color, s: whiteStyle }); // Color
+            row.push({ v: batch.clientName, s: whiteStyle }); // Client
+            row.push({ v: sentQty, s: whiteStyle }); // Quantity
+            row.push({ v: receivedQty, s: lightGreenStyle }); // Received
+            row.push({ v: remaining, s: lightBlueStyle }); // Remaining
+            row.push({ v: "100%", s: pinkStyle }); // Wastage Percentage
+
+             // Machines (at the end of array -> Left side in RTL)
+            sortedMachines.forEach(m => {
+               row.push({ v: batch.machine === m ? 1 : '', s: machineAssignedStyle }); 
+            });
+
+            return row;
+        });
+
+        // 3. Calculate Totals for Header
+        const totalRemaining = batches.reduce((sum, b) => sum + ((b.quantitySent || 0) - (b.receivedQuantity || 0)), 0);
+        const totalReceived = batches.reduce((sum, b) => sum + (b.receivedQuantity || 0), 0);
+        const totalQuantity = batches.reduce((sum, b) => sum + (b.quantitySent || 0), 0);
+
+        // 4. Construct Header Rows
+        const totalCols = sortedMachines.length + 12; // 12 fixed columns
+
+        // Header 1 (Title)
+        const headerRow1 = [{ v: dyehouseName, s: { ...headerStyle, font: { sz: 14, bold: true }, fill: { fgColor: { rgb: "FFFFFF" } } } }];
+        for(let i=1; i<totalCols; i++) headerRow1.push({ v: "", s: headerStyle }); // Fill merge area
+        
+        // Header 2 (Totals & Counts)
+        const headerRow2: any[] = [];
+        // Spacers / Totals for fixed columns
+        headerRow2.push({ v: "", s: headerStyle }); // Dispatch
+        headerRow2.push({ v: extractDate(new Date().toISOString()), s: headerStyle }); // Date (Today)
+        headerRow2.push({ v: "", s: headerStyle }); // Days Raw
+        headerRow2.push({ v: "", s: headerStyle }); // Formation Date
+        headerRow2.push({ v: "", s: headerStyle }); // Days Form
+        headerRow2.push({ v: "", s: headerStyle }); // Item
+        headerRow2.push({ v: "", s: headerStyle }); // Color
+        headerRow2.push({ v: "", s: headerStyle }); // Client
+        headerRow2.push({ v: totalQuantity, s: { ...headerStyle, fill: { fgColor: { rgb: "D9E1F2" } } } }); // Total Qty
+        headerRow2.push({ v: totalReceived, s: { ...headerStyle, fill: { fgColor: { rgb: "DDEBF7" } } } }); // Total Received
+        headerRow2.push({ v: totalRemaining, s: headerDarkGreenStyle }); // Total Remaining
+        headerRow2.push({ v: "", s: headerPinkStyle }); // Wastage
+        
+        // Machine Counts
+        sortedMachines.forEach(m => headerRow2.push({ v: machineCounts[m], s: headerStyle })); 
+
+        // Header 3 (Labels)
+        const headerRow3: any[] = [];
+        headerRow3.push({ v: "الرساله", s: headerStyle });
+        headerRow3.push({ v: "التاريخ", s: headerStyle }); 
+        headerRow3.push({ v: "عدد ايام وجود الخام بالمصبغة", s: headerStyle });
+        headerRow3.push({ v: "التشكيل", s: headerStyle });
+        headerRow3.push({ v: "عدد الايام بعد التشكيل", s: headerStyle });
+        headerRow3.push({ v: "الصنف", s: headerStyle });
+        headerRow3.push({ v: "اللون", s: headerStyle });
+        headerRow3.push({ v: "العميل", s: headerStyle });
+        headerRow3.push({ v: "الكمية", s: headerStyle });
+        headerRow3.push({ v: "المستلم", s: headerGreenStyle }); 
+        headerRow3.push({ v: "المتبقي", s: { ...headerStyle, fill: { fgColor: { rgb: "C6E0B4" } } } });
+        headerRow3.push({ v: "نسبة الهالك", s: headerPinkStyle });
+        
+        sortedMachines.forEach(m => headerRow3.push({ v: m, s: headerStyle }));
+
+        // Combine
+        const wsData = [
+            headerRow1,
+            headerRow2,
+            headerRow3,
+            ...dataRows
+        ];
+
+        // 5. Create Sheet
+        const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+        // 6. Set Merges (Title Row)
+        if (!ws['!merges']) ws['!merges'] = [];
+        ws['!merges'].push({ s: { r: 0, c: 0 }, e: { r: 0, c: totalCols - 1 } });
+
+        // 7. Set Column Widths
+        const wscols = [];
+        // Fixed Cols
+        wscols.push({ wch: 12 }); // Dispatch (A)
+        wscols.push({ wch: 12 }); // Date Sent (B)
+        wscols.push({ wch: 10 }); // Days Raw (C)
+        wscols.push({ wch: 12 }); // Formation Date (D)
+        wscols.push({ wch: 10 }); // Days Form (E)
+        wscols.push({ wch: 40 }); // Item (F)
+        wscols.push({ wch: 15 }); // Color (G)
+        wscols.push({ wch: 15 }); // Client (H)
+        wscols.push({ wch: 10 }); // Qty (I)
+        wscols.push({ wch: 10 }); // Received (J)
+        wscols.push({ wch: 10 }); // Remaining (K)
+        wscols.push({ wch: 8 });  // Wastage (L)
+        
+        // Machine cols
+        for(let i=0; i<sortedMachines.length; i++) wscols.push({ wch: 6 });
+
+        ws['!cols'] = wscols;
+
+        // 8. Set RTL View
+        if (!ws['!views']) ws['!views'] = [];
+        ws['!views'].push({ rightToLeft: true });
+
+        // Add sheet
+        // Sanitize sheet name
+        const safeName = dyehouseName.replace(/[:\/?*\[\]\\]/g, "").substring(0, 31) || "Sheet";
+        XLSX.utils.book_append_sheet(wb, ws, safeName);
+    });
+
     XLSX.writeFile(wb, "Dyehouse_Global_Schedule.xlsx");
   };
+
+  if (showImportPage) {
+    return (
+      <DyehouseScheduleImportPage 
+        onBack={() => setShowImportPage(false)}
+        onSaveToFirestore={handleImportSave}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -275,7 +629,7 @@ export const DyehouseGlobalSchedule: React.FC = () => {
           </label>
 
           <button 
-            onClick={() => setShowImportModal(true)}
+            onClick={() => setShowImportPage(true)}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
           >
             <Upload size={16} />
@@ -307,10 +661,10 @@ export const DyehouseGlobalSchedule: React.FC = () => {
              const dyehouseBatches = groupedBatches[dyehouseName];
              
              // Identify Unique Machines for this Dyehouse
-             const machines = Array.from(new Set(dyehouseBatches.map(b => b.machine).filter(Boolean)));
+             const machines: string[] = Array.from(new Set(dyehouseBatches.map(b => b.machine).filter((m): m is string => !!m)));
              
              // Sort Machines: Numeric descending, then string
-             const sortedMachines = machines.sort((a, b) => {
+             const sortedMachines: string[] = machines.sort((a, b) => {
                  const numA = parseInt(a.replace(/\D/g, '')) || 0;
                  const numB = parseInt(b.replace(/\D/g, '')) || 0;
                  if (numA !== numB) return numB - numA; // Descending

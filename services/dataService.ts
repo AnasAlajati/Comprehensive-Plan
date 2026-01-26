@@ -22,7 +22,8 @@ import {
   DailyLog,
   PlanItem,
   MachineRow,
-  FabricDefinition
+  FabricDefinition,
+  ProductionTicket
 } from '../types';
 
 export const DataService = {
@@ -253,6 +254,28 @@ export const DataService = {
   async updateOrder(orderId: string, updates: Partial<Order>): Promise<void> {
     const docRef = doc(db, 'orders', orderId);
     await setDoc(docRef, { ...updates, lastUpdated: Timestamp.now() }, { merge: true });
+  },
+
+  async createProductionTicket(ticket: ProductionTicket): Promise<string> {
+    try {
+      const colRef = collection(db, 'ProductionTickets');
+      const docRef = await addDoc(colRef, ticket);
+      return docRef.id;
+    } catch (error) {
+      console.error("Error creating production ticket:", error);
+      throw error;
+    }
+  },
+
+  async updateOrderPrintingStatus(orderId: string, docPath: string, userName: string): Promise<void> {
+    // If docPath is provided, use it (for subcollections). Otherwise fallback to OrderSS (legacy/root)
+    const docRef = docPath ? doc(db, docPath) : doc(db, 'OrderSS', orderId);
+    
+    await setDoc(docRef, { 
+      isPrinted: true,
+      lastPrintedAt: new Date().toISOString(),
+      lastPrintedBy: userName
+    }, { merge: true });
   },
 
   async getDailySummary(date: string): Promise<{ externalProduction: number } | null> {

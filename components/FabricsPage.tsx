@@ -236,7 +236,7 @@ export const FabricsPage: React.FC = () => {
         shortName: formData.shortName,
         workCenters: workCenterList,
         variants: formData.variants,
-        specs: specs
+        ...(specs ? { specs } : {})
       };
 
       await setDoc(doc(db, 'FabricSS', docId), fabricData, { merge: true });

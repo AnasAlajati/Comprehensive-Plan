@@ -42,12 +42,17 @@ export const ColorApprovalModal: React.FC<ColorApprovalModalProps> = ({
 
     const updatedApprovals = [...approvals, entry];
     
+    // Auto-select if it's the only one
+    let newSelectedCode = batch.colorApproval;
+    if (updatedApprovals.length === 1) {
+        newSelectedCode = entry.approvalCode;
+    }
+    
     // IMMEDIATE SAVE PATTERN (Like Sent Modal)
     const updatedBatch = {
       ...batch,
       colorApprovals: updatedApprovals,
-      // Optional: Auto-set main approval if it was empty?
-      // For now, let's just add to list and let user explicitly select if they want validation
+      colorApproval: newSelectedCode
     };
     
     onSave(updatedBatch);
@@ -63,13 +68,23 @@ export const ColorApprovalModal: React.FC<ColorApprovalModalProps> = ({
 
   const handleDelete = (id: string) => {
     const updatedApprovals = approvals.filter(a => a.id !== id);
+    
+    let newSelectedCode = batch.colorApproval;
+
+    // If we deleted the actively selected approval, clear it
+    if (batch.colorApproval === approvals.find(a => a.id === id)?.approvalCode) {
+        newSelectedCode = '';
+    }
+
+    // Auto-select if ONLY 1 remains
+    if (updatedApprovals.length === 1) {
+        newSelectedCode = updatedApprovals[0].approvalCode;
+    }
+
     const updatedBatch = {
         ...batch,
         colorApprovals: updatedApprovals,
-        // If we deleted the actively selected approval, check if we need to clear it?
-        colorApproval: (batch.colorApproval === approvals.find(a => a.id === id)?.approvalCode) 
-            ? '' 
-            : batch.colorApproval
+        colorApproval: newSelectedCode
     };
     onSave(updatedBatch);
   };
@@ -177,48 +192,64 @@ export const ColorApprovalModal: React.FC<ColorApprovalModalProps> = ({
                  approvals.map((app) => (
                      <div 
                         key={app.id}
-                        className={`group relative p-3 rounded-lg border transition-all cursor-pointer ${
+                        className={`group relative p-3 rounded-lg border transition-all ${
                             batch.colorApproval === app.approvalCode 
                                 ? 'bg-emerald-50 border-emerald-200 shadow-sm ring-1 ring-emerald-200' 
                                 : 'bg-white border-slate-200 hover:border-indigo-300 hover:shadow-sm'
                         }`}
-                        onClick={() => handleSelect(app)}
                      >
+                        {/* Header Row */}
                         <div className="flex justify-between items-start mb-2">
                              <div className="flex flex-col">
-                                 <span className="font-bold text-slate-800">{app.approvalCode}</span>
+                                 <span className="font-bold text-slate-800 text-base">{app.approvalCode}</span>
                                  <span className="text-xs text-slate-500">{app.dyehouseName}</span>
                              </div>
-                             {batch.colorApproval === app.approvalCode ? (
-                                 <span className="bg-emerald-100 text-emerald-700 text-[10px] px-2 py-0.5 rounded-full font-bold">
-                                     معتمد
-                                 </span>
-                             ) : (
-                                 <span className="text-[10px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    اضغط للتعيين
-                                 </span>
+                             
+                             {/* Status Badge */}
+                             {batch.colorApproval === app.approvalCode && (
+                                 <div className="flex items-center gap-1 bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full border border-emerald-200 shadow-sm">
+                                    <Check size={12} strokeWidth={3} />
+                                    <span className="text-[10px] font-bold">معتمد</span>
+                                 </div>
                              )}
                         </div>
                         
-                        <div className="grid grid-cols-2 gap-2 text-xs text-slate-600 bg-slate-50/50 p-2 rounded">
+                        {/* Details Grid */}
+                        <div className="grid grid-cols-2 gap-2 text-xs text-slate-600 bg-slate-50/50 p-2 rounded mb-3">
                             {app.dyehouseColor && (
-                                <div><span className="text-slate-400">لون المصبغة:</span> {app.dyehouseColor}</div>
+                                <div><span className="text-slate-400">لون المصبغة:</span> <span className="font-medium">{app.dyehouseColor}</span></div>
                             )}
+                            <div className="text-left" dir="ltr">
+                                <span className="text-slate-400 text-[10px]">{app.date}</span>
+                            </div>
                             {app.notes && (
                                 <div className="col-span-2 border-t border-slate-100 pt-1 mt-1"><span className="text-slate-400">ملاحظات:</span> {app.notes}</div>
                             )}
-                            <div className="col-span-2 text-[10px] text-slate-400 text-left mt-1" dir="ltr">
-                                {app.date}
-                            </div>
                         </div>
 
-                        <button 
-                            onClick={(e) => { e.stopPropagation(); handleDelete(app.id); }}
-                            className="absolute top-2 left-2 p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-all"
-                            title="حذف"
-                        >
-                            <Trash2 size={14} />
-                        </button>
+                        {/* Actions Footer */}
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-100 opacity-60 group-hover:opacity-100 transition-opacity">
+                            {/* Delete Button (Left Side / Start) */}
+                             <button 
+                                onClick={(e) => { e.stopPropagation(); handleDelete(app.id); }}
+                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors flex items-center gap-1"
+                                title="حذف"
+                            >
+                                <Trash2 size={14} />
+                                <span className="text-[10px]">حذف</span>
+                            </button>
+
+                            {/* Select Button (Right Side / End) - Only if not selected */}
+                            {batch.colorApproval !== app.approvalCode && (
+                                <button
+                                    onClick={() => handleSelect(app)}
+                                    className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 hover:text-indigo-700 rounded text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5"
+                                >
+                                    <span>تعيين كمعتمد</span>
+                                    <Check size={14} />
+                                </button>
+                            )}
+                        </div>
                      </div>
                  ))
              )}

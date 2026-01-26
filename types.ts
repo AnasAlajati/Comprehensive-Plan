@@ -103,6 +103,8 @@ export interface CustomerOrder {
   customerName: string;
   fabrics: OrderFabric[];
   lastUpdated?: string;
+  lastPrintedAt?: string; // ISO String
+  lastPrintedBy?: string; // User Name
 }
 
 export interface DailyLogEntry {
@@ -296,6 +298,8 @@ export interface OrderRow {
   fabricColor?: string; // NEW: Fabric Color
   dyeingPlan?: DyeingBatch[]; // NEW: Detailed Dyeing Plan
   externalPlan?: ExternalPlanAssignment[]; // NEW: External factory assignments
+  orderReference?: string;
+  customerId?: string;
   customerId?: string; // NEW: Link to parent customer for collectionGroup queries
   variantId?: string; // NEW: Selected Fabric Variant ID
   requiredGsm?: number; // NEW: Required GSM
@@ -305,12 +309,37 @@ export interface OrderRow {
   finishingNotes?: string; // NEW: Finishing specific notes
   isPrinted?: boolean; // NEW: Track if production order has been printed
   printedAt?: string; // NEW: Date when the order was printed
+  lastPrintedBy?: string; // NEW: User who printed the order
+  lastPrintedAt?: string; // NEW: Date when the order was last printed
   seasonId?: string; // NEW: Season ID
   
   // Audit Info
   lastUpdatedBy?: string;
   lastUpdatedByEmail?: string;
   lastUpdated?: string;
+}
+
+export interface ProductionTicket {
+  id?: string;
+  orderId: string;
+  orderRefPath?: string;
+  customerName: string;
+  fabricName: string;
+  color?: string;
+  
+  // Snapshot of critical production data
+  snapshot: {
+    requiredQty: number;
+    plannedMachines: string[];
+    activeMachines: string[];
+    notes?: string;
+  };
+  
+  // Meta
+  printedBy: string;
+  printedAt: string;
+  status: 'In Production' | 'Finished' | 'Cancelled';
+  ticketNumber?: string; // Friendly ID if needed
 }
 
 export interface CustomerSheet {

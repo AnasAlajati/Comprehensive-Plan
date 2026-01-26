@@ -134,6 +134,7 @@ export const UserManagementPage: React.FC = () => {
         email: newUserEmail.toLowerCase(),
         displayName: newUserName || newUserEmail.split('@')[0],
         role: newUserRole,
+        isOnline: false, // Default to offline on creation
         createdAt: serverTimestamp(),
         uid: uid || null,
         password: password // Storing password as requested
@@ -329,53 +330,105 @@ export const UserManagementPage: React.FC = () => {
                 users.map((user) => (
                   <tr key={user.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="relative">
-                          <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold">
-                            {user.displayName.charAt(0).toUpperCase()}
+                      {(() => {
+                        // Helper to calculate time ago
+                        const getLastSeenInfo = (timestamp: any) => {
+                          if (!timestamp) return { text: 'Never', isRecent: false };
+                          
+                          const lastSeen = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+                          const now = new Date();
+                          const diffMs = now.getTime() - lastSeen.getTime();
+                          const diffMins = Math.floor(diffMs / 60000);
+                          const isRecent = diffMins < 3; // 3 minutes threshold
+
+                          let text = '';
+                          const diffHours = Math.floor(diffMins / 60);
+                          const diffDays = Math.floor(diffHours / 24);
+
+                          if (diffMins < 1) text = 'Just now';
+                          else if (diffMins < 60) text = `${diffMins}m ago`;
+                          else if (diffHours < 24) text = `${diffHours}h ago`;
+                          else if (diffDays < 7) text = `${diffDays}d ago`;
+                          else text = lastSeen.toLocaleDateString();
+
+                          return { text, isRecent };
+                        };
+
+                        const lastSeenInfo = getLastSeenInfo(user.lastSeen);
+                        // Only show Green if online AND active in last 3 mins
+                        const isReallyOnline = user.isOnline && lastSeenInfo.isRecent;
+
+                        return (
+                          <div className="flex items-center gap-3">
+                            <div className="relative">
+                              <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold">
+                                {user.displayName.charAt(0).toUpperCase()}
+                              </div>
+                              <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${isReallyOnline ? 'bg-green-500' : 'bg-slate-300'}`} />
+                            </div>
+                            <div>
+                              <div className="font-medium text-slate-900">{user.displayName}</div>
+                              <div className="text-slate-500 text-xs">{user.email}</div>
+                            </div>
                           </div>
-                          {/* Online indicator dot */}
-                          <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${user.isOnline ? 'bg-green-500' : 'bg-slate-300'}`} />
-                        </div>
-                        <div>
-                          <div className="font-medium text-slate-900">{user.displayName}</div>
-                          <div className="text-slate-500 text-xs">{user.email}</div>
-                        </div>
-                      </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-6 py-4">
-                      {user.isOnline ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
-                          <Circle className="w-2 h-2 fill-current" />
-                          Online
-                        </span>
-                      ) : (
-                        <div className="flex flex-col">
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-500 w-fit">
-                            <Circle className="w-2 h-2" />
-                            Offline
-                          </span>
-                          {user.lastSeen && (
-                            <span className="text-xs text-slate-400 mt-1 flex items-center gap-1">
-                              <Clock className="w-3 h-3" />
-                              {(() => {
-                                const lastSeen = user.lastSeen?.toDate ? user.lastSeen.toDate() : new Date(user.lastSeen);
-                                const now = new Date();
-                                const diffMs = now.getTime() - lastSeen.getTime();
-                                const diffMins = Math.floor(diffMs / 60000);
-                                const diffHours = Math.floor(diffMins / 60);
-                                const diffDays = Math.floor(diffHours / 24);
-                                
-                                if (diffMins < 1) return 'Just now';
-                                if (diffMins < 60) return `${diffMins}m ago`;
-                                if (diffHours < 24) return `${diffHours}h ago`;
-                                if (diffDays < 7) return `${diffDays}d ago`;
-                                return lastSeen.toLocaleDateString();
-                              })()}
+                      {(() => {
+                         const getLastSeenInfo = (timestamp: any) => {
+                           if (!timestamp) return { text: 'Never', isRecent: false };
+                           const lastSeen = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+                           const now = new Date();
+                           const diffMs = now.getTime() - lastSeen.getTime();
+                           return { 
+                             text: '', // calculated below to avoid dupe code 
+                             isRecent: diffMs < 3 * 60 * 1000,
+                             diffMins: Math.floor(diffMs / 60000),
+                             obj: lastSeen
+                           };
+                         };
+                         const info = getLastSeenInfo(user.lastSeen);
+                         const isReallyOnline = user.isOnline && info.isRecent;
+                         
+                         // Re-calculate text for display
+                         let timeText = 'Never';
+                         if (user.lastSeen) {
+                            const now = new Date();
+                            const diffMins = Math.floor((now.getTime() - info.obj.getTime()) / 60000);
+                            const diffHours = Math.floor(diffMins / 60);
+                            const diffDays = Math.floor(diffHours / 24);
+                            if (diffMins < 1) timeText = 'Just now';
+                            else if (diffMins < 60) timeText = `${diffMins}m ago`;
+                            else if (diffHours < 24) timeText = `${diffHours}h ago`;
+                            else if (diffDays < 7) timeText = `${diffDays}d ago`;
+                            else timeText = info.obj.toLocaleDateString();
+                         }
+
+                         if (isReallyOnline) {
+                           return (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                              <Circle className="w-2 h-2 fill-current" />
+                              Online
                             </span>
-                          )}
-                        </div>
-                      )}
+                           );
+                         } 
+                         
+                         return (
+                            <div className="flex flex-col">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-500 w-fit">
+                                <Circle className="w-2 h-2" />
+                                Offline
+                              </span>
+                              {user.lastSeen && (
+                                <span className="text-xs text-slate-400 mt-1 flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  {timeText}
+                                </span>
+                              )}
+                            </div>
+                         );
+                      })()}
                     </td>
                     <td className="px-6 py-4">
                       <select

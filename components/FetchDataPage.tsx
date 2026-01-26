@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { writeBatch, doc, getDoc, onSnapshot, collection } from 'firebase/firestore';
+import { writeBatch, doc, getDoc, onSnapshot, collection, setDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
 import { parseFabricName } from '../services/data';
@@ -595,7 +595,41 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     if (!formData.name) return;
     setLoading(true);
     try {
-      await DataService.addFabric(formData);
+      // 1. Generate Deterministic ID
+      const docId = formData.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+      
+      // 2. Auto-calculate specs based on work centers
+      const workCenterList = formData.workCenters || [];
+      let specs = undefined;
+      
+      if (workCenterList.length > 0) {
+        // Use rawMachines (Component State)
+        const linkedMachines = rawMachines.filter((m: any) => workCenterList.includes(m.machineName || m.name));
+        
+        if (linkedMachines.length > 0) {
+          const firstM = linkedMachines[0];
+          specs = {
+            gauge: firstM.gauge || 'Unknown',
+            diameter: firstM.dia || 'Unknown',
+            needles: Number(firstM.needles) || 0,
+            type: firstM.type || 'Unknown'
+          };
+        }
+      }
+
+      // 3. Construct Clean Object
+      const fabricData = {
+        id: docId,
+        name: formData.name,
+        code: formData.code,
+        shortName: formData.shortName,
+        workCenters: workCenterList,
+        variants: formData.variants,
+        ...(specs ? { specs } : {})
+      };
+
+      await setDoc(doc(db, 'FabricSS', docId), fabricData, { merge: true });
+
       const updatedFabrics = await DataService.getFabrics();
       setFabrics(updatedFabrics);
       setIsFabricModalOpen(false);
