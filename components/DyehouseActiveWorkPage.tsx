@@ -527,14 +527,15 @@ export const DyehouseActiveWorkPage: React.FC = () => {
                               </div>
                             )}
                             <div>
-                              {/* Customer Name - More Prominent */}
+                              {/* Fabric Name - On Top */}
                               <div className="text-base font-bold text-indigo-900 flex items-center gap-1.5">
-                                <User size={14} className="text-indigo-500" />
-                                {group.clientName}
-                              </div>
-                              <div className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
-                                <Layers size={10} className="text-slate-400" />
+                                <Layers size={14} className="text-indigo-500" />
                                 {group.fabricShortName}
+                              </div>
+                              {/* Customer Name - Below */}
+                              <div className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
+                                <User size={10} className="text-slate-400" />
+                                {group.clientName}
                               </div>
                             </div>
                           </div>
