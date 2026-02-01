@@ -8,7 +8,7 @@ import { LinkOrderModal } from './LinkOrderModal';
 import { toJpeg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
-import { CheckCircle, Send, Link, Truck, Layout, Factory, FileSpreadsheet, Upload, X, Check, Sparkles, Edit, ArrowRight, History, CheckCircle2, XCircle, AlertTriangle, Download, Plus, Search, Calendar, FileText, Book } from 'lucide-react';
+import { CheckCircle, Send, Link, Truck, Layout, Factory, FileSpreadsheet, Upload, X, Check, Sparkles, Edit, ArrowRight, History, CheckCircle2, XCircle, AlertTriangle, Download, Plus, Search, Calendar, FileText, Book, Trash2 } from 'lucide-react';
 import { ExternalProductionSheet } from './ExternalProductionSheet'; // New Component - Force Refresh
 import { FabricFormModal } from './FabricFormModal';
 import { FabricDirectoryModal } from './FabricDirectoryModal';
@@ -2143,6 +2143,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         endDate: calculatedEndDate,
         remaining: inlineNewPlan.remaining || 0,
         orderName: inlineNewPlan.orderName || '',
+        client: inlineNewPlan.orderName || '', // Map orderName to client for display
         originalSampleMachine: inlineNewPlan.originalSampleMachine || '',
         notes: inlineNewPlan.notes || ''
       };
@@ -2826,18 +2827,34 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                     </div>
 
                     {/* Card Footer */}
-                    <div className="bg-slate-50 px-2 py-2 border-t border-slate-100 flex justify-between items-center gap-1">
+                    <div className="bg-slate-50 px-2 py-2 border-t border-slate-100 flex justify-between items-center gap-2">
                       <button
-                        onClick={() => setDetailsModal({ isOpen: true, log, index: idx })}
-                        className="text-[10px] font-medium text-slate-500 hover:text-slate-700 flex-1 text-center"
+                        onClick={() => setHistoryModalOpen({ isOpen: true, machineId: log.machineId, machineName: log.machineName })}
+                        className="flex-1 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-md text-[10px] font-bold transition-colors flex items-center justify-center gap-1.5 border border-slate-200"
                       >
-                        Details
+                        <History size={14} />
+                        History
                       </button>
                       <button
                         onClick={() => openPlansModal(log.machineId, log.machineName)}
-                        className="px-2 py-1 bg-blue-600 text-white text-[10px] font-bold rounded shadow-sm hover:bg-blue-700 transition-colors flex-1 text-center truncate"
+                        className={`
+                            flex-1 py-1.5 rounded-md text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 border
+                            ${log.futurePlans && log.futurePlans.filter((p: any) => p.type !== 'SETTINGS').length > 0
+                                ? 'bg-emerald-500 hover:bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                                : 'bg-white hover:bg-blue-50 text-blue-600 border-blue-200'}
+                        `}
                       >
-                        Plans
+                         {log.futurePlans && log.futurePlans.filter((p: any) => p.type !== 'SETTINGS').length > 0 ? (
+                            <>
+                                <Calendar size={14} />
+                                {log.futurePlans.filter((p: any) => p.type !== 'SETTINGS').length} Plans
+                            </>
+                         ) : (
+                            <>
+                                <Plus size={14} />
+                                Add Plan
+                            </>
+                         )}
                       </button>
                     </div>
                   </div>
@@ -3155,9 +3172,22 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                                   handleKeyDown(e, idx, 'plans');
                                 }
                               }}
-                              className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-bold transition-colors focus:outline-2 focus:outline-blue-500"
+                              className={`
+                                transition-all duration-200 flex items-center justify-center gap-1
+                                ${log.futurePlans && log.futurePlans.filter((p: any) => p.type !== 'SETTINGS').length > 0 
+                                  ? 'px-3 py-1 bg-emerald-500 hover:bg-emerald-600 text-white rounded-full text-[10px] font-bold shadow-md shadow-emerald-100 ring-1 ring-emerald-500 ring-offset-1' 
+                                  : 'p-1.5 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-full'}
+                                focus:outline-none focus:ring-2 focus:ring-blue-500
+                              `}
                             >
-                              خطط
+                              {log.futurePlans && log.futurePlans.filter((p: any) => p.type !== 'SETTINGS').length > 0 ? (
+                                <>
+                                  <Calendar size={12} />
+                                  <span>{log.futurePlans.filter((p: any) => p.type !== 'SETTINGS').length}</span>
+                                </>
+                              ) : (
+                                <Plus size={16} />
+                              )}
                             </button>
                             <button
                               onClick={() => setDetailsModal({ isOpen: true, log, index: idx })}
@@ -3274,27 +3304,245 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 </div>
               </div>
 
-              {/* Table */}
-              <div className="flex-1 overflow-auto p-0">
-                <table className="w-full text-sm text-left">
-                  <thead className="bg-slate-100 text-slate-600 font-semibold text-xs uppercase tracking-wider sticky top-0 z-10 shadow-sm">
+              {/* Table / Mobile Cards */}
+              <div className="flex-1 overflow-auto bg-slate-100 md:bg-white md:p-0">
+                {/* Mobile View */}
+                <div className="md:hidden flex flex-col gap-3 p-3">
+                  {plansModalOpen.plans.length === 0 && !showInlineAddRow ? (
+                    <div className="p-8 text-center text-slate-400 bg-white rounded-lg shadow-sm border border-slate-200">
+                      No plans found
+                    </div>
+                  ) : (
+                    plansModalOpen.plans.map((plan: PlanItem, idx: number) => {
+                       const isSettings = plan.type === 'SETTINGS';
+                       const isActive = plan.startDate <= new Date().toISOString().split('T')[0] && plan.endDate >= new Date().toISOString().split('T')[0];
+                       
+                       // Calculate end date based on start date + remaining/production per day
+                       const calculatedEndDate = calculatePlanEndDate(plan.startDate, plan.remaining || 0, plan.productionPerDay || 0);
+                       const displayEndDate = calculatedEndDate || plan.endDate || '-';
+                       const formattedEndDate = formatDateShort(displayEndDate);
+                       
+                       // Calculate days from start to end date
+                       const calculatedDays = plan.startDate && calculatedEndDate 
+                         ? Math.ceil((new Date(calculatedEndDate).getTime() - new Date(plan.startDate).getTime()) / (1000 * 60 * 60 * 24))
+                         : plan.days || 0;
+
+                       const { shortName: fabricShortName } = parseFabricName(plan.fabric || '');
+                       
+                       return (
+                         <div key={idx} className={`relative p-3 rounded-xl shadow-sm border ${isActive ? 'bg-emerald-50 border-emerald-200 ring-1 ring-emerald-500/20' : isSettings ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-200'}`}>
+                           {/* Row 1: Dates & Delete */}
+                           <div className="flex justify-between items-start mb-2">
+                              <div className="flex items-center gap-1.5 flex-1">
+                                <div className="bg-slate-100 px-2 py-1 rounded text-[10px] font-bold text-slate-500 border border-slate-200 flex items-center gap-1 group focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-400">
+                                   <Calendar size={10} className="text-slate-400"/>
+                                   <input
+                                      type="date"
+                                      value={plan.startDate || ''}
+                                      onChange={(e) => handleUpdatePlan(idx, 'startDate', e.target.value)}
+                                      className="bg-transparent outline-none w-[75px] group-hover:text-slate-700 transition-colors"
+                                   />
+                                </div>
+                                <span className="text-slate-300 text-xs font-bold">→</span>
+                                <div className="bg-slate-100 px-2 py-1 rounded text-[10px] font-bold text-slate-600 border border-slate-200 min-w-[50px] text-center">
+                                   {formattedEndDate}
+                                </div>
+                              </div>
+                              <button
+                                onClick={() => handleDeletePlan(idx)}
+                                className="p-1.5 bg-red-50 text-red-400 hover:text-red-500 rounded-md border border-red-100 hover:border-red-200 ml-2"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                           </div>
+
+                           {/* Row 2: Fabric & Client */}
+                           <div className="mb-3 space-y-2">
+                              {isSettings ? (
+                                <textarea
+                                  value={plan.notes || ''}
+                                  onChange={(e) => handleUpdatePlan(idx, 'notes', e.target.value)}
+                                  className="w-full bg-slate-50/50 p-2 rounded text-xs text-slate-600 italic border border-slate-200 outline-none focus:border-blue-400 focus:bg-white transition-all resize-none font-medium"
+                                  placeholder="Notes..."
+                                  rows={2}
+                                />
+                              ) : (
+                                <textarea
+                                  value={fabricShortName || plan.fabric || ''}
+                                  onChange={(e) => handleUpdatePlan(idx, 'fabric', e.target.value)}
+                                  className="w-full bg-transparent p-0 text-sm font-bold text-slate-800 outline-none focus:bg-blue-50/30 rounded px-1 -mx-1 transition-all resize-none leading-snug"
+                                  placeholder="Fabric Name"
+                                  rows={2}
+                                />
+                              )}
+                              
+                              <div className="relative">
+                                 <div className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400">
+                                    <Sparkles size={10} />
+                                 </div>
+                                 <input
+                                   type="text"
+                                   value={plan.client || plan.orderName || ''}
+                                   onChange={(e) => handleUpdatePlan(idx, 'orderName', e.target.value)}
+                                   className="w-full bg-slate-50 border border-slate-100 rounded px-2 py-1.5 pl-6 text-xs text-blue-600 font-medium outline-none focus:border-blue-400 focus:bg-white transition-all placeholder:text-slate-400"
+                                   placeholder="Client / Reference"
+                                 />
+                              </div>
+                           </div>
+
+                           {/* Row 3: Stats Grid */}
+                           <div className="grid grid-cols-3 gap-2 border-t border-slate-100/50 pt-2">
+                              {/* Quantity */}
+                              <div className="bg-slate-50 rounded p-1.5 border border-slate-100">
+                                 <span className="block text-[9px] uppercase font-bold text-slate-400 mb-0.5">Quantity</span>
+                                 <input
+                                    type="number"
+                                    value={isSettings ? 0 : plan.quantity}
+                                    onChange={(e) => handleUpdatePlan(idx, 'quantity', Number(e.target.value))}
+                                    disabled={isSettings}
+                                    className="w-full bg-transparent font-bold text-xs text-slate-700 outline-none p-0 disabled:opacity-50 text-center"
+                                 />
+                              </div>
+                              {/* Prod/Day */}
+                              <div className="bg-slate-50 rounded p-1.5 border border-slate-100">
+                                 <span className="block text-[9px] uppercase font-bold text-slate-400 mb-0.5">Prod/Day</span>
+                                 <input
+                                    type="number"
+                                    value={plan.productionPerDay || 0}
+                                    onChange={(e) => handleUpdatePlan(idx, 'productionPerDay', Number(e.target.value))}
+                                    className="w-full bg-transparent font-bold text-xs text-slate-700 outline-none p-0 text-center"
+                                 />
+                              </div>
+                              {/* Days */}
+                              <div className="bg-orange-50 rounded p-1.5 border border-orange-100 flex flex-col items-center justify-center">
+                                 <span className="block text-[9px] uppercase font-bold text-orange-400 mb-0.5">Days</span>
+                                 <span className="font-bold text-xs text-orange-600 leading-none">{calculatedDays}</span>
+                              </div>
+                           </div>
+                         </div>
+                       );
+                    })
+                  )}
+
+                  {/* Mobile Inline Add Form */}
+                  {showInlineAddRow && (
+                    <div className={`p-4 rounded-xl border-2 shadow-lg animate-in fade-in slide-in-from-bottom-4 ${inlineNewPlan.type === 'SETTINGS' ? 'bg-amber-50 border-amber-400' : 'bg-yellow-50 border-yellow-400'}`}>
+                       <h4 className="text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-2">
+                          <Plus size={14} className={inlineNewPlan.type === 'SETTINGS' ? 'text-amber-600' : 'text-yellow-600'} />
+                          {inlineNewPlan.type === 'SETTINGS' ? 'New Maintenance/Settings' : 'New Production Plan'}
+                       </h4>
+                       
+                       {/* Date Range */}
+                       <div className="flex gap-2 mb-3">
+                          <input
+                            type="date"
+                            value={inlineNewPlan.startDate || ''}
+                            onChange={(e) => {
+                              const prevPlan = plansModalOpen.plans[plansModalOpen.plans.length - 1];
+                              const startDate = e.target.value || (prevPlan?.endDate ? new Date(new Date(prevPlan.endDate).getTime() + 86400000).toISOString().split('T')[0] : e.target.value);
+                              setInlineNewPlan({ ...inlineNewPlan, startDate });
+                            }}
+                            className="bg-white/50 border border-black/5 rounded p-2 text-xs font-bold w-full outline-none focus:bg-white"
+                          />
+                          <div className="w-16 bg-white/50 border border-black/5 rounded p-2 flex items-center justify-center">
+                             <input
+                                type="number"
+                                value={inlineNewPlan.days || ''}
+                                onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, days: Number(e.target.value) })}
+                                placeholder="Days"
+                                className="w-full bg-transparent font-bold text-xs text-center outline-none p-0 placeholder:text-black/20"
+                             />
+                          </div>
+                       </div>
+
+                       {/* Content */}
+                       <div className="space-y-2 mb-3">
+                          {inlineNewPlan.type === 'SETTINGS' ? (
+                             <input
+                               type="text"
+                               value={inlineNewPlan.notes || ''}
+                               onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, notes: e.target.value })}
+                               placeholder="Maintenance notes..."
+                               className="w-full bg-white/50 border border-black/5 rounded p-2 text-sm italic outline-none focus:bg-white focus:ring-2 ring-amber-400/20"
+                             />
+                          ) : (
+                             <input
+                               type="text"
+                               value={inlineNewPlan.fabric || ''}
+                               onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, fabric: e.target.value })}
+                               placeholder="Fabric Name"
+                               className="w-full bg-white/50 border border-black/5 rounded p-2 text-sm font-bold outline-none focus:bg-white focus:ring-2 ring-yellow-400/20"
+                             />
+                          )}
+                          
+                          <input
+                            type="text"
+                            value={inlineNewPlan.orderName || ''}
+                            onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, orderName: e.target.value })}
+                            placeholder="Client / Reference"
+                            className="w-full bg-white/50 border border-black/5 rounded p-2 text-xs font-medium text-blue-700 outline-none focus:bg-white"
+                          />
+                       </div>
+
+                       {/* Stats */}
+                       <div className="grid grid-cols-2 gap-2 mb-3">
+                          {!isSettings && (
+                             <>
+                              <input
+                                 type="number"
+                                 value={inlineNewPlan.quantity || ''}
+                                 onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, quantity: Number(e.target.value) })}
+                                 placeholder="Quantity"
+                                 className="bg-white/50 border border-black/5 rounded p-2 text-sm text-center outline-none focus:bg-white"
+                              />
+                              <input
+                                 type="number"
+                                 value={inlineNewPlan.productionPerDay || ''}
+                                 onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, productionPerDay: Number(e.target.value) })}
+                                 placeholder="Prod/Day"
+                                 className="bg-white/50 border border-black/5 rounded p-2 text-sm text-center font-bold outline-none focus:bg-white"
+                              />
+                             </>
+                          )}
+                       </div>
+
+                       <div className="flex gap-2">
+                          <button
+                             onClick={() => setShowInlineAddRow(false)}
+                             className="flex-1 py-2 bg-white/50 hover:bg-white text-slate-500 rounded-lg text-xs font-bold border border-black/5 transition-colors"
+                          >
+                             Cancel
+                          </button>
+                          <button
+                             onClick={handleInlineAddPlan}
+                             disabled={loading || !inlineNewPlan.startDate || (inlineNewPlan.type === 'SETTINGS' ? !inlineNewPlan.days : (!inlineNewPlan.remaining || !inlineNewPlan.productionPerDay))}
+                             className="flex-[2] py-2 bg-black text-white rounded-lg text-xs font-bold shadow-md hover:bg-slate-800 disabled:opacity-50 transition-colors"
+                          >
+                             Add Plan
+                          </button>
+                       </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Desktop Table */}
+                <table className="hidden md:table w-full text-sm text-left">
+                  <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-[10px] sticky top-0 z-10">
                     <tr>
-                      <th className="p-2 border-b border-r border-slate-200 w-28 text-center">Start</th>
-                      <th className="p-2 border-b border-r border-slate-200 w-28 text-center">End</th>
-                      <th className="p-2 border-b border-r border-slate-200 w-24 text-left">Machine</th>
-                      <th className="p-2 border-b border-r border-slate-200 w-16 text-center">Days</th>
-                      <th className="p-2 border-b border-r border-slate-200 min-w-[120px] text-left">Client / Ref</th>
-                      <th className="p-2 border-b border-r border-slate-200 w-20 text-right">Rem.</th>
-                      <th className="p-2 border-b border-r border-slate-200 w-20 text-right">Qty</th>
-                      <th className="p-2 border-b border-r border-slate-200 w-20 text-right">Prod/Day</th>
-                      <th className="p-2 border-b border-r border-slate-200 min-w-[120px] text-left">Fabric / Notes</th>
-                      <th className="p-2 border-b border-slate-200 w-20 text-center">Actions</th>
+                      <th className="p-3 border-b border-slate-100 w-32 text-center">Start</th>
+                      <th className="p-3 border-b border-slate-100 w-32 text-center">End</th>
+                      <th className="p-3 border-b border-slate-100 w-16 text-center">Days</th>
+                      <th className="p-3 border-b border-slate-100 min-w-[100px]">Client / Ref</th>
+                      <th className="p-3 border-b border-slate-100 w-20 text-center">Qty</th>
+                      <th className="p-3 border-b border-slate-100 w-20 text-center">Prod/Day</th>
+                      <th className="p-3 border-b border-slate-100 min-w-[200px]">Fabric / Notes</th>
+                      <th className="p-3 border-b border-slate-100 w-16 text-center"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {plansModalOpen.plans.length === 0 ? (
                       <tr>
-                        <td colSpan={10} className="p-8 text-center text-slate-400">
+                        <td colSpan={8} className="p-8 text-center text-slate-400">
                           No plans found
                         </td>
                       </tr>
@@ -3312,6 +3560,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         const calculatedDays = plan.startDate && calculatedEndDate 
                           ? Math.ceil((new Date(calculatedEndDate).getTime() - new Date(plan.startDate).getTime()) / (1000 * 60 * 60 * 24))
                           : plan.days || 0;
+
+                        const { shortName: fabricShortName } = parseFabricName(plan.fabric || '');
                         
                         return (
                           <tr key={idx} className={`${isActive ? 'bg-emerald-50/50' : isSettings ? 'bg-amber-50/50' : 'bg-white'} hover:bg-slate-50 transition-colors border-b border-slate-100`}>
@@ -3328,16 +3578,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             <td className="p-2 border-r border-slate-100 text-center text-xs font-medium text-slate-600 bg-slate-50/30">
                               {formattedEndDate}
                             </td>
-                            {/* Machine */}
-                            <td className="p-0 border-r border-slate-100">
-                              <input
-                                type="text"
-                                value={plan.originalSampleMachine || ''}
-                                onChange={(e) => handleUpdatePlan(idx, 'originalSampleMachine', e.target.value)}
-                                className="w-full p-2 bg-transparent outline-none focus:bg-blue-50 text-xs"
-                                placeholder="-"
-                              />
-                            </td>
                             {/* Days */}
                             <td className="p-2 border-r border-slate-100 text-center text-xs font-bold text-orange-600">
                               {calculatedDays}
@@ -3346,19 +3586,10 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             <td className="p-0 border-r border-slate-100">
                               <input
                                 type="text"
-                                value={plan.orderName || ''}
+                                value={plan.client || plan.orderName || ''}
                                 onChange={(e) => handleUpdatePlan(idx, 'orderName', e.target.value)}
                                 className="w-full p-2 bg-transparent outline-none focus:bg-blue-50 text-xs text-blue-600 font-medium"
                                 placeholder="-"
-                              />
-                            </td>
-                            {/* Remaining */}
-                            <td className="p-0 border-r border-slate-100">
-                              <input
-                                type="number"
-                                value={plan.remaining || 0}
-                                onChange={(e) => handleUpdatePlan(idx, 'remaining', Number(e.target.value))}
-                                className="w-full p-2 text-right bg-transparent outline-none focus:bg-blue-50 text-xs font-bold"
                               />
                             </td>
                             {/* Quantity */}
@@ -3381,45 +3612,33 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                               />
                             </td>
                             {/* Fabric / Notes */}
-                            <td className="p-0 border-r border-slate-100">
+                            <td className="p-0 border-r border-slate-100 align-top">
                               {isSettings ? (
-                                <input
-                                  type="text"
+                                <textarea
                                   value={plan.notes || ''}
                                   onChange={(e) => handleUpdatePlan(idx, 'notes', e.target.value)}
-                                  className="w-full p-2 bg-transparent outline-none focus:bg-blue-50 text-xs text-slate-500 italic"
+                                  className="w-full h-full p-2 bg-transparent outline-none focus:bg-blue-50 text-xs text-slate-500 italic resize-none"
                                   placeholder="Notes..."
+                                  rows={2}
                                 />
                               ) : (
-                                <input
-                                  type="text"
-                                  value={plan.fabric || ''}
+                                <textarea
+                                  value={fabricShortName || plan.fabric || ''}
                                   onChange={(e) => handleUpdatePlan(idx, 'fabric', e.target.value)}
-                                  className="w-full p-2 bg-transparent outline-none focus:bg-blue-50 text-xs font-medium"
+                                  className="w-full h-full p-2 bg-transparent outline-none focus:bg-blue-50 text-xs font-medium resize-none"
                                   placeholder="-"
+                                  rows={2}
                                 />
                               )}
                             </td>
                             {/* Actions */}
                             <td className="p-1 text-center flex gap-1 justify-center items-center">
                               <button
-                                onClick={() => handleMakeActive(idx)}
-                                className="p-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-700 rounded transition-colors"
-                                title="Make Active"
-                              >
-                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                </svg>
-                              </button>
-                              <button
                                 onClick={() => handleDeletePlan(idx)}
-                                className="p-1 bg-red-100 hover:bg-red-200 text-red-700 rounded transition-colors"
+                                className="p-1.5 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-full transition-colors"
                                 title="Delete"
                               >
-                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
+                                <Trash2 size={14} />
                               </button>
                             </td>
                           </tr>
@@ -3427,7 +3646,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                       })
                     )}
                     
-                    {/* Excel-like Add Row */}
+                    {/* Excel-like Add Row - Desktop Only */}
                     {showInlineAddRow && (
                     <tr className={`border-t-2 ${inlineNewPlan.type === 'SETTINGS' ? 'bg-amber-50 border-amber-400' : 'bg-yellow-50 border-yellow-400'}`}>
                       {/* Start Date */}
@@ -3458,16 +3677,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                               ? formatDateShort(calculatePlanEndDate(inlineNewPlan.startDate, inlineNewPlan.remaining, inlineNewPlan.productionPerDay))
                               : '-')}
                       </td>
-                      {/* Machine */}
-                      <td className="p-0 border-r border-slate-200">
-                        <input
-                          type="text"
-                          value={inlineNewPlan.originalSampleMachine || ''}
-                          onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, originalSampleMachine: e.target.value })}
-                          placeholder="Original"
-                          className="w-full p-2 bg-transparent outline-none placeholder-slate-400 text-xs"
-                        />
-                      </td>
                       {/* Days */}
                       <td className="p-0 border-r border-slate-200">
                         <input
@@ -3486,17 +3695,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                           onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, orderName: e.target.value })}
                           placeholder="Order"
                           className="w-full p-2 bg-transparent outline-none text-blue-600 placeholder-slate-400 text-xs"
-                        />
-                      </td>
-                      {/* Remaining */}
-                      <td className="p-0 border-r border-slate-200">
-                        <input
-                          type="number"
-                          value={inlineNewPlan.remaining || ''}
-                          onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, remaining: Number(e.target.value) })}
-                          placeholder="0"
-                          disabled={inlineNewPlan.type === 'SETTINGS'}
-                          className="w-full p-2 text-right bg-transparent outline-none font-bold disabled:opacity-50 placeholder-slate-400 text-xs"
                         />
                       </td>
                       {/* Quantity */}
@@ -3522,22 +3720,22 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         />
                       </td>
                       {/* Fabric/Notes */}
-                      <td className="p-0 border-r border-slate-200">
+                      <td className="p-0 border-r border-slate-200 align-top">
                         {inlineNewPlan.type === 'SETTINGS' ? (
-                          <input
-                            type="text"
+                          <textarea
                             value={inlineNewPlan.notes || ''}
                             onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, notes: e.target.value })}
                             placeholder="Notes..."
-                            className="w-full p-2 bg-transparent outline-none text-slate-500 italic placeholder-slate-400 text-xs"
+                            className="w-full h-full p-2 bg-transparent outline-none text-slate-500 italic placeholder-slate-400 text-xs resize-none"
+                            rows={2}
                           />
                         ) : (
-                          <input
-                            type="text"
+                          <textarea
                             value={inlineNewPlan.fabric || ''}
                             onChange={(e) => setInlineNewPlan({ ...inlineNewPlan, fabric: e.target.value })}
                             placeholder="Fabric"
-                            className="w-full p-2 bg-transparent outline-none placeholder-slate-400 text-xs"
+                            className="w-full h-full p-2 bg-transparent outline-none placeholder-slate-400 text-xs resize-none"
+                            rows={2}
                           />
                         )}
                       </td>
@@ -3559,7 +3757,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
               {/* Footer */}
               <div className="border-t border-slate-200 p-4 flex justify-between items-center bg-slate-50 rounded-b-lg">
-                <div className="flex gap-2">
+                <div className="flex gap-2 w-full">
                   <button 
                     onClick={() => {
                       const plans = plansModalOpen.plans;
@@ -3589,7 +3787,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                       });
                       setShowInlineAddRow(true);
                     }}
-                    className="px-4 py-2 border border-orange-400 text-orange-600 rounded hover:bg-orange-50 text-sm font-medium"
+                    className="flex-1 px-4 py-2 border border-blue-500 text-blue-600 rounded bg-white hover:bg-blue-50 text-sm font-medium transition-colors"
                   >
                     + Add Production Plan
                   </button>
@@ -3622,14 +3820,11 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                       });
                       setShowInlineAddRow(true);
                     }}
-                    className="px-4 py-2 border border-orange-400 text-orange-600 rounded hover:bg-orange-50 text-sm font-medium"
+                    className="flex-1 px-4 py-2 border border-slate-300 text-slate-600 rounded bg-white hover:bg-slate-50 text-sm font-medium transition-colors"
                   >
                     + Add Settings
                   </button>
                 </div>
-                <button className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium">
-                  Smart Add (AI)
-                </button>
               </div>
             </div>
           </div>

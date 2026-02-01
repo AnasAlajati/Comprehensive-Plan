@@ -19,6 +19,7 @@ interface ExternalEntry {
   fabric: string;
   receivedQty: number;
   remainingQty: number;
+  scrap?: number; // Added scrap field
   notes: string;
 }
 
@@ -216,6 +217,7 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
   const [selectedClient, setSelectedClient] = useState('');
   const [selectedPlan, setSelectedPlan] = useState<{ factoryId: string, factoryName: string, planIndex: number, plan: ExternalPlanItem } | null>(null);
   const [receivedQty, setReceivedQty] = useState<number | ''>('');
+  const [scrapQty, setScrapQty] = useState<number | ''>('');
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -296,6 +298,7 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
         client: plan.client || selectedClient,
         fabric: plan.fabric,
         receivedQty: Number(receivedQty),
+        scrap: Number(scrapQty) || 0,
         remainingQty: newRemaining,
         notes: notes
       };
@@ -336,6 +339,7 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
 
       // Reset Form
       setReceivedQty('');
+      setScrapQty('');
       setNotes('');
       setSelectedPlan(null); 
       
@@ -487,6 +491,17 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
                 </div>
 
                 <div className="flex-1">
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Scrap (kg)</label>
+                  <input
+                    type="number"
+                    value={scrapQty}
+                    onChange={(e) => setScrapQty(Number(e.target.value))}
+                    className="w-full p-3 text-lg font-bold text-red-600 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-red-500 outline-none"
+                    placeholder="0.00"
+                  />
+                </div>
+
+                <div className="flex-1">
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">New Remaining</label>
                   <div className="w-full p-3 text-lg font-bold text-slate-700 bg-slate-100 border border-slate-200 rounded-lg">
                     {selectedPlan.plan.remaining - (Number(receivedQty) || 0)} kg
@@ -533,6 +548,7 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
                   <th className="p-3 border-b border-slate-200">Client</th>
                   <th className="p-3 border-b border-slate-200">Fabric</th>
                   <th className="p-3 border-b border-slate-200 text-right">Received</th>
+                  <th className="p-3 border-b border-slate-200 text-right">Scrap</th>
                   <th className="p-3 border-b border-slate-200 text-right">Remaining</th>
                   <th className="p-3 border-b border-slate-200">Notes</th>
                   <th className="p-3 border-b border-slate-200 w-10"></th>
@@ -551,6 +567,7 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
                       <td className="p-3 text-slate-600">{entry.client}</td>
                       <td className="p-3 text-slate-600">{entry.fabric}</td>
                       <td className="p-3 text-right font-bold text-blue-600">{entry.receivedQty}</td>
+                      <td className="p-3 text-right font-bold text-red-600">{entry.scrap || 0}</td>
                       <td className="p-3 text-right font-mono text-slate-500">{entry.remainingQty}</td>
                       <td className="p-3 text-slate-500 italic text-xs">{entry.notes || '-'}</td>
                       <td className="p-3 text-center">

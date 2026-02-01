@@ -110,7 +110,7 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
       // 2. External Production Logs
       try {
         const extDocs = await getDocs(query(
-            collection(db, 'ExternalProduction'),
+            collection(db, 'externalProduction'),
             where('client', '==', clientName), 
             // Note: If you have issues with strict equality, you might need to fetch more and filter.
             // For now assuming client names match exactly as they usually come from dropdowns.
@@ -120,13 +120,16 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
             const data = doc.data();
             // Safety check for fabric
             if (normalize(data.fabric) === targetFabric) {
+                // If scrap exists but scrapQty is not set, use scrap
+                const scrapVal = Number(data.scrap) || Number(data.scrapQty) || 0;
+                
                 logsData.push({
                     id: doc.id,
                     date: data.date,
                     machineName: data.factory || 'External',
                     dayProduction: Number(data.receivedQty) || 0,
                     remaining: Number(data.remainingQty) || 0,
-                    scrap: 0,
+                    scrap: scrapVal,
                     reason: data.notes || '',
                     isExternal: true
                 });
@@ -475,7 +478,7 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
                             </thead>
                             <tbody className="divide-y divide-slate-100">
                             {group.logs.map((log) => (
-                                <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                                <tr key={log.id} className={`hover:bg-slate-50 transition-colors ${log.isExternal ? 'bg-blue-50/30' : ''}`}>
                                 <td className="px-4 py-3 font-mono text-slate-600 flex items-center gap-2">
                                     <Calendar className="w-3 h-3 text-slate-400" />
                                     {formatDate(log.date)}
@@ -483,17 +486,19 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
                                 <td className="px-4 py-3">
                                     <div className="flex items-center gap-2">
                                     {log.isExternal ? (
-                                        <Globe className="w-3 h-3 text-blue-400" />
+                                        <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200 shadow-sm text-xs font-bold">
+                                            <Globe className="w-3 h-3" />
+                                            EXTERNAL: {log.machineName}
+                                        </div>
                                     ) : (
-                                        <Factory className="w-3 h-3 text-slate-400" />
+                                        <>
+                                            <Factory className="w-3 h-3 text-slate-400" />
+                                            <span className="font-medium text-slate-700">{log.machineName}</span>
+                                        </>
                                     )}
-                                    <span className={`font-medium ${log.isExternal ? 'text-blue-700' : 'text-slate-700'}`}>
-                                        {log.machineName}
-                                        {log.isExternal && <span className="ml-2 text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">Ext</span>}
-                                    </span>
                                     </div>
                                 </td>
-                                <td className="px-4 py-3 text-right font-mono font-bold text-emerald-600">
+                                <td className={`px-4 py-3 text-right font-mono font-bold ${log.isExternal ? 'text-blue-700' : 'text-emerald-600'}`}>
                                     {log.dayProduction.toLocaleString()}
                                 </td>
                                 <td className="px-4 py-3 text-right font-mono text-slate-600">

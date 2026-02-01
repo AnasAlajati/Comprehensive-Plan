@@ -6,7 +6,9 @@ import {
   setDoc, 
   deleteDoc, 
   addDoc, 
-  updateDoc
+  updateDoc,
+  query,
+  where
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { CustomerSheet, OrderRow, YarnInventoryItem, FabricDefinition } from '../types';
@@ -46,6 +48,7 @@ export const OrdersPage: React.FC = () => {
   // Inventory & Fabric Data
   const [yarnInventory, setYarnInventory] = useState<YarnInventoryItem[]>([]);
   const [fabrics, setFabrics] = useState<FabricDefinition[]>([]);
+  const [externalScrapMap, setExternalScrapMap] = useState<Record<string, number>>({});
 
   const [createPlanModal, setCreatePlanModal] = useState<{
     isOpen: boolean;
@@ -90,6 +93,31 @@ export const OrdersPage: React.FC = () => {
           unsubFabrics();
       };
   }, []);
+
+  // 3. Fetch External Scrap
+  useEffect(() => {
+    if (!selectedCustomerId) {
+        setExternalScrapMap({});
+        return;
+    }
+    const customer = customers.find(c => c.id === selectedCustomerId);
+    if (!customer) return;
+
+    // Listen to external production for this client
+    const q = query(collection(db, 'externalProduction'), where('client', '==', customer.name));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const result: Record<string, number> = {};
+      snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        const fabric = (data.fabric || '').trim().toLowerCase();
+        // The field is now 'scrap' (number)
+        const scrap = Number(data.scrap) || 0;
+        result[fabric] = (result[fabric] || 0) + scrap;
+      });
+      setExternalScrapMap(result);
+    });
+    return () => unsub();
+  }, [selectedCustomerId, customers]);
 
   // 1.5 Fetch Machines
   
