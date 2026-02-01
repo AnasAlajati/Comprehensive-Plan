@@ -517,7 +517,7 @@ export const DyehouseActiveWorkPage: React.FC = () => {
                       className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden"
                     >
                       {/* Card Header */}
-                      <div className="px-4 py-3 bg-gradient-to-r from-slate-50 to-white border-b border-slate-100">
+                      <div className="px-4 py-3 bg-gradient-to-r from-indigo-50 via-white to-white border-b border-slate-100">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             {/* Machine Badge - Prominent */}
@@ -527,13 +527,14 @@ export const DyehouseActiveWorkPage: React.FC = () => {
                               </div>
                             )}
                             <div>
-                              <div className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
-                                <Layers size={14} className="text-indigo-500" />
-                                {group.fabricShortName}
+                              {/* Customer Name - More Prominent */}
+                              <div className="text-base font-bold text-indigo-900 flex items-center gap-1.5">
+                                <User size={14} className="text-indigo-500" />
+                                {group.clientName}
                               </div>
                               <div className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
-                                <User size={10} />
-                                {group.clientName}
+                                <Layers size={10} className="text-slate-400" />
+                                {group.fabricShortName}
                               </div>
                             </div>
                           </div>
@@ -565,7 +566,8 @@ export const DyehouseActiveWorkPage: React.FC = () => {
                       {/* Colors Section */}
                       <div className={`divide-y divide-slate-100 ${hasMultipleColors ? 'bg-slate-50/50' : ''}`}>
                         {group.items.map((item, colorIdx) => {
-                          const days = calculateDays(item.dateSent);
+                          const daysSent = calculateDays(item.dateSent);
+                          const daysFormation = calculateDays(item.formationDate);
                           const remaining = item.quantitySent - item.totalReceived;
                           
                           return (
@@ -598,14 +600,51 @@ export const DyehouseActiveWorkPage: React.FC = () => {
                                   <span className={`font-bold ${remaining > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
                                     {remaining > 0 ? `-${remaining}` : '✓'}
                                   </span>
-                                  {days !== null && (
-                                    <span className={`flex items-center gap-0.5 ${
-                                      days > 14 ? 'text-red-500' : days > 7 ? 'text-amber-500' : 'text-slate-400'
+                                </div>
+                              </div>
+
+                              {/* Dates Row - Days After Send & Days After Formation */}
+                              <div className="px-4 py-2 bg-slate-50/70 flex items-center justify-around border-y border-slate-100">
+                                {/* Days After Send */}
+                                <div className="flex flex-col items-center">
+                                  <div className="flex items-center gap-1">
+                                    <span className={`text-lg font-bold ${
+                                      daysSent !== null && daysSent > 14 ? 'text-red-600' : 
+                                      daysSent !== null && daysSent > 7 ? 'text-amber-600' : 'text-slate-700'
                                     }`}>
-                                      <Clock size={10} />
-                                      {days}d
+                                      {daysSent !== null ? daysSent : '-'}
                                     </span>
-                                  )}
+                                    <span className="text-[10px] text-slate-400">يوم</span>
+                                  </div>
+                                  <div className="text-[9px] text-slate-400 mt-0.5">
+                                    ايام بعد الارسال
+                                  </div>
+                                  <div className="text-[9px] text-slate-400 font-mono flex items-center gap-1">
+                                    <Calendar size={8} />
+                                    {item.dateSent ? formatDate(item.dateSent).slice(0, 10) : '-'}
+                                  </div>
+                                </div>
+
+                                <div className="h-8 w-px bg-slate-200" />
+
+                                {/* Days After Formation */}
+                                <div className="flex flex-col items-center">
+                                  <div className="flex items-center gap-1">
+                                    <span className={`text-lg font-bold ${
+                                      daysFormation !== null && daysFormation > 10 ? 'text-orange-600' : 
+                                      daysFormation !== null && daysFormation > 5 ? 'text-amber-600' : 'text-slate-700'
+                                    }`}>
+                                      {daysFormation !== null ? daysFormation : '-'}
+                                    </span>
+                                    <span className="text-[10px] text-slate-400">يوم</span>
+                                  </div>
+                                  <div className="text-[9px] text-slate-400 mt-0.5">
+                                    ايام بعد التشكيل
+                                  </div>
+                                  <div className="text-[9px] text-slate-400 font-mono flex items-center gap-1">
+                                    <Clock size={8} />
+                                    {item.formationDate ? formatDate(item.formationDate).slice(0, 10) : '-'}
+                                  </div>
                                 </div>
                               </div>
 
