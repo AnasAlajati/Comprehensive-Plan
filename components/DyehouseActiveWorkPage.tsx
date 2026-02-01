@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { collection, getDocs, collectionGroup, query, doc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../services/firebase';
+import { parseFabricName } from '../services/data';
 import { OrderRow, FabricDefinition, DyeingBatch } from '../types';
 import { 
   Search, 
@@ -150,7 +151,7 @@ export const DyehouseActiveWorkPage: React.FC = () => {
               clientName: clientName,
               orderReference: order.orderReference,
               fabric: order.material,
-              fabricShortName: fabricMap[order.material] || order.material,
+              fabricShortName: parseFabricName(order.material).shortName || order.material,
               color: batch.color,
               colorHex: batch.colorHex,
               quantity: batch.quantity,
@@ -533,8 +534,8 @@ export const DyehouseActiveWorkPage: React.FC = () => {
                                 {group.fabricShortName}
                               </div>
                               {/* Customer Name - Below */}
-                              <div className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
-                                <User size={10} className="text-slate-400" />
+                              <div className="text-sm font-bold text-slate-700 flex items-center gap-1 mt-0.5">
+                                <User size={12} className="text-slate-500" />
                                 {group.clientName}
                               </div>
                             </div>
