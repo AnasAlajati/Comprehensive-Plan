@@ -16,6 +16,7 @@ import { Dyehouse, DyehouseMachine, CustomerSheet } from '../types';
 import { DyehouseMachineDetails } from './DyehouseMachineDetails';
 import { DyehouseGlobalSchedule } from './DyehouseGlobalSchedule';
 import { DyehouseBalanceReport } from './DyehouseBalanceReport';
+import { DyehouseActiveWorkPage } from './DyehouseActiveWorkPage';
 import { 
   Plus, 
   Trash2, 
@@ -29,7 +30,8 @@ import {
   ChevronUp,
   LayoutGrid,
   List,
-  FileBarChart
+  FileBarChart,
+  Droplets
 } from 'lucide-react';
 
 export const DyehouseDirectoryPage: React.FC = () => {
@@ -43,7 +45,7 @@ export const DyehouseDirectoryPage: React.FC = () => {
   const [editForm, setEditForm] = useState<Dyehouse | null>(null);
   
   // New State
-  const [viewMode, setViewMode] = useState<'directory' | 'global' | 'balance'>('directory');
+  const [viewMode, setViewMode] = useState<'directory' | 'global' | 'balance' | 'active-work'>('directory');
   const [selectedMachine, setSelectedMachine] = useState<{ dyehouse: string, capacity: number } | null>(null);
   const [machineCounts, setMachineCounts] = useState<Record<string, { sent: number, planned: number }>>({});
   const [dyehouseStock, setDyehouseStock] = useState<Record<string, number>>({});
@@ -264,6 +266,13 @@ export const DyehouseDirectoryPage: React.FC = () => {
               <FileBarChart size={16} />
               Balance Report
             </button>
+            <button 
+              onClick={() => setViewMode('active-work')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'active-work' ? 'bg-white shadow text-cyan-600' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              <Droplets size={16} />
+              Active Work
+            </button>
           </div>
 
           {viewMode === 'directory' && (
@@ -313,6 +322,8 @@ export const DyehouseDirectoryPage: React.FC = () => {
           <DyehouseGlobalSchedule />
         ) : viewMode === 'balance' ? (
           <DyehouseBalanceReport />
+        ) : viewMode === 'active-work' ? (
+          <DyehouseActiveWorkPage />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {allDyehouses.map((dyehouse) => (

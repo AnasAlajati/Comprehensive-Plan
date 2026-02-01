@@ -248,6 +248,15 @@ export interface DyeingBatch {
   status?: 'draft' | 'pending' | 'sent' | 'received'; // Batch workflow status
   plannedAt?: string; // ISO date when batch was planned (all required fields filled)
   plannedBy?: string; // User email who planned it
+  
+  // Internal Dyehouse Status
+  dyehouseStatus?: 'STORE_RAW' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
+  dyehouseStatusDate?: string; // ISO Date String
+  dyehouseHistory?: {
+    status: 'STORE_RAW' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
+    date: string;
+    updatedBy?: string;
+  }[];
 }
 
 // External Factory Assignment for outsourcing

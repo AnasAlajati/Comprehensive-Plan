@@ -23,6 +23,7 @@ import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnIn
 import { FabricDetailsModal } from './FabricDetailsModal';
 import { FabricDyehouseModal } from './FabricDyehouseModal';
 import { ColorApprovalModal } from './ColorApprovalModal';
+import { DyehouseTrackingModal } from './DyehouseTrackingModal';
 import { FabricFormModal } from './FabricFormModal';
 import { CreatePlanModal } from './CreatePlanModal';
 import { FabricProductionOrderModal } from './FabricProductionOrderModal';
@@ -1110,7 +1111,8 @@ const MemoizedOrderRow = React.memo(({
   onOpenReceiveModal,
   onOpenSentModal,
   onOpenFabricDyehouse,
-  onOpenColorApproval
+  onOpenColorApproval,
+  onOpenDyehouseTracking
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -1140,6 +1142,7 @@ const MemoizedOrderRow = React.memo(({
   onOpenSentModal: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
   onOpenFabricDyehouse: (order: OrderRow) => void;
   onOpenColorApproval: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
+  onOpenDyehouseTracking: (data: { isOpen: boolean; orderId: string; batchIdx: number; batch: DyeingBatch }) => void;
 }) => {
   const [showMachineDetails, setShowMachineDetails] = useState<{ capacity: number; batches: any[] } | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -2176,6 +2179,7 @@ const MemoizedOrderRow = React.memo(({
                     <th className="px-3 py-2 text-center w-20" title="Sent">مرسل</th>
                     <th className="px-3 py-2 text-center w-24" title="Click to add receive">مستلم</th>
                     <th className="px-3 py-2 text-center w-20">الحالة</th>
+                    <th className="px-3 py-2 text-center w-36">وضع جوا المصبغة</th>
                     <th className="px-3 py-2 text-right">ملاحظات</th>
                     <th className="px-3 py-2 w-10"></th>
                   </tr>
@@ -2600,6 +2604,54 @@ const MemoizedOrderRow = React.memo(({
                            );
                         })()}
                       </td>
+
+                      {/* Dyehouse Internal Status (Placement: After Status, Before Notes) */}
+                      <td className="p-1 min-w-[120px]">
+                        <div className="flex flex-col gap-1 w-full group/tracker">
+                            <button
+                                onClick={() => onOpenDyehouseTracking({
+                                    isOpen: true,
+                                    orderId: row.id,
+                                    batchIdx: idx,
+                                    batch: batch
+                                })}
+                                className={`w-full text-[10px] py-1 px-1 rounded border outline-none cursor-pointer font-bold text-center flex items-center justify-center gap-1 transition-all ${
+                                    batch.dyehouseStatus === 'DYEING' ? 'bg-purple-100 text-purple-700 border-purple-200' :
+                                    batch.dyehouseStatus === 'FINISHING' ? 'bg-orange-100 text-orange-700 border-orange-200' :
+                                    batch.dyehouseStatus === 'STORE_FINISHED' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' :
+                                    batch.dyehouseStatus === 'RECEIVED' ? 'bg-blue-100 text-blue-700 border-blue-200' :
+                                    batch.dyehouseStatus === 'STORE_RAW' ? 'bg-slate-100 text-slate-700 border-slate-200' :
+                                    'bg-white text-slate-400 border-slate-200'
+                                }`}
+                            >
+                                <span>
+                                    {batch.dyehouseStatus === 'STORE_RAW' ? 'مخزن مصبغة' :
+                                     batch.dyehouseStatus === 'DYEING' ? 'صباغة' :
+                                     batch.dyehouseStatus === 'FINISHING' ? 'تجهيز' :
+                                     batch.dyehouseStatus === 'STORE_FINISHED' ? 'منتهي مخزن' :
+                                     batch.dyehouseStatus === 'RECEIVED' ? 'مستلم' :
+                                     '- الوضع -'}
+                                </span>
+                                <div className="w-1.5 h-1.5 rounded-full bg-current opacity-50 animate-pulse ml-0.5"></div>
+                            </button>
+                            
+                            {/* Date Display (Click to open modal too) */}
+                            {batch.dyehouseStatusDate && (
+                                <div 
+                                    onClick={() => onOpenDyehouseTracking({
+                                        isOpen: true,
+                                        orderId: row.id,
+                                        batchIdx: idx,
+                                        batch: batch
+                                    })}
+                                    className="text-[9px] text-slate-500 text-center cursor-pointer hover:text-blue-600 font-mono"
+                                >
+                                    {formatDateShort(batch.dyehouseStatusDate)}
+                                </div>
+                            )}
+                        </div>
+                      </td>
+
                       <td className="p-0">
                         <input
                           type="text"
@@ -2915,6 +2967,14 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
   // Color Approval Modal State
   const [colorApprovalModal, setColorApprovalModal] = useState<{
+    isOpen: boolean;
+    orderId: string;
+    batchIdx: number;
+    batch: DyeingBatch | null;
+  }>({ isOpen: false, orderId: '', batchIdx: -1, batch: null });
+
+  // Dyehouse Tracking Modal State
+  const [dyehouseTrackingModal, setDyehouseTrackingModal] = useState<{
     isOpen: boolean;
     orderId: string;
     batchIdx: number;
@@ -5188,6 +5248,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                 setSentModal({ isOpen: true, orderId, batchIdx, batch });
                                 setNewSent({ date: new Date().toISOString().split('T')[0], quantity: 0, notes: '' });
                               }}
+                              onOpenDyehouseTracking={(data) => setDyehouseTrackingModal(data)}
                             />
                           );
                         })}
@@ -6160,6 +6221,26 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             flatOrders={flatOrders}
             onConfirm={confirmBatchLink}
         />
+
+        {/* Dyehouse Tracking Modal - Internal Status */}
+        {dyehouseTrackingModal.isOpen && dyehouseTrackingModal.batch && (
+          <DyehouseTrackingModal
+            isOpen={dyehouseTrackingModal.isOpen}
+            onClose={() => setDyehouseTrackingModal({ ...dyehouseTrackingModal, isOpen: false })}
+            batch={dyehouseTrackingModal.batch}
+            onSave={(updatedBatch) => {
+               const order = flatOrders.find(o => o.id === dyehouseTrackingModal.orderId);
+               if (order) {
+                   const newPlan = [...(order.dyeingPlan || [])];
+                   if (newPlan[dyehouseTrackingModal.batchIdx]) {
+                       newPlan[dyehouseTrackingModal.batchIdx] = updatedBatch;
+                       handleUpdateOrder(dyehouseTrackingModal.orderId, { dyeingPlan: newPlan });
+                       setDyehouseTrackingModal(prev => ({ ...prev, batch: updatedBatch }));
+                   }
+               }
+            }}
+          />
+        )}
 
 
 
