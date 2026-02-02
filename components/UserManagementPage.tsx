@@ -20,7 +20,7 @@ interface UserData {
   id: string;
   email: string;
   displayName: string;
-  role: 'admin' | 'editor' | 'viewer' | 'pending';
+  role: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager' | 'pending';
   createdAt: any;
   password?: string; // Optional: Only for initial display if requested
   isOnline?: boolean;
@@ -32,7 +32,7 @@ export const UserManagementPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserName, setNewUserName] = useState('');
-  const [newUserRole, setNewUserRole] = useState<'admin' | 'editor' | 'viewer'>('viewer');
+  const [newUserRole, setNewUserRole] = useState<'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager'>('viewer');
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState('');
   const [createdUserCreds, setCreatedUserCreds] = useState<{email: string, password: string} | null>(null);
@@ -275,7 +275,7 @@ export const UserManagementPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="w-full md:w-40">
+          <div className="w-full md:w-48">
             <label className="block text-sm font-medium text-slate-700 mb-1">Role</label>
             <select
               value={newUserRole}
@@ -284,6 +284,8 @@ export const UserManagementPage: React.FC = () => {
             >
               <option value="viewer">Viewer</option>
               <option value="editor">Editor</option>
+              <option value="dyehouse_manager">Dyehouse Manager</option>
+              <option value="factory_manager">Factory Manager</option>
               <option value="admin">Admin</option>
             </select>
           </div>
@@ -437,12 +439,16 @@ export const UserManagementPage: React.FC = () => {
                         className={`text-xs font-medium px-2.5 py-1 rounded-full border-0 cursor-pointer focus:ring-2 focus:ring-indigo-500
                           ${user.role === 'admin' ? 'bg-purple-100 text-purple-800' : 
                             user.role === 'editor' ? 'bg-blue-100 text-blue-800' : 
+                            user.role === 'dyehouse_manager' ? 'bg-cyan-100 text-cyan-800' :
+                            user.role === 'factory_manager' ? 'bg-orange-100 text-orange-800' :
                             user.role === 'pending' ? 'bg-yellow-100 text-yellow-800' :
                             'bg-slate-100 text-slate-800'}`}
                       >
                         <option value="pending">Pending</option>
                         <option value="viewer">Viewer</option>
                         <option value="editor">Editor</option>
+                        <option value="dyehouse_manager">Dyehouse Manager</option>
+                        <option value="factory_manager">Factory Manager</option>
                         <option value="admin">Admin</option>
                       </select>
                     </td>

@@ -254,8 +254,30 @@ export interface DyeingBatch {
   dyehouseStatusDate?: string; // ISO Date String
   dyehouseHistory?: {
     status: 'STORE_RAW' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
-    date: string;
-    updatedBy?: string;
+    date: string;           // The actual date when this status happened
+    enteredAt?: string;     // When this entry was recorded (for audit trail)
+    updatedBy?: string;     // Who recorded this entry
+    lastModified?: string;  // If the date was changed later
+    modifiedBy?: string;    // Who modified it
+  }[];
+  
+  // Partial/Test Quantities - for testing portions of the batch separately
+  partials?: {
+    id: string;              // Unique ID for this partial
+    quantity: number;        // Amount taken for this test/partial
+    note: string;            // Note about what this partial is for
+    createdAt: string;       // When this partial was created
+    createdBy?: string;      // Who created it
+    dyehouseStatus?: 'STORE_RAW' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
+    dyehouseStatusDate?: string;
+    dyehouseHistory?: {
+      status: 'STORE_RAW' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
+      date: string;
+      enteredAt?: string;
+      updatedBy?: string;
+      lastModified?: string;
+      modifiedBy?: string;
+    }[];
   }[];
 }
 

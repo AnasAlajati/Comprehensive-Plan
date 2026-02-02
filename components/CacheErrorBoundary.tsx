@@ -1,5 +1,5 @@
 import React, { Component, ErrorInfo, ReactNode } from "react";
-import { Trash2, RefreshCw } from "lucide-react";
+import { Trash2, RefreshCw, Wifi, WifiOff } from "lucide-react";
 
 interface Props {
   children: ReactNode;
@@ -8,21 +8,37 @@ interface Props {
 interface State {
   hasError: boolean;
   error: Error | null;
+  isAutoRecovering: boolean;
 }
 
 export class CacheErrorBoundary extends Component<Props, State> {
   public state: State = {
     hasError: false,
     error: null,
+    isAutoRecovering: false,
   };
 
-  public static getDerivedStateFromError(error: Error): State {
+  public static getDerivedStateFromError(error: Error): Partial<State> {
     return { hasError: true, error };
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("Uncaught error caught by CacheErrorBoundary:", error, errorInfo);
+    
+    // Check if it's a Firestore assertion error - auto recover
+    const isFirestoreAssertionError = error.message?.includes('INTERNAL ASSERTION FAILED');
+    if (isFirestoreAssertionError) {
+      this.handleAutoRecovery();
+    }
   }
+
+  private handleAutoRecovery = async () => {
+    this.setState({ isAutoRecovering: true });
+    
+    // Wait a moment then reload
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    window.location.reload();
+  };
 
   private handleReset = async () => {
     // Only ask for confirmation if it's not a critical "must wipe" situation, 
@@ -89,6 +105,34 @@ export class CacheErrorBoundary extends Component<Props, State> {
                                this.state.error?.message?.includes("INTERNAL ASSERTION") ||
                                this.state.error?.message?.includes("FormattedMessage") || // Common in intl errors
                                this.state.error?.message?.includes("Minified React error"); 
+      
+      const isFirestoreAssertionError = this.state.error?.message?.includes('INTERNAL ASSERTION FAILED');
+
+      // Auto-recovery UI for Firestore assertion errors
+      if (this.state.isAutoRecovering || isFirestoreAssertionError) {
+        return (
+          <div className="fixed inset-0 bg-slate-900/90 flex items-center justify-center p-4 z-[9999]" style={{ fontFamily: 'system-ui, sans-serif' }}>
+            <div className="bg-white p-6 md:p-8 rounded-xl shadow-2xl max-w-sm w-full border border-slate-200 text-center">
+              <div className="flex justify-center mb-4">
+                <div className="p-4 bg-blue-100 rounded-full">
+                  <RefreshCw className="w-8 h-8 text-blue-600 animate-spin" />
+                </div>
+              </div>
+              
+              <h2 className="text-lg font-bold text-slate-800 mb-2">
+                جاري الإصلاح التلقائي...
+              </h2>
+              <p className="text-slate-500 text-sm mb-4">
+                Auto-recovering, please wait...
+              </p>
+              
+              <div className="w-full bg-slate-200 rounded-full h-2">
+                <div className="bg-blue-600 h-2 rounded-full animate-pulse" style={{ width: '70%' }}></div>
+              </div>
+            </div>
+          </div>
+        );
+      }
 
       return (
         <div className="fixed inset-0 bg-slate-50 flex items-center justify-center p-4 z-[9999]" style={{ fontFamily: 'system-ui, sans-serif' }}>
@@ -120,17 +164,26 @@ export class CacheErrorBoundary extends Component<Props, State> {
               </details>
             )}
 
-            <button
-              onClick={this.handleReset}
-              className="w-full py-3.5 px-4 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
-            >
-              <RefreshCw className="w-5 h-5" />
-              Fix & Reset App
-            </button>
+            <div className="space-y-3">
+              <button
+                onClick={() => window.location.reload()}
+                className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold flex items-center justify-center gap-2 transition-all"
+              >
+                <RefreshCw className="w-5 h-5" />
+                إعادة تحميل / Reload
+              </button>
+              
+              <button
+                onClick={this.handleReset}
+                className="w-full py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium flex items-center justify-center gap-2 transition-all text-sm"
+              >
+                <Trash2 className="w-4 h-4" />
+                مسح البيانات المؤقتة / Clear Cache
+              </button>
+            </div>
             
             <p className="text-[10px] w-full text-center text-slate-400 mt-4 leading-normal">
-              Note: This will clear temporary files and reload. <br/>
-              Please ensure you are connected to the internet.
+              Try "Reload" first. If it keeps happening, use "Clear Cache".
             </p>
           </div>
         </div>

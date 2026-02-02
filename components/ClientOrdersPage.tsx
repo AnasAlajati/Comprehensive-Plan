@@ -2762,7 +2762,7 @@ const MemoizedOrderRow = React.memo(({
 });
 
 interface ClientOrdersPageProps {
-  userRole?: 'admin' | 'editor' | 'viewer' | null;
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | null;
   highlightTarget?: { client: string; fabric?: string } | null;
   onHighlightComplete?: () => void;
   userName?: string;
@@ -2878,7 +2878,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const [activeDay, setActiveDay] = useState<string>(new Date().toISOString().split('T')[0]);
   const [showYarnRequirements, setShowYarnRequirements] = useState(false);
   const [selectedYarnDetails, setSelectedYarnDetails] = useState<any>(null);
-  const [showDyehouse, setShowDyehouse] = useState(false);
+  const [showDyehouse, setShowDyehouse] = useState(userRole === 'dyehouse_manager');
 //   const [showDyehouseImport, setShowDyehouseImport] = useState(false);
   // const [showRemainingWork, setShowRemainingWork] = useState(false); // Removed
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);

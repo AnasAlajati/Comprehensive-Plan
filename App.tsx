@@ -71,7 +71,7 @@ import { MachineStatus } from './types';
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [userName, setUserName] = useState<string>(''); // NEW: Store display name from Firestore
-  const [userRole, setUserRole] = useState<'admin' | 'editor' | 'viewer' | null>(null);
+  const [userRole, setUserRole] = useState<'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager' | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [rawMachines, setRawMachines] = useState<any[]>([]);
@@ -97,6 +97,17 @@ const App: React.FC = () => {
   // View Modes
   const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'real-maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'fabrics' | 'machines' | 'users'>('excel'); 
   const [planningInitialViewMode, setPlanningInitialViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
+  
+  // Force dyehouse_manager to only see dyehouse-directory or orders
+  // Force factory_manager to only see real-maintenance (Maintenance Logs)
+  useEffect(() => {
+    if (userRole === 'dyehouse_manager' && viewMode !== 'dyehouse-directory' && viewMode !== 'orders') {
+      setViewMode('dyehouse-directory');
+    }
+    if (userRole === 'factory_manager' && viewMode !== 'real-maintenance') {
+      setViewMode('real-maintenance');
+    }
+  }, [userRole, viewMode]);
   
   // Navigation State
   const [highlightTarget, setHighlightTarget] = useState<{client: string, fabric?: string} | null>(null);
@@ -342,7 +353,7 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // 2. Setup Real-time Listeners
+  // 2. Setup Real-time Listeners with error recovery
   useEffect(() => {
     // REMOVED: if (isConnected === false) return; 
     // We want listeners to run even if offline so we get cached data.
@@ -357,10 +368,16 @@ const App: React.FC = () => {
       }));
       setRawMachines(fetchedRawMachines);
       setMachineLoading(false);
-      
       setIsConnected(true);
     }, (error) => {
       console.error("Snapshot Error (MachineSS):", error);
+      
+      // Check if it's the Firestore assertion error - let global handler deal with it
+      if (error.message?.includes('INTERNAL ASSERTION FAILED')) {
+        console.warn('Firestore internal error detected, global handler will recover...');
+        return;
+      }
+      
       setIsConnected(false);
       setConnectionError(error.message);
       setMachineLoading(false);
@@ -700,58 +717,101 @@ const App: React.FC = () => {
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 sticky top-0 z-40 mb-6">
            <div className="flex items-center justify-between p-2 px-3">
              
-             {/* Main Tools (Daily Machine Plan & Orders - User Requested) */}
+             {/* Main Tools - Show based on role */}
              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-                <button 
-                  onClick={() => { setViewMode('excel'); setIsMenuOpen(false); }}
-                  className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
-                    viewMode === 'excel' 
-                      ? 'bg-emerald-600 text-white shadow-emerald-200' 
-                      : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
-                  }`}
-                >
-                  <Table size={18} className={viewMode === 'excel' ? 'text-white' : 'text-emerald-600'} />
-                  <span>Daily Machine Plan</span>
-                </button>
+                {/* Dyehouse Manager only sees Dyehouse Directory and Orders */}
+                {userRole === 'dyehouse_manager' ? (
+                  <>
+                    <button 
+                      onClick={() => { setViewMode('dyehouse-directory'); setIsMenuOpen(false); }}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
+                        viewMode === 'dyehouse-directory' 
+                          ? 'bg-blue-600 text-white shadow-blue-200' 
+                          : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                      }`}
+                    >
+                      <Building size={18} className={viewMode === 'dyehouse-directory' ? 'text-white' : 'text-blue-600'} />
+                      <span>Dyehouse Directory</span>
+                    </button>
+                    <button 
+                      onClick={() => { setViewMode('orders'); setIsMenuOpen(false); }}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
+                        viewMode === 'orders' 
+                          ? 'bg-orange-600 text-white shadow-orange-200' 
+                          : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                      }`}
+                    >
+                      <Package size={18} className={viewMode === 'orders' ? 'text-white' : 'text-orange-600'} />
+                      <span>Orders</span>
+                    </button>
+                  </>
+                ) : userRole === 'factory_manager' ? (
+                  <button 
+                    onClick={() => { setViewMode('real-maintenance'); setIsMenuOpen(false); }}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
+                      viewMode === 'real-maintenance' 
+                        ? 'bg-orange-600 text-white shadow-orange-200' 
+                        : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                    }`}
+                  >
+                    <Wrench size={18} className={viewMode === 'real-maintenance' ? 'text-white' : 'text-orange-600'} />
+                    <span>Maintenance Logs</span>
+                  </button>
+                ) : (
+                  <>
+                    <button 
+                      onClick={() => { setViewMode('excel'); setIsMenuOpen(false); }}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
+                        viewMode === 'excel' 
+                          ? 'bg-emerald-600 text-white shadow-emerald-200' 
+                          : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                      }`}
+                    >
+                      <Table size={18} className={viewMode === 'excel' ? 'text-white' : 'text-emerald-600'} />
+                      <span>Daily Machine Plan</span>
+                    </button>
 
-                <button 
-                  onClick={() => { setViewMode('orders'); setIsMenuOpen(false); }}
-                  className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
-                    viewMode === 'orders' 
-                      ? 'bg-orange-600 text-white shadow-orange-200' 
-                      : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
-                  }`}
-                >
-                  <Package size={18} className={viewMode === 'orders' ? 'text-white' : 'text-orange-600'} />
-                  <span>Orders</span>
-                </button>
+                    <button 
+                      onClick={() => { setViewMode('orders'); setIsMenuOpen(false); }}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
+                        viewMode === 'orders' 
+                          ? 'bg-orange-600 text-white shadow-orange-200' 
+                          : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                      }`}
+                    >
+                      <Package size={18} className={viewMode === 'orders' ? 'text-white' : 'text-orange-600'} />
+                      <span>Orders</span>
+                    </button>
 
-                <button 
-                  onClick={() => { setViewMode('dyehouse-directory'); setIsMenuOpen(false); }}
-                  className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
-                    viewMode === 'dyehouse-directory' 
-                      ? 'bg-blue-600 text-white shadow-blue-200' 
-                      : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
-                  }`}
-                >
-                  <Building size={18} className={viewMode === 'dyehouse-directory' ? 'text-white' : 'text-blue-600'} />
-                  <span>Dyehouse Dir.</span>
-                </button>
+                    <button 
+                      onClick={() => { setViewMode('dyehouse-directory'); setIsMenuOpen(false); }}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
+                        viewMode === 'dyehouse-directory' 
+                          ? 'bg-blue-600 text-white shadow-blue-200' 
+                          : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                      }`}
+                    >
+                      <Building size={18} className={viewMode === 'dyehouse-directory' ? 'text-white' : 'text-blue-600'} />
+                      <span>Dyehouse Dir.</span>
+                    </button>
 
-                <button 
-                  onClick={() => setViewMode('planning')}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
-                    viewMode === 'planning' 
-                      ? 'bg-blue-600 text-white shadow-blue-200' 
-                      : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
-                  }`}
-                >
-                  <Calendar size={18} className={viewMode === 'planning' ? 'text-white' : 'text-blue-600'} />
-                  <span>Schedule</span>
-                </button>
+                    <button 
+                      onClick={() => setViewMode('planning')}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                        viewMode === 'planning' 
+                          ? 'bg-blue-600 text-white shadow-blue-200' 
+                          : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                      }`}
+                    >
+                      <Calendar size={18} className={viewMode === 'planning' ? 'text-white' : 'text-blue-600'} />
+                      <span>Schedule</span>
+                    </button>
+                  </>
+                )}
              </div>
 
-             {/* App Launcher */}
+             {/* App Launcher - Hide for Dyehouse Manager and Factory Manager */}
+             {userRole !== 'dyehouse_manager' && userRole !== 'factory_manager' && (
              <div className="relative">
                <button 
                  onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -865,6 +925,7 @@ const App: React.FC = () => {
                  </>
                )}
              </div>
+             )}
            </div>
         </div>
 
