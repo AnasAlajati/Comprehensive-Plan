@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { collection, getDocs, collectionGroup, query } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { parseFabricName } from '../services/data';
 import { CustomerSheet, OrderRow, DyeingBatch, FabricDefinition } from '../types';
 import { 
   Search, 
@@ -16,11 +17,9 @@ import {
 } from 'lucide-react';
 import XLSX from 'xlsx-js-style';
 import { DyehouseImportModal } from './DyehouseImportModal';
-import { DyehouseScheduleImportPage, ImportedScheduleRow } from './DyehouseScheduleImportPage';
-import { writeBatch, doc } from 'firebase/firestore';
 
 interface GlobalBatchItem {
-  id: string; // Internal Comp ID (orderId-index)
+  id: string;
   clientId: string;
   clientName: string;
   orderId: string;
@@ -28,6 +27,7 @@ interface GlobalBatchItem {
   fabric: string;
   fabricShortName?: string;
   color: string;
+  colorHex?: string;
   quantity: number;
   quantitySent?: number;
   quantitySentRaw?: number;
@@ -57,8 +57,7 @@ export const DyehouseGlobalSchedule: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState('Sent');
   const [includeDrafts, setIncludeDrafts] = useState(false);
   
-  const [showImportModal, setShowImportModal] = useState(false); // Legacy modal
-  const [showImportPage, setShowImportPage] = useState(false); // NEW Full Page Import
+  const [showImportModal, setShowImportModal] = useState(false);
 
   useEffect(() => {
     fetchGlobalData();
@@ -100,11 +99,16 @@ export const DyehouseGlobalSchedule: React.FC = () => {
         if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
             order.dyeingPlan.forEach((batch, idx) => {
               // Calculate total received from events
-              const events = batch.receiveEvents || [];
-              const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
-              const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
+              const receiveEvents = batch.receiveEvents || [];
+              const totalReceivedRaw = receiveEvents.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
+              const totalReceivedAccessory = receiveEvents.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
               const totalReceived = totalReceivedRaw + totalReceivedAccessory;
-              const totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
+              
+              // Calculate total sent from events or legacy fields
+              const sentEvents = batch.sentEvents || [];
+              const totalSentFromEvents = sentEvents.reduce((s, e) => s + (e.quantity || 0) + (e.accessorySent || 0), 0);
+              const totalSentLegacy = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
+              const totalSent = totalSentFromEvents > 0 ? totalSentFromEvents : totalSentLegacy;
               
               // Determine batch status (use stored status or calculate)
               const batchStatus = batch.status || 
@@ -115,6 +119,9 @@ export const DyehouseGlobalSchedule: React.FC = () => {
               const dyehouseName = batch.dyehouse || order.dyehouse || 'Unassigned';
               const machineName = batch.plannedCapacity ? `${batch.plannedCapacity}kg` : (batch.machine || order.dyehouseMachine || '');
               
+              // Get fabric shortname - prefer from fabrics collection, fallback to parseFabricName
+              const fabricShortName = fabricMap[order.material] || parseFabricName(order.material).shortName || order.material;
+              
               allBatches.push({
                 id: `${order.id}-${idx}`,
                 clientId: clientId,
@@ -122,8 +129,9 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                 orderId: order.id,
                 orderReference: order.orderReference,
                 fabric: order.material,
-                fabricShortName: fabricMap[order.material] || order.material,
+                fabricShortName: fabricShortName,
                 color: batch.color,
+                colorHex: batch.colorHex,
                 quantity: batch.quantity,
                 quantitySent: totalSent,
                 quantitySentRaw: batch.quantitySentRaw || batch.quantitySent,
@@ -192,165 +200,6 @@ export const DyehouseGlobalSchedule: React.FC = () => {
   }, [filteredBatches]);
 
   const sortedDyehouses = useMemo(() => Object.keys(groupedBatches).sort(), [groupedBatches]);
-
-  const handleImportSave = async (importedRows: ImportedScheduleRow[]) => {
-      try {
-          const batchWrite = writeBatch(db);
-          let updateCount = 0;
-          
-          // Pre-fetch contexts if possible or optimize. 
-          // For safety, we'll query for each distinct Client+Fabric combo or just Scan all relevant orders.
-          // Given the size, let's fetch ALL active orders first to memory to avoid N+1 queries.
-          const ordersSnapshot = await getDocs(query(collectionGroup(db, 'orders')));
-          const allOrders = ordersSnapshot.docs.map(d => ({ id: d.id, ref: d.ref, ...d.data() } as OrderRow & { ref: any }));
-          
-          // Map for fuzzy lookup
-          // Key: "normalizedClient_normalizedFabric" -> OrderRow[]
-          const ordersMap: Record<string, typeof allOrders> = {};
-          
-          // Helper to fetch client name (we need the client name from ID inside OrderRow, but OrderRow only has customerId)
-          // We have clientMap in fetchGlobalData but it's local scope.
-          // Let's re-fetch customers quickly.
-          const clientsSnap = await getDocs(collection(db, 'CustomerSheets'));
-          const clientNameMap: Record<string, string> = {}; // ID -> Name
-          const clientNameToId: Record<string, string> = {}; // Name -> ID
-          clientsSnap.docs.forEach(d => {
-              const data = d.data();
-              if (data.name) {
-                  clientNameMap[d.id] = data.name.trim().toLowerCase();
-                  clientNameToId[data.name.trim().toLowerCase()] = d.id;
-              }
-          });
-
-          allOrders.forEach(o => {
-              const cName = clientNameMap[o.customerId || ''] || '';
-              if (!cName) return;
-              const key = `${cName}_${o.material?.trim().toLowerCase()}`;
-              if (!ordersMap[key]) ordersMap[key] = [];
-              ordersMap[key].push(o);
-          });
-
-          for (const row of importedRows) {
-              const clientKey = row.client.trim().toLowerCase();
-              const fabricKey = row.fabric.trim().toLowerCase();
-              const lookupKey = `${clientKey}_${fabricKey}`;
-              
-              const potentialOrders = ordersMap[lookupKey];
-              if (!potentialOrders || potentialOrders.length === 0) {
-                  console.warn(`No matching order found for Client: ${row.client}, Fabric: ${row.fabric}`);
-                  continue;
-              }
-
-              // Find matching batch
-              let matchFound = false;
-              
-              // Sort potential orders (maybe by recent?) or iterate all
-              for (const order of potentialOrders) {
-                  if (!order.dyeingPlan) continue;
-                  
-                  const plan = [...order.dyeingPlan];
-                  let planModified = false;
-                  
-                  // Index of batch to update
-                  const batchIdx = plan.findIndex(b => {
-                      // Strong Match: Dispatch Number
-                      if (row.dispatchNumber && b.dispatchNumber === row.dispatchNumber) return true;
-                      
-                      // Weak Match: Color + Dyehouse (if assigned)
-                      // Normalized comparision
-                      const c1 = b.color.trim().toLowerCase();
-                      const c2 = row.color.trim().toLowerCase();
-                      const d1 = (b.dyehouse || '').trim().toLowerCase();
-                      const d2 = row.dyehouseName.trim().toLowerCase();
-                      
-                      // Match color AND (Matches dyehouse OR dyehouse was empty)
-                      if (c1 === c2) {
-                           if (b.dispatchNumber) return false; // If batch has dispatch but row doesn't match it (checked above), don't hijack it
-                           if (d1 === d2 || d1 === '') return true;
-                      }
-                      return false;
-                  });
-
-                  if (batchIdx !== -1) {
-                      const existing = plan[batchIdx];
-                      
-                      // Update Logic
-                      const updates: any = {};
-                      let hasChange = false;
-
-                      // Update Machine
-                      if (row.assignedMachine) {
-                          // Extract capacity number if it's "825" or similar
-                          const cap = parseInt(row.assignedMachine.replace(/\D/g, '')) || 0;
-                          if (existing.plannedCapacity !== cap || existing.machine !== row.assignedMachine) {
-                               updates.plannedCapacity = cap;
-                               updates.machine = row.assignedMachine; // Store string representation too just in case
-                               hasChange = true;
-                          }
-                      }
-
-                      // Update Status
-                      if (row.status && existing.status !== row.status.toLowerCase() && existing.status !== 'received') {
-                          // Allow moving forward to 'Sent' or 'Received'
-                          // Don't revert 'Received' to 'Pending' via import unless explicit
-                          updates.status = row.status.toLowerCase();
-                          hasChange = true;
-                      }
-                      
-                      // Update Dates
-                      if (row.sentDate && existing.dateSent !== row.sentDate) {
-                          updates.dateSent = row.sentDate;
-                          hasChange = true;
-                      }
-                      if (row.formationDate && existing.formationDate !== row.formationDate) {
-                          updates.formationDate = row.formationDate;
-                          hasChange = true;
-                      }
-
-                      // Update Dispatch #
-                      if (row.dispatchNumber && existing.dispatchNumber !== row.dispatchNumber) {
-                          updates.dispatchNumber = row.dispatchNumber;
-                          hasChange = true;
-                      }
-
-                      // Update Dyehouse
-                      if (row.dyehouseName && existing.dyehouse !== row.dyehouseName) {
-                          updates.dyehouse = row.dyehouseName;
-                          hasChange = true;
-                      }
-                      
-                      if (hasChange) {
-                          plan[batchIdx] = { ...existing, ...updates };
-                          planModified = true;
-                          matchFound = true;
-                      } else {
-                          matchFound = true; // Found but no changes needed
-                      }
-                  }
-                  
-                  if (planModified) {
-                      batchWrite.update(order.ref, { dyeingPlan: plan });
-                      updateCount++;
-                  }
-                  
-                  if (matchFound) break; // Found match for this row, move to next row
-              }
-          }
-
-          if (updateCount > 0) {
-              await batchWrite.commit();
-              alert(`Successfully updated orders from ${updateCount} matches.`);
-              setShowImportPage(false);
-              fetchGlobalData(); // Refresh
-          } else {
-              alert("No suitable updates found. Ensure Client/Fabric/Colors match active orders.");
-          }
-
-      } catch (e) {
-          console.error("Import Save Error:", e);
-          alert("Failed to save import data.");
-      }
-  };
 
   const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
@@ -557,15 +406,6 @@ export const DyehouseGlobalSchedule: React.FC = () => {
     XLSX.writeFile(wb, "Dyehouse_Global_Schedule.xlsx");
   };
 
-  if (showImportPage) {
-    return (
-      <DyehouseScheduleImportPage 
-        onBack={() => setShowImportPage(false)}
-        onSaveToFirestore={handleImportSave}
-      />
-    );
-  }
-
   return (
     <div className="space-y-6">
       {/* Toolbar */}
@@ -629,7 +469,7 @@ export const DyehouseGlobalSchedule: React.FC = () => {
           </label>
 
           <button 
-            onClick={() => setShowImportPage(true)}
+            onClick={() => setShowImportModal(true)}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
           >
             <Upload size={16} />
@@ -735,7 +575,8 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                                 const daysAfterSent = batch.dateSent ? Math.floor((new Date().getTime() - new Date(batch.dateSent).getTime()) / (1000 * 3600 * 24)) : 0;
                                 const daysAfterFormation = batch.formationDate ? Math.floor((new Date().getTime() - new Date(batch.formationDate).getTime()) / (1000 * 3600 * 24)) : 0;
                                 const sentQty = batch.quantitySent || 0;
-                                const remaining = sentQty - (batch.receivedQuantity || 0);
+                                const receivedQty = batch.totalReceived || batch.receivedQuantity || 0;
+                                const remaining = sentQty - receivedQty;
                                 
                                 // Format date to "12-Jan" format
                                 const formatDate = (dateStr?: string) => {
@@ -776,16 +617,20 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                                     {/* Data Columns */}
                                     <td className="px-4 py-3 text-center text-slate-400">-</td>
                                     <td className="px-4 py-3 text-center font-mono text-slate-600">{remaining > 0 ? remaining.toLocaleString() : '-'}</td>
-                                    <td className="px-4 py-3 text-center font-mono text-emerald-600">{batch.receivedQuantity ? batch.receivedQuantity.toLocaleString() : '-'}</td>
+                                    <td className="px-4 py-3 text-center font-mono text-emerald-600">{receivedQty > 0 ? receivedQty.toLocaleString() : '-'}</td>
                                     <td className="px-4 py-3 text-center font-mono font-bold text-blue-600">{sentQty > 0 ? sentQty.toLocaleString() : '-'}</td>
                                     <td className="px-4 py-3 font-medium text-slate-700 text-right">{batch.clientName}</td>
                                     <td className="px-4 py-3 text-right">
                                         <div className="flex items-center justify-end gap-2">
                                             <span className="text-slate-700">{batch.color}</span>
-                                            <div className="w-3 h-3 rounded-full bg-slate-200 border border-slate-300"></div>
+                                            <div 
+                                                className="w-4 h-4 rounded-full border border-slate-300 shadow-sm"
+                                                style={{ backgroundColor: batch.colorHex || '#e2e8f0' }}
+                                                title={batch.colorHex || 'No color set'}
+                                            ></div>
                                         </div>
                                     </td>
-                                    <td className="px-4 py-3 text-slate-600 text-xs font-medium text-right">{batch.fabricShortName || batch.fabric}</td>
+                                    <td className="px-4 py-3 text-slate-600 text-xs font-medium text-right">{batch.fabricShortName}</td>
                                     <td className="px-4 py-3 text-center font-mono text-amber-600">{daysAfterFormation > 0 ? daysAfterFormation : '-'}</td>
                                     <td className="px-4 py-3 text-center text-slate-500 text-xs">{formatDate(batch.formationDate)}</td>
                                     <td className="px-4 py-3 text-center font-mono text-slate-600">{daysAfterSent > 0 ? daysAfterSent : '-'}</td>
