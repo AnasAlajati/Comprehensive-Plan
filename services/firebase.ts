@@ -1,6 +1,7 @@
 import { initializeApp, getApps, deleteApp } from "firebase/app";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, CACHE_SIZE_UNLIMITED, terminate, clearIndexedDbPersistence } from "firebase/firestore";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
+import { getStorage } from "firebase/storage";
 
 // Your provided configuration
 export const firebaseConfig = {
@@ -28,6 +29,9 @@ export const db = initializeFirestore(app, {
     cacheSizeBytes: CACHE_SIZE_UNLIMITED
   })
 });
+
+// Initialize Firebase Storage
+export const storage = getStorage(app);
 
 // Global error handler for Firestore assertion errors
 // This catches the "Unexpected state" error and tries to recover

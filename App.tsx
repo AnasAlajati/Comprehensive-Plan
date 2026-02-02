@@ -34,6 +34,7 @@ import { FabricHistoryPage } from './components/FabricHistoryPage';
 import { YarnInventoryPage } from './components/YarnInventoryPage';
 import { DyehouseInventoryPage } from './components/DyehouseInventoryPage';
 import { DyehouseDirectoryPage } from './components/DyehouseDirectoryPage';
+import { SampleTrackingPage } from './components/SampleTrackingPage';
 import { FabricsPage } from './components/FabricsPage';
 import { MachinesPage } from './components/MachinesPage';
 import { InstallPWA } from './components/InstallPWA';
@@ -64,7 +65,8 @@ import {
   LogOut,
   Users,
   Menu,
-  X
+  X,
+  Beaker
 } from 'lucide-react';
 import { MachineStatus } from './types';
 
@@ -95,7 +97,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'real-maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'fabrics' | 'machines' | 'users'>('excel'); 
+  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'real-maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'sample-tracking' | 'fabrics' | 'machines' | 'users'>('excel'); 
   const [planningInitialViewMode, setPlanningInitialViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
   
   // Force dyehouse_manager to only see dyehouse-directory or orders
@@ -919,6 +921,13 @@ const App: React.FC = () => {
                            <div className={`p-2 rounded-md ${viewMode === 'idle' ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'}`}><AlertCircle size={20} /></div>
                            <div className="font-semibold text-sm">Idle Monitor</div>
                         </button>
+                        <button 
+                          onClick={() => { setViewMode('sample-tracking'); setIsMenuOpen(false); }}
+                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'sample-tracking' ? 'bg-violet-50 text-violet-700 ring-1 ring-violet-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                        >
+                           <div className={`p-2 rounded-md ${viewMode === 'sample-tracking' ? 'bg-violet-100 text-violet-600' : 'bg-slate-100 text-slate-500'}`}><Beaker size={20} /></div>
+                           <div className="font-semibold text-sm">Sample Tracking</div>
+                        </button>
                         
                      </div>
                    </div>
@@ -966,6 +975,10 @@ const App: React.FC = () => {
 
             {viewMode === 'dyehouse-directory' && (
               <DyehouseDirectoryPage />
+            )}
+
+            {viewMode === 'sample-tracking' && (
+              <SampleTrackingPage />
             )}
 
             {viewMode === 'idle' && (

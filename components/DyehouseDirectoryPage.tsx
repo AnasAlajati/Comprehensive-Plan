@@ -17,6 +17,7 @@ import { DyehouseMachineDetails } from './DyehouseMachineDetails';
 import { DyehouseGlobalSchedule } from './DyehouseGlobalSchedule';
 import { DyehouseBalanceReport } from './DyehouseBalanceReport';
 import { DyehouseActiveWorkPage } from './DyehouseActiveWorkPage';
+import { DyehouseLateWorkPage } from './DyehouseLateWorkPage';
 import { 
   Plus, 
   Trash2, 
@@ -31,7 +32,8 @@ import {
   LayoutGrid,
   List,
   FileBarChart,
-  Droplets
+  Droplets,
+  AlertTriangle
 } from 'lucide-react';
 
 export const DyehouseDirectoryPage: React.FC = () => {
@@ -45,7 +47,7 @@ export const DyehouseDirectoryPage: React.FC = () => {
   const [editForm, setEditForm] = useState<Dyehouse | null>(null);
   
   // New State
-  const [viewMode, setViewMode] = useState<'directory' | 'global' | 'balance' | 'active-work'>('directory');
+  const [viewMode, setViewMode] = useState<'directory' | 'global' | 'balance' | 'active-work' | 'late-work'>('directory');
   const [selectedMachine, setSelectedMachine] = useState<{ dyehouse: string, capacity: number } | null>(null);
   const [machineCounts, setMachineCounts] = useState<Record<string, { sent: number, planned: number }>>({});
   const [dyehouseStock, setDyehouseStock] = useState<Record<string, number>>({});
@@ -273,6 +275,13 @@ export const DyehouseDirectoryPage: React.FC = () => {
               <Droplets size={16} />
               Active Work
             </button>
+            <button 
+              onClick={() => setViewMode('late-work')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'late-work' ? 'bg-white shadow text-red-600' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              <AlertTriangle size={16} />
+              Late Work
+            </button>
           </div>
 
           {viewMode === 'directory' && (
@@ -324,6 +333,8 @@ export const DyehouseDirectoryPage: React.FC = () => {
           <DyehouseBalanceReport />
         ) : viewMode === 'active-work' ? (
           <DyehouseActiveWorkPage />
+        ) : viewMode === 'late-work' ? (
+          <DyehouseLateWorkPage />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {allDyehouses.map((dyehouse) => (
