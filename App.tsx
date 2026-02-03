@@ -101,12 +101,12 @@ const App: React.FC = () => {
   const [planningInitialViewMode, setPlanningInitialViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
   
   // Force dyehouse_manager to only see dyehouse-directory or orders
-  // Force factory_manager to only see real-maintenance (Maintenance Logs)
+  // Force factory_manager to only see real-maintenance or sample-tracking
   useEffect(() => {
     if (userRole === 'dyehouse_manager' && viewMode !== 'dyehouse-directory' && viewMode !== 'orders') {
       setViewMode('dyehouse-directory');
     }
-    if (userRole === 'factory_manager' && viewMode !== 'real-maintenance') {
+    if (userRole === 'factory_manager' && viewMode !== 'real-maintenance' && viewMode !== 'sample-tracking') {
       setViewMode('real-maintenance');
     }
   }, [userRole, viewMode]);
@@ -748,17 +748,30 @@ const App: React.FC = () => {
                     </button>
                   </>
                 ) : userRole === 'factory_manager' ? (
-                  <button 
-                    onClick={() => { setViewMode('real-maintenance'); setIsMenuOpen(false); }}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
-                      viewMode === 'real-maintenance' 
-                        ? 'bg-orange-600 text-white shadow-orange-200' 
-                        : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
-                    }`}
-                  >
-                    <Wrench size={18} className={viewMode === 'real-maintenance' ? 'text-white' : 'text-orange-600'} />
-                    <span>Maintenance Logs</span>
-                  </button>
+                  <>
+                    <button 
+                      onClick={() => { setViewMode('real-maintenance'); setIsMenuOpen(false); }}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
+                        viewMode === 'real-maintenance' 
+                          ? 'bg-orange-600 text-white shadow-orange-200' 
+                          : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                      }`}
+                    >
+                      <Wrench size={18} className={viewMode === 'real-maintenance' ? 'text-white' : 'text-orange-600'} />
+                      <span>Maintenance Logs</span>
+                    </button>
+                    <button 
+                      onClick={() => { setViewMode('sample-tracking'); setIsMenuOpen(false); }}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
+                        viewMode === 'sample-tracking' 
+                          ? 'bg-violet-600 text-white shadow-violet-200' 
+                          : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                      }`}
+                    >
+                      <Beaker size={18} className={viewMode === 'sample-tracking' ? 'text-white' : 'text-violet-600'} />
+                      <span>عينات</span>
+                    </button>
+                  </>
                 ) : (
                   <>
                     <button 
