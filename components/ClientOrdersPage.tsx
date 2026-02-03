@@ -3054,6 +3054,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   // const [showRemainingWork, setShowRemainingWork] = useState(false); // Removed
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
   const [externalFactories, setExternalFactories] = useState<any[]>([]);
+  const [externalScrapMap, setExternalScrapMap] = useState<Record<string, number>>({});
 
   // Column Visibility State (localStorage for user-only persistence)
   const [manageColorsVisibleColumns, setManageColorsVisibleColumns] = useState<Record<string, boolean>>(() => {
@@ -3344,8 +3345,39 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       unsubMachines();
       unsubInventory();
       unsubSettings();
+      unsubExternal();
     };
   }, []);
+
+  // Separate effect for External Scrap (depends on selectedCustomer)
+  useEffect(() => {
+    let unsubExternalLogs = () => {};
+    
+    if (selectedCustomerId) {
+        const client = rawCustomers.find(c => c.id === selectedCustomerId);
+        if (client) {
+            const q = query(collection(db, 'externalProduction'), where('client', '==', client.name));
+            unsubExternalLogs = onSnapshot(q, (snapshot) => {
+                const scrapMap: Record<string, number> = {};
+                snapshot.docs.forEach(doc => {
+                    const data = doc.data();
+                    const fabric = (data.fabric || '').trim().toLowerCase();
+                    const scrap = Number(data.scrap) || 0;
+                    scrapMap[fabric] = (scrapMap[fabric] || 0) + scrap;
+                });
+                setExternalScrapMap(scrapMap);
+            });
+        } else {
+             setExternalScrapMap({});
+        }
+    } else {
+        setExternalScrapMap({});
+    }
+
+    return () => {
+        unsubExternalLogs();
+    };
+  }, [selectedCustomerId, rawCustomers]);
 
   // --- History Check Logic ---
   const [historySet, setHistorySet] = useState<Set<string>>(new Set());
@@ -3530,6 +3562,13 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             });
         });
 
+        // 1.5 Add External Scrap (Once per fabric)
+        if (externalScrapMap) {
+            const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+            const normFabric = normalize(fabric);
+            scrap += (externalScrapMap[normFabric] || 0);
+        }
+
         // Check External Plans
         externalFactories.forEach(factory => {
             if (!factory.plans) return;
@@ -3576,7 +3615,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     });
 
     return map;
-  }, [selectedCustomer, machines, customers, activeDay, externalFactories]);
+  }, [selectedCustomer, machines, customers, activeDay, externalFactories, externalScrapMap]);
 
   const allClientsStats = useMemo(() => {
     if (selectedCustomerId !== ALL_CLIENTS_ID) return [];

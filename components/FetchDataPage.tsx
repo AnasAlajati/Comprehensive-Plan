@@ -587,6 +587,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [activeCell, setActiveCell] = useState<{ rowIndex: number; field: string } | null>(null);
   const [draggedRowIndex, setDraggedRowIndex] = useState<number | null>(null);
   const [externalProduction, setExternalProduction] = useState<number>(0);
+  const [externalScrap, setExternalScrap] = useState<number>(0);
   const [hallScrap, setHallScrap] = useState<number>(0);
   const [labScrap, setLabScrap] = useState<number>(0);
   const [showExternalSheet, setShowExternalSheet] = useState(false); // Toggle for External Sheet
@@ -1593,6 +1594,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     try {
       const dailySummary = await DataService.getDailySummary(date);
       setExternalProduction(dailySummary?.externalProduction || 0);
+      setExternalScrap(dailySummary?.externalScrap || 0);
       setHallScrap(dailySummary?.hallScrap || 0);
       setLabScrap(dailySummary?.labScrap || 0);
     } catch (e) {
@@ -2213,7 +2215,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const bousProduction = bousMachines.reduce((sum, m) => sum + (Number(m.dayProduction) || 0), 0);
   const wideProduction = wideMachines.reduce((sum, m) => sum + (Number(m.dayProduction) || 0), 0);
   const totalProduction = wideProduction + bousProduction + Number(externalProduction);
-  const totalScrap = filteredLogs.reduce((sum, m) => sum + (Number(m.scrap) || 0), 0) + Number(hallScrap) + Number(labScrap);
+  const totalScrap = filteredLogs.reduce((sum, m) => sum + (Number(m.scrap) || 0), 0) + Number(hallScrap) + Number(labScrap) + Number(externalScrap);
   const scrapPercentage = totalProduction > 0 ? (totalScrap / totalProduction) * 100 : 0;
   
   const statusCounts = filteredLogs.reduce((acc, m) => {
@@ -3221,7 +3223,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
               </div>
 
               {/* Scrap Inputs Column */}
-              <div className="md:w-32 border-r border-slate-200 bg-red-50/30 p-2 flex flex-col justify-center gap-2">
+              <div className="md:w-32 border-r border-slate-200 bg-red-50/30 p-2 flex flex-col justify-center gap-1">
                  <div className="flex flex-col items-center">
                     <span className="text-[10px] text-red-900/60 font-bold mb-0.5">سقط الصالة</span>
                     <input 
@@ -3229,7 +3231,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                        value={hallScrap}
                        onChange={(e) => setHallScrap(Number(e.target.value))}
                        onBlur={handleHallScrapBlur}
-                       className="w-full text-center bg-white/50 rounded border border-red-100 font-bold text-sm text-red-700 outline-none focus:border-red-300 py-1"
+                       className="w-full text-center bg-white/50 rounded border border-red-100 font-bold text-sm text-red-700 outline-none focus:border-red-300 py-0.5"
                     />
                  </div>
                  <div className="w-full h-px bg-red-100"></div>
@@ -3240,7 +3242,18 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                        value={labScrap}
                        onChange={(e) => setLabScrap(Number(e.target.value))}
                        onBlur={handleLabScrapBlur}
-                       className="w-full text-center bg-white/50 rounded border border-red-100 font-bold text-sm text-red-700 outline-none focus:border-red-300 py-1"
+                       className="w-full text-center bg-white/50 rounded border border-red-100 font-bold text-sm text-red-700 outline-none focus:border-red-300 py-0.5"
+                    />
+                 </div>
+                 <div className="w-full h-px bg-red-100"></div>
+                 <div className="flex flex-col items-center">
+                    <span className="text-[10px] text-red-900/60 font-bold mb-0.5">سقط الخارجي</span>
+                    <input 
+                       type="number" 
+                       value={externalScrap}
+                       disabled // Calculated field
+                       className="w-full text-center bg-red-100/50 rounded border border-red-200 font-bold text-sm text-red-700 outline-none py-0.5 cursor-not-allowed"
+                       title="Calculated from External Production Sheet"
                     />
                  </div>
               </div>
@@ -4080,10 +4093,12 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         <ExternalProductionSheet 
           date={selectedDate} 
           onClose={() => setShowExternalSheet(false)}
-          onUpdateTotal={(total) => {
+          onUpdateTotal={(total, scrap) => {
              setExternalProduction(total);
+             const s = scrap || 0;
+             setExternalScrap(s);
              // Also update the daily summary immediately so the main view reflects it
-             DataService.updateDailySummary(selectedDate, { externalProduction: total });
+             DataService.updateDailySummary(selectedDate, { externalProduction: total, externalScrap: s });
           }}
           isEmbedded={true}
           onNavigateToPlanning={onNavigateToPlanning}

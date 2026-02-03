@@ -278,16 +278,16 @@ export const DataService = {
     }, { merge: true });
   },
 
-  async getDailySummary(date: string): Promise<{ externalProduction: number } | null> {
+  async getDailySummary(date: string): Promise<{ externalProduction?: number; hallScrap?: number; labScrap?: number; externalScrap?: number; notes?: string } | null> {
     const docRef = doc(db, 'DailySummaries', date);
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
-      return docSnap.data() as { externalProduction: number };
+      return docSnap.data() as any;
     }
     return null;
   },
 
-  async updateDailySummary(date: string, data: { externalProduction?: number; hallScrap?: number; labScrap?: number }): Promise<void> {
+  async updateDailySummary(date: string, data: { externalProduction?: number; hallScrap?: number; labScrap?: number; externalScrap?: number; notes?: string }): Promise<void> {
     await setDoc(doc(db, 'DailySummaries', date), data, { merge: true });
   },
 

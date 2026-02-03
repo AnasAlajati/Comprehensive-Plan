@@ -7,7 +7,7 @@ import { DataService } from '../services/dataService';
 interface ExternalProductionSheetProps {
   date: string;
   onClose: () => void;
-  onUpdateTotal: (total: number) => void;
+  onUpdateTotal: (total: number, scrap?: number) => void;
   isEmbedded?: boolean;
   onNavigateToPlanning?: (mode: 'INTERNAL' | 'EXTERNAL') => void;
 }
@@ -234,7 +234,10 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
           ...doc.data()
         })) as ExternalEntry[];
         setEntries(loadedEntries);
-        onUpdateTotal(loadedEntries.reduce((sum, e) => sum + (Number(e.receivedQty) || 0), 0));
+        onUpdateTotal(
+          loadedEntries.reduce((sum, e) => sum + (Number(e.receivedQty) || 0), 0),
+          loadedEntries.reduce((sum, e) => sum + (Number(e.scrap) || 0), 0)
+        );
 
         // Load External Plans
         const plansSnapshot = await getDocs(collection(db, 'ExternalPlans'));
@@ -308,7 +311,10 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
       
       const updatedEntries = [...entries, savedEntry];
       setEntries(updatedEntries);
-      onUpdateTotal(updatedEntries.reduce((sum, e) => sum + (Number(e.receivedQty) || 0), 0));
+      onUpdateTotal(
+        updatedEntries.reduce((sum, e) => sum + (Number(e.receivedQty) || 0), 0),
+        updatedEntries.reduce((sum, e) => sum + (Number(e.scrap) || 0), 0)
+      );
 
       // 2. Update External Plan
       const factoryRef = doc(db, 'ExternalPlans', factoryId);
@@ -357,7 +363,10 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
       await deleteDoc(doc(db, 'externalProduction', id));
       const updatedEntries = entries.filter(e => e.id !== id);
       setEntries(updatedEntries);
-      onUpdateTotal(updatedEntries.reduce((sum, e) => sum + (Number(e.receivedQty) || 0), 0));
+      onUpdateTotal(
+        updatedEntries.reduce((sum, e) => sum + (Number(e.receivedQty) || 0), 0),
+        updatedEntries.reduce((sum, e) => sum + (Number(e.scrap) || 0), 0)
+      );
     } catch (error) {
       console.error("Error deleting entry:", error);
     }
