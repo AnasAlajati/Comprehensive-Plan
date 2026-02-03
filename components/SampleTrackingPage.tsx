@@ -519,6 +519,34 @@ export const SampleTrackingPage: React.FC = () => {
     return dailyWork.filter(w => w.date === selectedDate);
   }, [dailyWork, selectedDate]);
 
+  // Quick Add Sample to Today's Work
+  const handleQuickAddToTodayWork = async (sample: Sample) => {
+    setUpdatingId(sample.id);
+    try {
+      await addDoc(collection(db, 'sampleDailyWork'), {
+        date: selectedDate,
+        sampleId: sample.id,
+        sampleName: sample.name,
+        machineId: sample.machineId || '',
+        machineName: sample.machineName || '',
+        notes: '',
+        workType: 'SAMPLE',
+        color: '#6366f1',
+        line: '',
+        fabricName: '',
+        customerName: '',
+        technicianId: '',
+        technicianName: '',
+        createdAt: serverTimestamp(),
+        createdBy: auth.currentUser?.email || 'unknown'
+      });
+    } catch (error) {
+      console.error('Error adding to today work:', error);
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
   // Add Daily Work Entry
   const handleAddDailyWork = async () => {
     if (!dailyWorkForm.machineId) return;
@@ -809,12 +837,12 @@ export const SampleTrackingPage: React.FC = () => {
       
       await addDoc(collection(db, 'samples'), {
         name: formData.name,
-        notes: formData.notes,
+        notes: formData.notes || '',
         expectedDate: endDate,
         machineId: formData.machineId,
         machineName: machine?.name || formData.machineId,
-        priority: formData.priority,
-        estimatedDays: formData.estimatedDays,
+        priority: formData.priority || 1,
+        estimatedDays: formData.estimatedDays || 1,
         calculatedStartDate: startDate,
         calculatedEndDate: endDate,
         status: 'PLANNED' as SampleStatus,
@@ -904,7 +932,7 @@ export const SampleTrackingPage: React.FC = () => {
       });
       
       setEditingSample(null);
-      setFormData({ name: '', notes: '', expectedDate: new Date().toISOString().split('T')[0], machineId: '', machineName: '' });
+      setFormData({ name: '', notes: '', expectedDate: new Date().toISOString().split('T')[0], machineId: '', machineName: '', priority: 1, estimatedDays: 1 });
     } catch (error) {
       console.error('Error updating sample:', error);
     } finally {
@@ -914,7 +942,7 @@ export const SampleTrackingPage: React.FC = () => {
 
   // Delete Sample
   const handleDeleteSample = async (sampleId: string) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذا السامبل؟\nAre you sure you want to delete this sample?')) return;
+    if (!window.confirm('هل أنت متأكد من حذف هذه العينة؟\nAre you sure you want to delete this sample?')) return;
     
     setUpdatingId(sampleId);
     try {
@@ -957,19 +985,19 @@ export const SampleTrackingPage: React.FC = () => {
     const activeIndex = getStatusIndex(sample.status);
     
     return (
-      <div className="relative py-2 mt-1">
+      <div className="relative py-1 sm:py-2 mt-1">
         {/* Track Line */}
-        <div className="absolute top-1/2 left-2 right-2 h-1 bg-slate-100 -translate-y-1/2 rounded-full z-0"></div>
+        <div className="absolute top-1/2 left-1 sm:left-2 right-1 sm:right-2 h-0.5 sm:h-1 bg-slate-100 -translate-y-1/2 rounded-full z-0"></div>
         
         {/* Progress Line */}
         <div 
-            className="absolute top-1/2 right-2 h-1 bg-emerald-400 -translate-y-1/2 rounded-full z-0 transition-all duration-500 ease-out"
+            className="absolute top-1/2 right-1 sm:right-2 h-0.5 sm:h-1 bg-emerald-400 -translate-y-1/2 rounded-full z-0 transition-all duration-500 ease-out"
             style={{ 
-              width: `calc(${(activeIndex / (STATUS_ORDER.length - 1)) * 100}% - 16px)`
+              width: `calc(${(activeIndex / (STATUS_ORDER.length - 1)) * 100}% - 8px)`
             }}
         ></div>
 
-        <div className="relative z-10 flex justify-between w-full px-1">
+        <div className="relative z-10 flex justify-between w-full px-0.5 sm:px-1">
           {STATUS_ORDER.map((status, index) => {
             const isActive = index === activeIndex;
             const isCompleted = index < activeIndex;
@@ -988,20 +1016,20 @@ export const SampleTrackingPage: React.FC = () => {
                 title={config.labelAr}
               >
                 <div className={`
-                  w-7 h-7 rounded-full flex items-center justify-center transition-all duration-300 border-[3px]
+                  w-5 h-5 sm:w-7 sm:h-7 rounded-full flex items-center justify-center transition-all duration-300 border-2 sm:border-[3px]
                   ${isActive 
                     ? `bg-white border-${config.color.split('-')[1]}-500 text-${config.color.split('-')[1]}-600 scale-110 shadow-md` 
                     : isCompleted 
                         ? 'bg-emerald-500 border-white text-white shadow-sm ring-1 ring-emerald-100' 
                         : 'bg-slate-50 border-white text-slate-300 ring-1 ring-slate-100'}
                 `}>
-                  {isCompleted ? <CheckCircle size={14} strokeWidth={3} /> : <Icon size={14} strokeWidth={isActive ? 2.5 : 2} />}
+                  {isCompleted ? <CheckCircle size={10} className="sm:w-3.5 sm:h-3.5" strokeWidth={3} /> : <Icon size={10} className="sm:w-3.5 sm:h-3.5" strokeWidth={isActive ? 2.5 : 2} />}
                 </div>
                 
-                {/* Active Label */}
+                {/* Active Label - Hidden on mobile */}
                 {isActive && (
                   <div className={`
-                    absolute -bottom-6 text-[10px] font-bold whitespace-nowrap px-2 py-0.5 rounded-full shadow-sm animate-in fade-in slide-in-from-top-1
+                    hidden sm:block absolute -bottom-6 text-[10px] font-bold whitespace-nowrap px-2 py-0.5 rounded-full shadow-sm animate-in fade-in slide-in-from-top-1
                     ${config.bg} ${config.color}
                   `}>
                     {config.labelAr}
@@ -1074,18 +1102,19 @@ export const SampleTrackingPage: React.FC = () => {
     return (
       <div 
         key={sample.id}
-        className="group relative bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 border border-slate-100 overflow-hidden"
+        className="group relative bg-white rounded-xl sm:rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 border border-slate-100 overflow-hidden"
       >
         {/* Status Indicator Strip */}
-        <div className={`absolute top-0 bottom-0 left-0 w-1 ${
+        <div className={`absolute top-0 bottom-0 left-0 w-0.5 sm:w-1 ${
           isOverdue ? 'bg-red-500' : 
           isDueSoon ? 'bg-amber-400' : 
           'bg-slate-200'
         }`} />
 
-        <div className="flex h-full">
-          {/* Image Section - Right Side in RTL layout (visually left) */}
-          <div className="w-28 relative flex-shrink-0 bg-slate-50">
+        {/* Mobile: Vertical Layout, Desktop: Horizontal Layout */}
+        <div className="flex flex-col sm:flex-row sm:h-full">
+          {/* Image Section - Square on mobile */}
+          <div className="aspect-square sm:aspect-auto sm:h-auto sm:w-32 relative flex-shrink-0 bg-slate-50">
             {sample.imageUrl ? (
               <div className="relative w-full h-full group/image overflow-hidden">
                 <img 
@@ -1098,25 +1127,25 @@ export const SampleTrackingPage: React.FC = () => {
                 <button
                   onClick={() => handleDeleteSampleImage(sample.id, sample.imagePath!)}
                   disabled={uploadingImageFor === sample.id}
-                  className="absolute bottom-2 right-2 p-1.5 bg-red-500/90 text-white rounded-full opacity-0 group-hover/image:opacity-100 transition-all hover:bg-red-600 scale-90 hover:scale-100 shadow-sm backdrop-blur-sm"
+                  className="absolute bottom-1 right-1 sm:bottom-2 sm:right-2 p-1 sm:p-1.5 bg-red-500/90 text-white rounded-full opacity-0 group-hover/image:opacity-100 transition-all hover:bg-red-600 scale-90 hover:scale-100 shadow-sm backdrop-blur-sm"
                 >
                   {uploadingImageFor === sample.id ? (
-                    <Loader size={12} className="animate-spin" />
+                    <Loader size={10} className="sm:w-3 sm:h-3 animate-spin" />
                   ) : (
-                    <Trash2 size={12} />
+                    <Trash2 size={10} className="sm:w-3 sm:h-3" />
                   )}
                 </button>
               </div>
             ) : (
               <label className="flex flex-col items-center justify-center h-full cursor-pointer hover:bg-slate-100 text-slate-300 hover:text-slate-400 transition-all">
                 {uploadingImageFor === sample.id ? (
-                  <Loader size={20} className="animate-spin text-slate-400" />
+                  <Loader size={20} className="sm:w-5 sm:h-5 animate-spin text-slate-400" />
                 ) : (
                   <>
-                    <div className="p-2 rounded-full bg-white shadow-sm mb-1">
-                      <Camera size={16} />
+                    <div className="p-2 sm:p-2 rounded-full bg-white shadow-sm mb-1">
+                      <Camera size={16} className="sm:w-4 sm:h-4" />
                     </div>
-                    <span className="text-[10px] font-medium">صورة</span>
+                    <span className="text-[10px] sm:text-[10px] font-medium">صورة</span>
                   </>
                 )}
                 <input
@@ -1135,31 +1164,33 @@ export const SampleTrackingPage: React.FC = () => {
           </div>
           
           {/* Content Section */}
-          <div className="flex-1 p-4 flex flex-col justify-between">
+          <div className="flex-1 p-2 sm:p-4 flex flex-col justify-between">
             {/* Header */}
             <div>
-              <div className="flex items-start justify-between gap-3 mb-2">
+              <div className="flex items-start justify-between gap-1 sm:gap-3 mb-1 sm:mb-2">
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={`flex-shrink-0 w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shadow-sm ${
-                      (sample.priority || 999) === 1 ? 'bg-red-500 text-white' :
-                      (sample.priority || 999) === 2 ? 'bg-orange-500 text-white' :
-                      (sample.priority || 999) === 3 ? 'bg-amber-500 text-white' :
-                      'bg-slate-200 text-slate-600'
-                    }`}>
-                      {sample.priority || '-'}
-                    </span>
-                    <h3 className="font-bold text-slate-800 truncate text-base leading-tight" title={sample.name}>
-                      {sample.name}
-                    </h3>
-                  </div>
+                  <h3 className="font-bold text-slate-800 truncate text-sm sm:text-base leading-tight" title={sample.name}>
+                    {sample.name}
+                  </h3>
                   {sample.notes && (
-                    <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed pl-1">{sample.notes}</p>
+                    <p className="text-[10px] sm:text-sm text-slate-600 line-clamp-2 sm:line-clamp-3 leading-relaxed mt-1 bg-slate-50 rounded-lg p-1 sm:p-2 border border-slate-100">{sample.notes}</p>
                   )}
                 </div>
                 
-                {/* Actions */}
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity translate-x-2 group-hover:translate-x-0 duration-200">
+                {/* Actions - Hidden on mobile for space */}
+                <div className="hidden sm:flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity translate-x-2 group-hover:translate-x-0 duration-200">
+                  <button
+                    onClick={() => handleQuickAddToTodayWork(sample)}
+                    disabled={updatingId === sample.id}
+                    className="p-1.5 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                    title="أضف لعمل اليوم"
+                  >
+                    {updatingId === sample.id ? (
+                      <Loader size={14} className="animate-spin" />
+                    ) : (
+                      <Plus size={14} />
+                    )}
+                  </button>
                   <button
                     onClick={() => {
                       setShowSampleDataModal(sample);
@@ -1198,8 +1229,8 @@ export const SampleTrackingPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Tags/Badges Row */}
-              <div className="flex flex-wrap items-center gap-2 mb-3">
+              {/* Tags/Badges Row - Hidden on mobile */}
+              <div className="hidden sm:flex flex-wrap items-center gap-2 mb-3">
                 <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-50 border border-slate-100">
                   <Settings size={12} className="text-slate-400" />
                   <span className="text-[10px] font-bold text-slate-600 truncate max-w-[80px]">{sample.machineName}</span>
@@ -1225,10 +1256,32 @@ export const SampleTrackingPage: React.FC = () => {
                   )}
                 </div>
               </div>
+
+              {/* Mobile: Machine name */}
+              <div className="sm:hidden text-[10px] text-slate-500 truncate mt-1 flex items-center gap-1">
+                <Settings size={10} className="text-slate-400" />
+                {sample.machineName}
+              </div>
+
+              {/* Mobile: Quick Add to Today Button */}
+              <button
+                onClick={() => handleQuickAddToTodayWork(sample)}
+                disabled={updatingId === sample.id}
+                className="sm:hidden mt-2 w-full py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
+              >
+                {updatingId === sample.id ? (
+                  <Loader size={12} className="animate-spin" />
+                ) : (
+                  <>
+                    <Plus size={12} />
+                    أضف لعمل اليوم
+                  </>
+                )}
+              </button>
             </div>
 
-            {/* Status Timeline Compact */}
-            <div className="py-2 border-t border-slate-100 mt-1">
+            {/* Status Timeline Compact - Shows on both mobile and desktop */}
+            <div className="py-1 sm:py-2 border-t border-slate-100 mt-1">
               {renderStatusTimeline(sample)}
             </div>
           </div>
@@ -1252,7 +1305,7 @@ export const SampleTrackingPage: React.FC = () => {
         <button
           onClick={() => setShowAddModal(true)}
           className="flex items-center justify-center w-10 h-10 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 transition-colors shadow-lg"
-          title="إضافة سامبل"
+          title="إضافة عينة"
         >
           <Beaker size={20} />
         </button>
@@ -1261,48 +1314,49 @@ export const SampleTrackingPage: React.FC = () => {
       {/* قلب اليوم - Daily Work Section with Date Picker */}
       <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm ring-1 ring-slate-100">
         {/* Header with Date Picker */}
-        <div className="bg-white px-8 py-6 flex items-center justify-between border-b border-slate-100">
-          <div className="flex items-center gap-4">
-            <div className="p-3 bg-violet-50 rounded-2xl border border-violet-100 shadow-sm">
-              <Zap size={28} className="text-violet-600 fill-violet-600/10" />
+        <div className="bg-white px-4 sm:px-8 py-4 sm:py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-100">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <div className="p-2 sm:p-3 bg-violet-50 rounded-xl sm:rounded-2xl border border-violet-100 shadow-sm">
+              <Zap size={22} className="sm:w-7 sm:h-7 text-violet-600 fill-violet-600/10" />
             </div>
             <div>
-              <h2 className="text-2xl font-black text-slate-800 tracking-tight">قلب اليوم</h2>
-              <div className="flex items-center gap-2 text-slate-500 text-sm font-medium mt-0.5">
-                <Activity size={14} />
-                <span>سجل العمل اليومي للماكينات</span>
+              <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">قلب اليوم</h2>
+              <div className="flex items-center gap-2 text-slate-500 text-xs sm:text-sm font-medium mt-0.5">
+                <Activity size={12} className="sm:w-[14px] sm:h-[14px]" />
+                <span>سجل العمل اليومي</span>
               </div>
             </div>
           </div>
           
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 w-full sm:w-auto flex-wrap">
             {/* Date Picker */}
-            <div className="group flex items-center gap-3 bg-slate-50 hover:bg-slate-100/80 transition-colors px-4 py-3 rounded-2xl border border-slate-200">
-              <Calendar size={20} className="text-slate-400 group-hover:text-slate-600" />
+            <div className="group flex items-center gap-2 sm:gap-3 bg-slate-50 hover:bg-slate-100/80 transition-colors px-3 sm:px-4 py-2 sm:py-3 rounded-xl sm:rounded-2xl border border-slate-200 flex-1 sm:flex-none">
+              <Calendar size={16} className="sm:w-5 sm:h-5 text-slate-400 group-hover:text-slate-600" />
               <input
                 type="date"
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
-                className="bg-transparent text-slate-700 text-sm font-bold outline-none cursor-pointer font-mono"
+                className="bg-transparent text-slate-700 text-xs sm:text-sm font-bold outline-none cursor-pointer font-mono flex-1 sm:flex-none"
               />
               {isToday && (
-                <span className="px-2 py-0.5 bg-violet-100 text-violet-700 rounded-md text-[10px] font-black tracking-wide uppercase">اليوم</span>
+                <span className="px-1.5 sm:px-2 py-0.5 bg-violet-100 text-violet-700 rounded-md text-[9px] sm:text-[10px] font-black tracking-wide uppercase">اليوم</span>
               )}
             </div>
             
-            <div className="h-10 w-px bg-slate-200 mx-2"></div>
+            <div className="hidden sm:block h-10 w-px bg-slate-200 mx-2"></div>
 
-            <div className="flex flex-col items-end px-2">
-              <span className="text-2xl font-black text-slate-800 leading-none">{selectedDateWork.length}</span>
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">سجل</span>
+            <div className="flex flex-col items-center px-2">
+              <span className="text-xl sm:text-2xl font-black text-slate-800 leading-none">{selectedDateWork.length}</span>
+              <span className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider">سجل</span>
             </div>
             
             <button
               onClick={() => setShowDailyWorkModal(true)}
-              className="flex items-center gap-2 px-6 py-3 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300"
+              className="flex items-center gap-1.5 sm:gap-2 px-4 sm:px-6 py-2 sm:py-3 bg-slate-900 text-white rounded-xl sm:rounded-2xl font-bold text-sm hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300"
             >
-              <Plus size={20} />
-              <span>إضافة عمل</span>
+              <Plus size={18} className="sm:w-5 sm:h-5" />
+              <span className="hidden sm:inline">إضافة عمل</span>
+              <span className="sm:hidden">إضافة</span>
             </button>
           </div>
         </div>
@@ -1466,6 +1520,13 @@ export const SampleTrackingPage: React.FC = () => {
                           )}
                         </div>
                         
+                        {/* Notes - show from work or linked sample */}
+                        {(work.notes || linkedSample?.notes) && (
+                          <div className="mb-2 bg-slate-50 rounded-lg p-2 border border-slate-100">
+                            <p className="text-sm text-slate-600 leading-relaxed">{work.notes || linkedSample?.notes}</p>
+                          </div>
+                        )}
+                        
                         {/* Status Timeline - from linked sample */}
                         {linkedSample && (
                           <div className="mb-2 pb-2 border-b border-slate-100">
@@ -1545,10 +1606,10 @@ export const SampleTrackingPage: React.FC = () => {
       </div>
 
       {/* Filters */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3 sm:p-4">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2 sm:gap-3">
           {/* Search */}
-          <div className="relative flex-1 min-w-[200px]">
+          <div className="relative flex-1 min-w-0 sm:min-w-[200px]">
             <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
@@ -1559,113 +1620,115 @@ export const SampleTrackingPage: React.FC = () => {
             />
           </div>
           
-          {/* Status Filter */}
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value as SampleStatus | 'ALL')}
-            className="px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-slate-500 outline-none"
-          >
-            <option value="ALL">كل الحالات</option>
-            {STATUS_ORDER.map(status => (
-              <option key={status} value={status}>{STATUS_CONFIG[status].labelAr}</option>
-            ))}
-          </select>
-          
-          {/* Machine Filter */}
-          <select
-            value={filterMachine}
-            onChange={(e) => setFilterMachine(e.target.value)}
-            className="px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-violet-500 outline-none"
-          >
-            <option value="ALL">كل الماكينات</option>
-            {machines.map(machine => (
-              <option key={machine.id} value={machine.id}>{machine.name}</option>
-            ))}
-          </select>
+          <div className="flex gap-2">
+            {/* Status Filter */}
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value as SampleStatus | 'ALL')}
+              className="flex-1 sm:flex-none px-3 py-2 border border-slate-200 rounded-lg text-xs sm:text-sm focus:ring-2 focus:ring-slate-500 outline-none"
+            >
+              <option value="ALL">كل الحالات</option>
+              {STATUS_ORDER.map(status => (
+                <option key={status} value={status}>{STATUS_CONFIG[status].labelAr}</option>
+              ))}
+            </select>
+            
+            {/* Machine Filter */}
+            <select
+              value={filterMachine}
+              onChange={(e) => setFilterMachine(e.target.value)}
+              className="flex-1 sm:flex-none px-3 py-2 border border-slate-200 rounded-lg text-xs sm:text-sm focus:ring-2 focus:ring-violet-500 outline-none"
+            >
+              <option value="ALL">كل الماكينات</option>
+              {machines.map(machine => (
+                <option key={machine.id} value={machine.id}>{machine.name}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
       {/* Samples by Group */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-6 items-start">
         {/* Planned */}
-        <div className="flex flex-col gap-4 bg-slate-50/80 rounded-3xl p-4 border border-slate-100 min-h-[400px]">
-          <div className="flex items-center justify-between px-1 mb-2">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-white rounded-xl shadow-sm border border-slate-100">
-                <Target size={20} className="text-slate-600" />
+        <div className="flex flex-col gap-2 sm:gap-4 bg-slate-50/80 rounded-xl sm:rounded-3xl p-2 sm:p-4 border border-slate-100 min-h-[200px] sm:min-h-[400px]">
+          <div className="flex items-center justify-between px-1 mb-1 sm:mb-2">
+            <div className="flex items-center gap-1.5 sm:gap-3">
+              <div className="p-1.5 sm:p-2.5 bg-white rounded-lg sm:rounded-xl shadow-sm border border-slate-100">
+                <Target size={14} className="sm:w-5 sm:h-5 text-slate-600" />
               </div>
               <div>
-                <h2 className="font-ex-bold text-lg text-slate-800">مخطط</h2>
-                <p className="text-xs text-slate-400 font-medium">خطط مستقبلية</p>
+                <h2 className="font-ex-bold text-sm sm:text-lg text-slate-800">مخطط</h2>
+                <p className="hidden sm:block text-xs text-slate-400 font-medium">خطط مستقبلية</p>
               </div>
             </div>
-            <span className="px-3 py-1 bg-white text-slate-600 border border-slate-200 rounded-full text-xs font-black shadow-sm">
+            <span className="px-1.5 sm:px-3 py-0.5 sm:py-1 bg-white text-slate-600 border border-slate-200 rounded-full text-[10px] sm:text-xs font-black shadow-sm">
               {groupedSamples['PLANNED'].length}
             </span>
           </div>
           
-          <div className="space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-1 gap-2 sm:gap-4">
             {groupedSamples['PLANNED'].map(sample => renderSampleCard(sample))}
             {groupedSamples['PLANNED'].length === 0 && (
-              <div className="flex flex-col items-center justify-center py-12 text-slate-300 border-2 border-dashed border-slate-200 rounded-2xl">
-                <Target size={32} className="mb-2 opacity-50" />
-                <p className="text-sm font-medium">لا توجد سامبلات مخططة</p>
+              <div className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center py-8 sm:py-12 text-slate-300 border-2 border-dashed border-slate-200 rounded-xl sm:rounded-2xl">
+                <Target size={24} className="sm:w-8 sm:h-8 mb-2 opacity-50" />
+                <p className="text-xs sm:text-sm font-medium">لا توجد عينات مخططة</p>
               </div>
             )}
           </div>
         </div>
         
         {/* In Progress */}
-        <div className="flex flex-col gap-4 bg-amber-50/30 rounded-3xl p-4 border border-amber-100/50 min-h-[400px]">
-          <div className="flex items-center justify-between px-1 mb-2">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-white rounded-xl shadow-sm border border-amber-100">
-                <Play size={20} className="text-amber-500" fill="currentColor" fillOpacity={0.2} />
+        <div className="flex flex-col gap-2 sm:gap-4 bg-amber-50/30 rounded-xl sm:rounded-3xl p-2 sm:p-4 border border-amber-100/50 min-h-[200px] sm:min-h-[400px]">
+          <div className="flex items-center justify-between px-1 mb-1 sm:mb-2">
+            <div className="flex items-center gap-1.5 sm:gap-3">
+              <div className="p-1.5 sm:p-2.5 bg-white rounded-lg sm:rounded-xl shadow-sm border border-amber-100">
+                <Play size={14} className="sm:w-5 sm:h-5 text-amber-500" fill="currentColor" fillOpacity={0.2} />
               </div>
               <div>
-                <h2 className="font-ex-bold text-lg text-amber-900">قيد التنفيذ</h2>
-                <p className="text-xs text-amber-600/70 font-medium">جاري العمل عليها</p>
+                <h2 className="font-ex-bold text-sm sm:text-lg text-amber-900">قيد التنفيذ</h2>
+                <p className="hidden sm:block text-xs text-amber-600/70 font-medium">جاري العمل عليها</p>
               </div>
             </div>
-            <span className="px-3 py-1 bg-white text-amber-600 border border-amber-100 rounded-full text-xs font-black shadow-sm">
+            <span className="px-1.5 sm:px-3 py-0.5 sm:py-1 bg-white text-amber-600 border border-amber-100 rounded-full text-[10px] sm:text-xs font-black shadow-sm">
               {groupedSamples['IN_PROGRESS'].length}
             </span>
           </div>
           
-          <div className="space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-1 gap-2 sm:gap-4">
             {groupedSamples['IN_PROGRESS'].map(sample => renderSampleCard(sample))}
             {groupedSamples['IN_PROGRESS'].length === 0 && (
-              <div className="flex flex-col items-center justify-center py-12 text-amber-300 border-2 border-dashed border-amber-200/50 rounded-2xl">
-                <Play size={32} className="mb-2 opacity-50" />
-                <p className="text-sm font-medium">لا توجد سامبلات قيد التنفيذ</p>
+              <div className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center py-8 sm:py-12 text-amber-300 border-2 border-dashed border-amber-200/50 rounded-xl sm:rounded-2xl">
+                <Play size={24} className="sm:w-8 sm:h-8 mb-2 opacity-50" />
+                <p className="text-xs sm:text-sm font-medium">لا توجد عينات قيد التنفيذ</p>
               </div>
             )}
           </div>
         </div>
         
         {/* Done */}
-        <div className="flex flex-col gap-4 bg-emerald-50/30 rounded-3xl p-4 border border-emerald-100/50 min-h-[400px]">
-          <div className="flex items-center justify-between px-1 mb-2">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-white rounded-xl shadow-sm border border-emerald-100">
-                <CheckCircle size={20} className="text-emerald-500" />
+        <div className="flex flex-col gap-2 sm:gap-4 bg-emerald-50/30 rounded-xl sm:rounded-3xl p-2 sm:p-4 border border-emerald-100/50 min-h-[200px] sm:min-h-[400px]">
+          <div className="flex items-center justify-between px-1 mb-1 sm:mb-2">
+            <div className="flex items-center gap-1.5 sm:gap-3">
+              <div className="p-1.5 sm:p-2.5 bg-white rounded-lg sm:rounded-xl shadow-sm border border-emerald-100">
+                <CheckCircle size={14} className="sm:w-5 sm:h-5 text-emerald-500" />
               </div>
               <div>
-                <h2 className="font-ex-bold text-lg text-emerald-900">مكتمل</h2>
-                <p className="text-xs text-emerald-600/70 font-medium">تم الانتهاء منها</p>
+                <h2 className="font-ex-bold text-sm sm:text-lg text-emerald-900">مكتمل</h2>
+                <p className="hidden sm:block text-xs text-emerald-600/70 font-medium">تم الانتهاء منها</p>
               </div>
             </div>
-            <span className="px-3 py-1 bg-white text-emerald-600 border border-emerald-100 rounded-full text-xs font-black shadow-sm">
+            <span className="px-1.5 sm:px-3 py-0.5 sm:py-1 bg-white text-emerald-600 border border-emerald-100 rounded-full text-[10px] sm:text-xs font-black shadow-sm">
               {groupedSamples['DONE'].length}
             </span>
           </div>
           
-          <div className="space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-1 gap-2 sm:gap-4">
             {groupedSamples['DONE'].map(sample => renderSampleCard(sample))}
             {groupedSamples['DONE'].length === 0 && (
-              <div className="flex flex-col items-center justify-center py-12 text-emerald-300 border-2 border-dashed border-emerald-200/50 rounded-2xl">
-                <CheckCircle size={32} className="mb-2 opacity-50" />
-                <p className="text-sm font-medium">لا توجد سامبلات مكتملة</p>
+              <div className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center py-8 sm:py-12 text-emerald-300 border-2 border-dashed border-emerald-200/50 rounded-xl sm:rounded-2xl">
+                <CheckCircle size={24} className="sm:w-8 sm:h-8 mb-2 opacity-50" />
+                <p className="text-xs sm:text-sm font-medium">لا توجد عينات مكتملة</p>
               </div>
             )}
           </div>
@@ -1683,7 +1746,7 @@ export const SampleTrackingPage: React.FC = () => {
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                   <Beaker className="text-violet-600" size={20} />
-                  {editingSample ? 'تعديل السامبل' : 'إضافة سامبل جديد'}
+                  {editingSample ? 'تعديل العينة' : 'إضافة عينة جديدة'}
                 </h2>
                 <button
                   onClick={() => { setShowAddModal(false); setEditingSample(null); }}
@@ -1697,61 +1760,17 @@ export const SampleTrackingPage: React.FC = () => {
             <div className="p-6 space-y-4">
               {/* Sample Name */}
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">اسم السامبل *</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1">اسم العينة *</label>
                 <input
                   type="text"
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="مثال: سامبل جاكار أزرق"
+                  placeholder="مثال: عينة جاكار أزرق"
                   className="w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 outline-none"
                 />
               </div>
               
-              {/* Priority & Estimated Days Row */}
-              <div className="grid grid-cols-2 gap-4">
-                {/* Priority */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1 flex items-center gap-1">
-                    <ListOrdered size={14} />
-                    الأولوية *
-                  </label>
-                  <div className="flex items-center gap-1">
-                    {[1, 2, 3, 4, 5].map(p => (
-                      <button
-                        key={p}
-                        onClick={() => setFormData({ ...formData, priority: p })}
-                        className={`w-10 h-10 rounded-lg font-bold text-lg transition-all ${
-                          formData.priority === p
-                            ? p === 1 ? 'bg-red-500 text-white ring-2 ring-red-300' :
-                              p === 2 ? 'bg-orange-500 text-white ring-2 ring-orange-300' :
-                              p === 3 ? 'bg-amber-500 text-white ring-2 ring-amber-300' :
-                              'bg-slate-600 text-white ring-2 ring-slate-400'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                        }`}
-                      >
-                        {p}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-[10px] text-slate-400 mt-1">1 = أعلى أولوية</p>
-                </div>
-                
-                {/* Estimated Days */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1 flex items-center gap-1">
-                    <Clock size={14} />
-                    المدة المتوقعة (أيام) *
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="30"
-                    value={formData.estimatedDays}
-                    onChange={(e) => setFormData({ ...formData, estimatedDays: parseInt(e.target.value) || 1 })}
-                    className="w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 outline-none"
-                  />
-                </div>
-              </div>
+
               
               {/* Machine Selection */}
               <div>
@@ -1825,16 +1844,7 @@ export const SampleTrackingPage: React.FC = () => {
                 </div>
               )}
               
-              {/* Calculated Expected Date */}
-              <div className="bg-violet-50 rounded-xl p-4 border border-violet-200">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs text-violet-600 mb-1">تاريخ الانتهاء المتوقع (محسوب تلقائياً)</p>
-                    <p className="text-lg font-black text-violet-800">{formatDate(formData.expectedDate)}</p>
-                  </div>
-                  <Calendar size={32} className="text-violet-300" />
-                </div>
-              </div>
+
               
               {/* Notes */}
               <div>
@@ -1923,7 +1933,7 @@ export const SampleTrackingPage: React.FC = () => {
               {dailyWorkForm.workType === 'SAMPLE' && (
                 <>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">السامبل *</label>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">العينة *</label>
                     <select
                       value={dailyWorkForm.sampleId}
                       onChange={(e) => {
@@ -1938,7 +1948,7 @@ export const SampleTrackingPage: React.FC = () => {
                       }}
                       className="w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-slate-500 outline-none"
                     >
-                      <option value="">اختر السامبل...</option>
+                      <option value="">اختر العينة...</option>
                       {samples.filter(s => s.status !== 'DONE').map(sample => (
                         <option key={sample.id} value={sample.id}>{sample.name} - {sample.machineName}</option>
                       ))}
