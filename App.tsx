@@ -991,7 +991,7 @@ const App: React.FC = () => {
             )}
 
             {viewMode === 'sample-tracking' && (
-              <SampleTrackingPage />
+              <SampleTrackingPage userRole={userRole} />
             )}
 
             {viewMode === 'idle' && (

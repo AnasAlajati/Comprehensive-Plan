@@ -47,7 +47,8 @@ import {
   ListOrdered,
   Activity,
   Camera,
-  Image as ImageIcon
+  Image as ImageIcon,
+  User
 } from 'lucide-react';
 import { MachineSS, FuturePlanEntry } from '../types';
 
@@ -188,7 +189,11 @@ const WORK_TYPE_CONFIG: Record<string, { label: string; labelAr: string; color: 
   'ORDER_WORK': { label: 'Order Work', labelAr: 'شغل اوردرات', color: 'text-white', bg: 'bg-slate-700' }
 };
 
-export const SampleTrackingPage: React.FC = () => {
+interface SampleTrackingPageProps {
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager' | null;
+}
+
+export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole }) => {
   const [samples, setSamples] = useState<Sample[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
   const [machineSchedules, setMachineSchedules] = useState<Record<string, MachineScheduleInfo>>({});
@@ -1320,6 +1325,26 @@ export const SampleTrackingPage: React.FC = () => {
             <div className="py-1 sm:py-2 border-t border-slate-100 mt-1">
               {renderStatusTimeline(sample)}
             </div>
+            
+            {/* Admin Only: Last Modified Info */}
+            {userRole === 'admin' && sample.updatedBy && (
+              <div className="px-2 py-1 bg-slate-50 border-t border-slate-100 flex items-center justify-center gap-2 text-[9px] text-slate-400">
+                <User size={10} />
+                <span>آخر تعديل:</span>
+                <span className="font-medium text-slate-500">{sample.updatedBy.split('@')[0]}</span>
+                {sample.updatedAt && (
+                  <>
+                    <span>•</span>
+                    <span className="font-mono">
+                      {sample.updatedAt?.toDate ? 
+                        sample.updatedAt.toDate().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) :
+                        new Date(sample.updatedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+                      }
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
