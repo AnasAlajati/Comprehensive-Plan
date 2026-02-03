@@ -18,6 +18,7 @@ import {
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { db, auth } from './services/firebase';
 import { DataService } from './services/dataService';
+import { ActivityService } from './services/activityService';
 import { MachineRow } from './types';
 import { StatusBadge } from './components/StatusBadge';
 import { PlanningSchedule } from './components/PlanningSchedule';
@@ -110,6 +111,13 @@ const App: React.FC = () => {
       setViewMode('real-maintenance');
     }
   }, [userRole, viewMode]);
+
+  // Track page views for activity monitoring
+  useEffect(() => {
+    if (user?.email && isAuthorized) {
+      ActivityService.trackPageView(user.email, viewMode);
+    }
+  }, [viewMode, user?.email, isAuthorized]);
   
   // Navigation State
   const [highlightTarget, setHighlightTarget] = useState<{client: string, fabric?: string} | null>(null);
@@ -583,6 +591,35 @@ const App: React.FC = () => {
 
       await DataService.updateMachineInMachineSS(machineId, updates);
 
+      // 7. Log activity for tracking
+      const changes: { field: string; oldValue: any; newValue: any }[] = [];
+      if (existingLog) {
+        // Track what changed
+        if (existingLog.dayProduction !== newLogEntry.dayProduction) {
+          changes.push({ field: 'Production', oldValue: existingLog.dayProduction, newValue: newLogEntry.dayProduction });
+        }
+        if (existingLog.status !== newLogEntry.status) {
+          changes.push({ field: 'Status', oldValue: existingLog.status, newValue: newLogEntry.status });
+        }
+        if (existingLog.fabric !== newLogEntry.fabric) {
+          changes.push({ field: 'Fabric', oldValue: existingLog.fabric, newValue: newLogEntry.fabric });
+        }
+        if (existingLog.client !== newLogEntry.client) {
+          changes.push({ field: 'Client', oldValue: existingLog.client, newValue: newLogEntry.client });
+        }
+      }
+      
+      await ActivityService.logActivity(
+        user?.email || '',
+        userName || user?.displayName || 'Unknown',
+        existingLog ? 'update' : 'create',
+        'machine',
+        machineId,
+        updatedMachine.machineName || `Machine #${machineId}`,
+        `${date} - ${newLogEntry.status}${newLogEntry.fabric ? ` - ${newLogEntry.fabric}` : ''}`,
+        changes
+      );
+
     } catch (error) {
       console.error("Error updating machine:", error);
       alert("Failed to update machine.");
@@ -593,7 +630,20 @@ const App: React.FC = () => {
   const handleDeleteMachine = async (id: number) => {
     if (!window.confirm(`Are you sure you want to delete Machine #${id}?`)) return;
     try {
+      // Get machine name before deleting
+      const machineToDelete = machines.find(m => m.id === id);
       await deleteDoc(doc(db, 'MachineSS', String(id)));
+      
+      // Log deletion activity
+      await ActivityService.logActivity(
+        user?.email || '',
+        userName || user?.displayName || 'Unknown',
+        'delete',
+        'machine',
+        String(id),
+        machineToDelete?.machineName || `Machine #${id}`,
+        'Machine removed from system'
+      );
     } catch (error) {
       console.error("Error deleting machine: ", error);
       alert("Failed to delete machine.");

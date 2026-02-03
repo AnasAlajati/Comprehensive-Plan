@@ -9,12 +9,15 @@ import {
   orderBy,
   serverTimestamp,
   setDoc,
-  onSnapshot
+  onSnapshot,
+  where,
+  limit
 } from 'firebase/firestore';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, firebaseConfig } from '../services/firebase';
-import { Trash2, UserPlus, Shield, ShieldAlert, Mail, User as UserIcon, Copy, Check, Key, Circle, Clock } from 'lucide-react';
+import { ActivityService, ActivityLog } from '../services/activityService';
+import { Trash2, UserPlus, Shield, ShieldAlert, Mail, User as UserIcon, Copy, Check, Key, Circle, Clock, Activity, MapPin, Edit3, Plus, X, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface UserData {
   id: string;
@@ -22,9 +25,19 @@ interface UserData {
   displayName: string;
   role: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager' | 'pending';
   createdAt: any;
-  password?: string; // Optional: Only for initial display if requested
+  password?: string;
   isOnline?: boolean;
   lastSeen?: any;
+  lastActivePage?: string;
+  lastActivePageAt?: any;
+  lastModification?: {
+    action: string;
+    entityType: string;
+    entityId: string;
+    entityName: string;
+    details?: string;
+    timestamp: any;
+  };
 }
 
 export const UserManagementPage: React.FC = () => {
@@ -37,6 +50,34 @@ export const UserManagementPage: React.FC = () => {
   const [error, setError] = useState('');
   const [createdUserCreds, setCreatedUserCreds] = useState<{email: string, password: string} | null>(null);
   const [copied, setCopied] = useState(false);
+  
+  // Activity tracking states
+  const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
+  const [userActivities, setUserActivities] = useState<Record<string, ActivityLog[]>>({});
+  const [loadingActivities, setLoadingActivities] = useState<string | null>(null);
+
+  // Load user activities when expanded
+  const loadUserActivities = async (userEmail: string) => {
+    if (userActivities[userEmail]) return; // Already loaded
+    
+    setLoadingActivities(userEmail);
+    try {
+      const activities = await ActivityService.getUserActivities(userEmail, 10);
+      setUserActivities(prev => ({ ...prev, [userEmail]: activities }));
+    } catch (err) {
+      console.error('Failed to load activities:', err);
+    }
+    setLoadingActivities(null);
+  };
+
+  const toggleUserExpansion = (userId: string, userEmail: string) => {
+    if (expandedUserId === userId) {
+      setExpandedUserId(null);
+    } else {
+      setExpandedUserId(userId);
+      loadUserActivities(userEmail);
+    }
+  };
 
   useEffect(() => {
     // Real-time listener for users (to get live online status)
@@ -315,9 +356,9 @@ export const UserManagementPage: React.FC = () => {
               <tr>
                 <th className="px-6 py-4 font-semibold text-slate-700">User</th>
                 <th className="px-6 py-4 font-semibold text-slate-700">Status</th>
+                <th className="px-6 py-4 font-semibold text-slate-700">Current Page</th>
+                <th className="px-6 py-4 font-semibold text-slate-700">Last Modification</th>
                 <th className="px-6 py-4 font-semibold text-slate-700">Role</th>
-                <th className="px-6 py-4 font-semibold text-slate-700">Password</th>
-                <th className="px-6 py-4 font-semibold text-slate-700">Added</th>
                 <th className="px-6 py-4 font-semibold text-slate-700 text-right">Actions</th>
               </tr>
             </thead>
@@ -330,7 +371,9 @@ export const UserManagementPage: React.FC = () => {
                 </tr>
               ) : (
                 users.map((user) => (
-                  <tr key={user.id} className="hover:bg-slate-50 transition-colors">
+                  <React.Fragment key={user.id}>
+                  <tr className={`hover:bg-slate-50 transition-colors cursor-pointer ${expandedUserId === user.id ? 'bg-indigo-50' : ''}`}
+                      onClick={() => toggleUserExpansion(user.id, user.email)}>
                     <td className="px-6 py-4">
                       {(() => {
                         // Helper to calculate time ago
@@ -432,7 +475,74 @@ export const UserManagementPage: React.FC = () => {
                          );
                       })()}
                     </td>
+                    {/* Current Page */}
                     <td className="px-6 py-4">
+                      {user.lastActivePage ? (
+                        <div className="flex flex-col">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 w-fit">
+                            <MapPin className="w-3 h-3" />
+                            {user.lastActivePage}
+                          </span>
+                          {user.lastActivePageAt && (
+                            <span className="text-[10px] text-slate-400 mt-1">
+                              {(() => {
+                                const ts = user.lastActivePageAt.toDate ? user.lastActivePageAt.toDate() : new Date(user.lastActivePageAt);
+                                const diffMins = Math.floor((Date.now() - ts.getTime()) / 60000);
+                                if (diffMins < 1) return 'Just now';
+                                if (diffMins < 60) return `${diffMins}m ago`;
+                                const diffHours = Math.floor(diffMins / 60);
+                                if (diffHours < 24) return `${diffHours}h ago`;
+                                return ts.toLocaleDateString();
+                              })()}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-400 italic">No activity yet</span>
+                      )}
+                    </td>
+                    {/* Last Modification */}
+                    <td className="px-6 py-4">
+                      {user.lastModification ? (
+                        <div className="flex flex-col max-w-[200px]">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold
+                              ${user.lastModification.action === 'create' ? 'bg-green-100 text-green-700' : 
+                                user.lastModification.action === 'update' ? 'bg-blue-100 text-blue-700' : 
+                                user.lastModification.action === 'delete' ? 'bg-red-100 text-red-700' : 
+                                'bg-slate-100 text-slate-600'}`}>
+                              {user.lastModification.action === 'create' ? <Plus className="w-2.5 h-2.5" /> : 
+                               user.lastModification.action === 'update' ? <Edit3 className="w-2.5 h-2.5" /> :
+                               user.lastModification.action === 'delete' ? <X className="w-2.5 h-2.5" /> : null}
+                              {user.lastModification.action}
+                            </span>
+                            <span className="text-xs text-slate-600 truncate">{user.lastModification.entityType}</span>
+                          </div>
+                          <span className="text-xs font-medium text-slate-800 truncate mt-0.5">
+                            {user.lastModification.entityName}
+                          </span>
+                          {user.lastModification.details && (
+                            <span className="text-[10px] text-slate-500 truncate">{user.lastModification.details}</span>
+                          )}
+                          {user.lastModification.timestamp && (
+                            <span className="text-[10px] text-slate-400 mt-0.5">
+                              {(() => {
+                                const ts = user.lastModification.timestamp.toDate ? user.lastModification.timestamp.toDate() : new Date(user.lastModification.timestamp);
+                                const diffMins = Math.floor((Date.now() - ts.getTime()) / 60000);
+                                if (diffMins < 1) return 'Just now';
+                                if (diffMins < 60) return `${diffMins}m ago`;
+                                const diffHours = Math.floor(diffMins / 60);
+                                if (diffHours < 24) return `${diffHours}h ago`;
+                                return ts.toLocaleDateString();
+                              })()}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-400 italic">No modifications</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
                       <select
                         value={user.role}
                         onChange={(e) => handleUpdateRole(user.id, e.target.value)}
@@ -452,28 +562,109 @@ export const UserManagementPage: React.FC = () => {
                         <option value="admin">Admin</option>
                       </select>
                     </td>
-                    <td className="px-6 py-4">
-                      {user.password ? (
-                        <span className="font-mono text-xs bg-slate-100 px-2 py-1 rounded select-all">
-                          {user.password}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-slate-400 italic">Hidden/Set by User</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 text-slate-500">
-                      {user.createdAt?.toDate ? user.createdAt.toDate().toLocaleDateString() : 'Just now'}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={() => handleDeleteUser(user.id)}
-                        className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Remove User"
-                      >
-                        <Trash2 size={18} />
-                      </button>
+                    <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => toggleUserExpansion(user.id, user.email)}
+                          className={`p-2 rounded-lg transition-colors ${expandedUserId === user.id ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'}`}
+                          title="View Activity History"
+                        >
+                          {expandedUserId === user.id ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteUser(user.id)}
+                          className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Remove User"
+                        >
+                          <Trash2 size={18} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
+                  {/* Expanded Activity Row */}
+                  {expandedUserId === user.id && (
+                    <tr className="bg-indigo-50/50">
+                      <td colSpan={6} className="px-6 py-4">
+                        <div className="bg-white rounded-lg border border-indigo-100 p-4">
+                          <h4 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                            <Activity size={16} className="text-indigo-600" />
+                            Recent Activity for {user.displayName}
+                          </h4>
+                          {loadingActivities === user.email ? (
+                            <div className="flex items-center justify-center py-4">
+                              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-600"></div>
+                              <span className="ml-2 text-sm text-slate-500">Loading activities...</span>
+                            </div>
+                          ) : userActivities[user.email]?.length > 0 ? (
+                            <div className="space-y-2 max-h-64 overflow-y-auto">
+                              {userActivities[user.email].map((activity, idx) => (
+                                <div key={activity.id || idx} className="flex items-start gap-3 p-2 rounded-lg hover:bg-slate-50 transition-colors">
+                                  <div className={`p-1.5 rounded-full ${
+                                    activity.action === 'create' ? 'bg-green-100 text-green-600' :
+                                    activity.action === 'update' ? 'bg-blue-100 text-blue-600' :
+                                    activity.action === 'delete' ? 'bg-red-100 text-red-600' :
+                                    'bg-slate-100 text-slate-600'
+                                  }`}>
+                                    {activity.action === 'create' ? <Plus size={12} /> :
+                                     activity.action === 'update' ? <Edit3 size={12} /> :
+                                     activity.action === 'delete' ? <X size={12} /> :
+                                     <Activity size={12} />}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${
+                                        activity.action === 'create' ? 'bg-green-100 text-green-700' :
+                                        activity.action === 'update' ? 'bg-blue-100 text-blue-700' :
+                                        activity.action === 'delete' ? 'bg-red-100 text-red-700' :
+                                        'bg-slate-100 text-slate-600'
+                                      }`}>
+                                        {activity.action.toUpperCase()}
+                                      </span>
+                                      <span className="text-xs text-slate-500">{activity.entityType}</span>
+                                      <span className="text-xs font-medium text-slate-800">{activity.entityName}</span>
+                                    </div>
+                                    {activity.details && (
+                                      <p className="text-xs text-slate-600 mt-0.5">{activity.details}</p>
+                                    )}
+                                    {activity.changes && activity.changes.length > 0 && (
+                                      <div className="mt-1 text-[10px] text-slate-500">
+                                        {activity.changes.map((change, cIdx) => (
+                                          <span key={cIdx} className="inline-block mr-2">
+                                            <span className="font-medium">{change.field}:</span>{' '}
+                                            <span className="line-through text-red-500">{change.oldValue || '-'}</span>{' → '}
+                                            <span className="text-green-600">{change.newValue || '-'}</span>
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <span className="text-[10px] text-slate-400 whitespace-nowrap">
+                                    {activity.timestamp?.toDate ? (() => {
+                                      const ts = activity.timestamp.toDate();
+                                      const diffMins = Math.floor((Date.now() - ts.getTime()) / 60000);
+                                      if (diffMins < 1) return 'Just now';
+                                      if (diffMins < 60) return `${diffMins}m ago`;
+                                      const diffHours = Math.floor(diffMins / 60);
+                                      if (diffHours < 24) return `${diffHours}h ago`;
+                                      const diffDays = Math.floor(diffHours / 24);
+                                      if (diffDays < 7) return `${diffDays}d ago`;
+                                      return ts.toLocaleDateString();
+                                    })() : 'Unknown'}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-center py-4 text-sm text-slate-500">
+                              <Activity className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+                              No activity recorded yet
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 ))
               )}
             </tbody>

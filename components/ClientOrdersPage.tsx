@@ -1239,7 +1239,7 @@ const MemoizedOrderRow = React.memo(({
       // Only calculate if potentially finished
       if (hasAnyPlan || (displayRemaining > 0)) return null;
 
-      const logs: { date: string; machine: string; qty: number }[] = [];
+      const logs: { date: string; machine: string; qty: number; isExternal?: boolean }[] = [];
       
       // 1. Internal Logs
       machines.forEach(m => {
@@ -1257,7 +1257,8 @@ const MemoizedOrderRow = React.memo(({
                   logs.push({
                       date: log.date,
                       machine: m.name,
-                      qty: log.dayProduction
+                      qty: log.dayProduction,
+                      isExternal: false
                   });
               }
           });
@@ -1275,8 +1276,9 @@ const MemoizedOrderRow = React.memo(({
               if (planClient === normClient && planFabric === normFabric) {
                   logs.push({
                       date: plan.endDate || plan.startDate || 'Unknown',
-                      machine: `${factory.name} (Ext)`,
-                      qty: plan.quantity || 0
+                      machine: factory.name,
+                      qty: plan.quantity || 0,
+                      isExternal: true
                   });
               }
           });
@@ -1284,13 +1286,41 @@ const MemoizedOrderRow = React.memo(({
 
       if (logs.length === 0) return null;
 
-      logs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      // Sort by date ascending to find start and end
+      logs.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-      const lastDate = logs[0].date;
+      const startDate = logs[0].date;
+      const endDate = logs[logs.length - 1].date;
+      
+      // Group by machine with production totals
+      const machineStats: Record<string, { total: number; isExternal: boolean; days: number }> = {};
+      logs.forEach(l => {
+          if (!machineStats[l.machine]) {
+              machineStats[l.machine] = { total: 0, isExternal: l.isExternal || false, days: 0 };
+          }
+          machineStats[l.machine].total += l.qty;
+          machineStats[l.machine].days += 1;
+      });
+      
+      const machineList = Object.entries(machineStats).map(([name, stats]) => ({
+          name,
+          total: stats.total,
+          isExternal: stats.isExternal,
+          days: stats.days
+      })).sort((a, b) => b.total - a.total); // Sort by most production
+      
+      const totalProduction = logs.reduce((sum, l) => sum + l.qty, 0);
       const uniqueMachines = Array.from(new Set(logs.map(l => l.machine)));
       
-      
-      return { lastDate, uniqueMachines, logs };
+      return { 
+        startDate, 
+        endDate, 
+        lastDate: formatDateShort(endDate),
+        uniqueMachines, 
+        machineList, 
+        totalProduction, 
+        logs 
+      };
   }, [machines, externalFactories, row, selectedCustomerName, statusInfo]);
 
   // --- Mobile & Status Logic Extraction ---
@@ -1642,8 +1672,8 @@ const MemoizedOrderRow = React.memo(({
                      if ((displayRemaining || 0) <= 0) {
                         return (
                             <div className="group/finished relative">
-                                <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit cursor-help">
-                                  Finished
+                                <span className="text-[10px] text-slate-500 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit cursor-help">
+                                  {finishedDetails && finishedDetails.uniqueMachines.length > 0 ? `Finished in ${finishedDetails.uniqueMachines.join(', ')}` : 'Finished'}
                                 </span>
                                 {finishedDetails && (
                                     <div className="hidden group-hover/finished:block absolute z-50 bg-white text-slate-700 text-[10px] p-2 rounded shadow-xl border border-slate-200 -mt-10 left-1/2 -translate-x-1/2 min-w-[200px]">
@@ -1894,12 +1924,12 @@ const MemoizedOrderRow = React.memo(({
 
           {/* Start Date (Auto) */}
           <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500 whitespace-nowrap">
-            {formatDateShort(statusInfo?.startDate)}
+            {formatDateShort(finishedDetails ? finishedDetails.startDate : statusInfo?.startDate)}
           </td>
 
           {/* End Date (Auto) */}
           <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500 whitespace-nowrap">
-            {formatDateShort(statusInfo?.endDate)}
+            {formatDateShort(finishedDetails ? finishedDetails.endDate : statusInfo?.endDate)}
           </td>
 
           {/* Scrap (Auto) */}
@@ -3332,6 +3362,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
     const targetClient = normalize(client.name);
 
+    // 1. Internal Machines
     machines.forEach(machine => {
         if (machine.dailyLogs && Array.isArray(machine.dailyLogs)) {
             machine.dailyLogs.forEach(log => {
@@ -3341,9 +3372,20 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             });
         }
     });
+
+    // 2. External Factories
+    externalFactories.forEach(factory => {
+        if (factory.plans && Array.isArray(factory.plans)) {
+            factory.plans.forEach((plan: any) => {
+                if (normalize(plan.client) === targetClient && plan.fabric) {
+                    fabrics.add(plan.fabric);
+                }
+            });
+        }
+    });
     
     setHistorySet(fabrics);
-  }, [selectedCustomerId, customers, machines]);
+  }, [selectedCustomerId, customers, machines, externalFactories]);
 
   // Merge Customers & Orders
   useEffect(() => {
