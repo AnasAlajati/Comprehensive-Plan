@@ -677,12 +677,15 @@ export const SampleTrackingPage: React.FC = () => {
     });
   };
 
-  // Upload Image for Work Entry
+  // Upload Image for Work Entry (and sync to linked sample)
   const handleImageUpload = async (workId: string, file: File) => {
     if (!file) return;
     
     setUploadingImageFor(workId);
     try {
+      // Find the work entry to get the linked sampleId
+      const work = dailyWork.find(w => w.id === workId);
+      
       // Compress the image
       const compressedBlob = await compressImage(file);
       
@@ -697,11 +700,19 @@ export const SampleTrackingPage: React.FC = () => {
       // Get download URL
       const imageUrl = await getDownloadURL(imageRef);
       
-      // Update Firestore document
+      // Update Firestore document for daily work
       await updateDoc(doc(db, 'sampleDailyWork', workId), {
         imageUrl,
         imagePath
       });
+      
+      // Also update the linked sample if this is a SAMPLE work type
+      if (work?.workType === 'SAMPLE' && work?.sampleId) {
+        await updateDoc(doc(db, 'samples', work.sampleId), {
+          imageUrl,
+          imagePath
+        });
+      }
       
     } catch (error) {
       console.error('Error uploading image:', error);
@@ -711,21 +722,32 @@ export const SampleTrackingPage: React.FC = () => {
     }
   };
 
-  // Delete Image from Work Entry
+  // Delete Image from Work Entry (and sync to linked sample)
   const handleDeleteImage = async (workId: string, imagePath: string) => {
     if (!window.confirm('هل تريد حذف هذه الصورة؟')) return;
     
     setUploadingImageFor(workId);
     try {
+      // Find the work entry to get the linked sampleId
+      const work = dailyWork.find(w => w.id === workId);
+      
       // Delete from Storage
       const imageRef = ref(storage, imagePath);
       await deleteObject(imageRef);
       
-      // Update Firestore document
+      // Update Firestore document for daily work
       await updateDoc(doc(db, 'sampleDailyWork', workId), {
         imageUrl: null,
         imagePath: null
       });
+      
+      // Also update the linked sample if this is a SAMPLE work type
+      if (work?.workType === 'SAMPLE' && work?.sampleId) {
+        await updateDoc(doc(db, 'samples', work.sampleId), {
+          imageUrl: null,
+          imagePath: null
+        });
+      }
     } catch (error) {
       console.error('Error deleting image:', error);
       alert('فشل حذف الصورة. حاول مرة أخرى.');
@@ -795,30 +817,24 @@ export const SampleTrackingPage: React.FC = () => {
     });
   }, [samples, searchTerm, filterStatus, filterMachine]);
 
-  // Group by Status (sorted by priority)
-  const groupedSamples = useMemo(() => {
-    const groups: Record<string, Sample[]> = {
-      'PLANNED': [],
-      'IN_PROGRESS': [], // Combined MACHINE_SETUP + QUALITY_CHECK
-      'DONE': []
-    };
+  // Sort samples: Active (PLANNED, MACHINE_SETUP, QUALITY_CHECK) first, DONE at the end
+  const sortedSamples = useMemo(() => {
+    const active: Sample[] = [];
+    const done: Sample[] = [];
     
     filteredSamples.forEach(sample => {
-      if (sample.status === 'PLANNED') {
-        groups['PLANNED'].push(sample);
-      } else if (sample.status === 'MACHINE_SETUP' || sample.status === 'QUALITY_CHECK') {
-        groups['IN_PROGRESS'].push(sample);
-      } else if (sample.status === 'DONE') {
-        groups['DONE'].push(sample);
+      if (sample.status === 'DONE') {
+        done.push(sample);
+      } else {
+        active.push(sample);
       }
     });
     
-    // Sort each group by priority (lower number = higher priority)
-    Object.keys(groups).forEach(key => {
-      groups[key].sort((a, b) => (a.priority || 999) - (b.priority || 999));
-    });
+    // Sort active by priority (lower number = higher priority)
+    active.sort((a, b) => (a.priority || 999) - (b.priority || 999));
+    done.sort((a, b) => (a.priority || 999) - (b.priority || 999));
     
-    return groups;
+    return { active, done, all: [...active, ...done] };
   }, [filteredSamples]);
 
   // Add Sample
@@ -1043,7 +1059,7 @@ export const SampleTrackingPage: React.FC = () => {
     );
   };
 
-  // Upload Image for Sample
+  // Upload Image for Sample (and sync to linked daily work entries)
   const handleSampleImageUpload = async (sampleId: string, file: File) => {
     if (!file) return;
     
@@ -1057,10 +1073,20 @@ export const SampleTrackingPage: React.FC = () => {
       await uploadBytes(imageRef, compressedBlob);
       const imageUrl = await getDownloadURL(imageRef);
       
+      // Update the sample document
       await updateDoc(doc(db, 'samples', sampleId), {
         imageUrl,
         imagePath
       });
+      
+      // Also update any linked daily work entries for this sample
+      const linkedWork = dailyWork.filter(w => w.sampleId === sampleId && w.workType === 'SAMPLE');
+      for (const work of linkedWork) {
+        await updateDoc(doc(db, 'sampleDailyWork', work.id), {
+          imageUrl,
+          imagePath
+        });
+      }
     } catch (error) {
       console.error('Error uploading sample image:', error);
       alert('فشل رفع الصورة. حاول مرة أخرى.');
@@ -1069,7 +1095,7 @@ export const SampleTrackingPage: React.FC = () => {
     }
   };
 
-  // Delete Image from Sample
+  // Delete Image from Sample (and sync to linked daily work entries)
   const handleDeleteSampleImage = async (sampleId: string, imagePath: string) => {
     if (!window.confirm('هل تريد حذف هذه الصورة؟')) return;
     
@@ -1078,10 +1104,20 @@ export const SampleTrackingPage: React.FC = () => {
       const imageRef = ref(storage, imagePath);
       await deleteObject(imageRef);
       
+      // Update the sample document
       await updateDoc(doc(db, 'samples', sampleId), {
         imageUrl: null,
         imagePath: null
       });
+      
+      // Also update any linked daily work entries for this sample
+      const linkedWork = dailyWork.filter(w => w.sampleId === sampleId && w.workType === 'SAMPLE');
+      for (const work of linkedWork) {
+        await updateDoc(doc(db, 'sampleDailyWork', work.id), {
+          imageUrl: null,
+          imagePath: null
+        });
+      }
     } catch (error) {
       console.error('Error deleting sample image:', error);
       alert('فشل حذف الصورة. حاول مرة أخرى.');
@@ -1648,91 +1684,59 @@ export const SampleTrackingPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Samples by Group */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-6 items-start">
-        {/* Planned */}
-        <div className="flex flex-col gap-2 sm:gap-4 bg-slate-50/80 rounded-xl sm:rounded-3xl p-2 sm:p-4 border border-slate-100 min-h-[200px] sm:min-h-[400px]">
-          <div className="flex items-center justify-between px-1 mb-1 sm:mb-2">
-            <div className="flex items-center gap-1.5 sm:gap-3">
-              <div className="p-1.5 sm:p-2.5 bg-white rounded-lg sm:rounded-xl shadow-sm border border-slate-100">
-                <Target size={14} className="sm:w-5 sm:h-5 text-slate-600" />
+      {/* Samples - Two sections: Active and Done */}
+      <div className="space-y-6">
+        {/* Active Samples (Not Done) */}
+        <div className="bg-white rounded-xl sm:rounded-3xl p-3 sm:p-6 border border-slate-200 shadow-sm">
+          <div className="flex items-center justify-between mb-3 sm:mb-4">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <div className="p-1.5 sm:p-2.5 bg-amber-50 rounded-lg sm:rounded-xl border border-amber-100">
+                <Play size={16} className="sm:w-5 sm:h-5 text-amber-500" fill="currentColor" fillOpacity={0.2} />
               </div>
               <div>
-                <h2 className="font-ex-bold text-sm sm:text-lg text-slate-800">مخطط</h2>
-                <p className="hidden sm:block text-xs text-slate-400 font-medium">خطط مستقبلية</p>
+                <h2 className="font-ex-bold text-base sm:text-xl text-slate-800">عينات نشطة</h2>
+                <p className="hidden sm:block text-xs text-slate-400 font-medium">مخطط وقيد التنفيذ</p>
               </div>
             </div>
-            <span className="px-1.5 sm:px-3 py-0.5 sm:py-1 bg-white text-slate-600 border border-slate-200 rounded-full text-[10px] sm:text-xs font-black shadow-sm">
-              {groupedSamples['PLANNED'].length}
+            <span className="px-2 sm:px-4 py-1 sm:py-1.5 bg-amber-50 text-amber-600 border border-amber-100 rounded-full text-xs sm:text-sm font-black">
+              {sortedSamples.active.length}
             </span>
           </div>
           
-          <div className="grid grid-cols-2 sm:grid-cols-1 gap-2 sm:gap-4">
-            {groupedSamples['PLANNED'].map(sample => renderSampleCard(sample))}
-            {groupedSamples['PLANNED'].length === 0 && (
-              <div className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center py-8 sm:py-12 text-slate-300 border-2 border-dashed border-slate-200 rounded-xl sm:rounded-2xl">
-                <Target size={24} className="sm:w-8 sm:h-8 mb-2 opacity-50" />
-                <p className="text-xs sm:text-sm font-medium">لا توجد عينات مخططة</p>
+          <div className="grid grid-cols-2 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+            {sortedSamples.active.map(sample => renderSampleCard(sample))}
+            {sortedSamples.active.length === 0 && (
+              <div className="col-span-full flex flex-col items-center justify-center py-8 sm:py-12 text-slate-300 border-2 border-dashed border-slate-200 rounded-xl sm:rounded-2xl">
+                <Play size={28} className="sm:w-10 sm:h-10 mb-2 opacity-50" />
+                <p className="text-sm sm:text-base font-medium">لا توجد عينات نشطة</p>
               </div>
             )}
           </div>
         </div>
         
-        {/* In Progress */}
-        <div className="flex flex-col gap-2 sm:gap-4 bg-amber-50/30 rounded-xl sm:rounded-3xl p-2 sm:p-4 border border-amber-100/50 min-h-[200px] sm:min-h-[400px]">
-          <div className="flex items-center justify-between px-1 mb-1 sm:mb-2">
-            <div className="flex items-center gap-1.5 sm:gap-3">
-              <div className="p-1.5 sm:p-2.5 bg-white rounded-lg sm:rounded-xl shadow-sm border border-amber-100">
-                <Play size={14} className="sm:w-5 sm:h-5 text-amber-500" fill="currentColor" fillOpacity={0.2} />
+        {/* Done Samples */}
+        {sortedSamples.done.length > 0 && (
+          <div className="bg-emerald-50/50 rounded-xl sm:rounded-3xl p-3 sm:p-6 border border-emerald-100">
+            <div className="flex items-center justify-between mb-3 sm:mb-4">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <div className="p-1.5 sm:p-2.5 bg-white rounded-lg sm:rounded-xl border border-emerald-100 shadow-sm">
+                  <CheckCircle size={16} className="sm:w-5 sm:h-5 text-emerald-500" />
+                </div>
+                <div>
+                  <h2 className="font-ex-bold text-base sm:text-xl text-emerald-900">مكتمل</h2>
+                  <p className="hidden sm:block text-xs text-emerald-600/70 font-medium">تم الانتهاء منها</p>
+                </div>
               </div>
-              <div>
-                <h2 className="font-ex-bold text-sm sm:text-lg text-amber-900">قيد التنفيذ</h2>
-                <p className="hidden sm:block text-xs text-amber-600/70 font-medium">جاري العمل عليها</p>
-              </div>
+              <span className="px-2 sm:px-4 py-1 sm:py-1.5 bg-white text-emerald-600 border border-emerald-100 rounded-full text-xs sm:text-sm font-black shadow-sm">
+                {sortedSamples.done.length}
+              </span>
             </div>
-            <span className="px-1.5 sm:px-3 py-0.5 sm:py-1 bg-white text-amber-600 border border-amber-100 rounded-full text-[10px] sm:text-xs font-black shadow-sm">
-              {groupedSamples['IN_PROGRESS'].length}
-            </span>
-          </div>
-          
-          <div className="grid grid-cols-2 sm:grid-cols-1 gap-2 sm:gap-4">
-            {groupedSamples['IN_PROGRESS'].map(sample => renderSampleCard(sample))}
-            {groupedSamples['IN_PROGRESS'].length === 0 && (
-              <div className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center py-8 sm:py-12 text-amber-300 border-2 border-dashed border-amber-200/50 rounded-xl sm:rounded-2xl">
-                <Play size={24} className="sm:w-8 sm:h-8 mb-2 opacity-50" />
-                <p className="text-xs sm:text-sm font-medium">لا توجد عينات قيد التنفيذ</p>
-              </div>
-            )}
-          </div>
-        </div>
-        
-        {/* Done */}
-        <div className="flex flex-col gap-2 sm:gap-4 bg-emerald-50/30 rounded-xl sm:rounded-3xl p-2 sm:p-4 border border-emerald-100/50 min-h-[200px] sm:min-h-[400px]">
-          <div className="flex items-center justify-between px-1 mb-1 sm:mb-2">
-            <div className="flex items-center gap-1.5 sm:gap-3">
-              <div className="p-1.5 sm:p-2.5 bg-white rounded-lg sm:rounded-xl shadow-sm border border-emerald-100">
-                <CheckCircle size={14} className="sm:w-5 sm:h-5 text-emerald-500" />
-              </div>
-              <div>
-                <h2 className="font-ex-bold text-sm sm:text-lg text-emerald-900">مكتمل</h2>
-                <p className="hidden sm:block text-xs text-emerald-600/70 font-medium">تم الانتهاء منها</p>
-              </div>
+            
+            <div className="grid grid-cols-2 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+              {sortedSamples.done.map(sample => renderSampleCard(sample))}
             </div>
-            <span className="px-1.5 sm:px-3 py-0.5 sm:py-1 bg-white text-emerald-600 border border-emerald-100 rounded-full text-[10px] sm:text-xs font-black shadow-sm">
-              {groupedSamples['DONE'].length}
-            </span>
           </div>
-          
-          <div className="grid grid-cols-2 sm:grid-cols-1 gap-2 sm:gap-4">
-            {groupedSamples['DONE'].map(sample => renderSampleCard(sample))}
-            {groupedSamples['DONE'].length === 0 && (
-              <div className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center py-8 sm:py-12 text-emerald-300 border-2 border-dashed border-emerald-200/50 rounded-xl sm:rounded-2xl">
-                <CheckCircle size={24} className="sm:w-8 sm:h-8 mb-2 opacity-50" />
-                <p className="text-xs sm:text-sm font-medium">لا توجد عينات مكتملة</p>
-              </div>
-            )}
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Add/Edit Modal */}
