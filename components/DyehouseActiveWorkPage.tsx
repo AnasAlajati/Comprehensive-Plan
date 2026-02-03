@@ -25,7 +25,8 @@ import {
   Plus,
   FlaskConical,
   Trash2,
-  Link2
+  Link2,
+  X
 } from 'lucide-react';
 
 // Status Configuration - Clean professional colors
@@ -105,6 +106,7 @@ export const DyehouseActiveWorkPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   
   const [selectedDyehouse, setSelectedDyehouse] = useState<string>('');
+  const [selectedClient, setSelectedClient] = useState<string>(''); // NEW: Client filter
   const [filterStatus, setFilterStatus] = useState<DyehouseStatusType | 'All'>('All');
   const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
   const [expandedMachineQueue, setExpandedMachineQueue] = useState<string | null>(null);
@@ -282,9 +284,29 @@ export const DyehouseActiveWorkPage: React.FC = () => {
     return { type: null, message: '', days: 0 };
   };
 
+  // Get unique clients for filter dropdown
+  const uniqueClients = useMemo(() => {
+    const clientsMap = new Map<string, string>();
+    items.forEach(item => {
+      if (item.clientId && item.clientName) {
+        clientsMap.set(item.clientId, item.clientName);
+      }
+    });
+    return Array.from(clientsMap.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [items]);
+
   const filteredItems = useMemo(() => {
     return items.filter(item => {
-      if (!selectedDyehouse || item.dyehouse !== selectedDyehouse) return false;
+      // If client is selected, show across all dyehouses
+      if (selectedClient) {
+        if (item.clientId !== selectedClient) return false;
+      } else {
+        // If no client selected, filter by dyehouse
+        if (!selectedDyehouse || item.dyehouse !== selectedDyehouse) return false;
+      }
+      
       if (filterStatus !== 'All' && item.dyehouseStatus !== filterStatus) return false;
       
       if (searchTerm) {
@@ -300,14 +322,17 @@ export const DyehouseActiveWorkPage: React.FC = () => {
       
       return true;
     });
-  }, [items, selectedDyehouse, filterStatus, searchTerm]);
+  }, [items, selectedDyehouse, selectedClient, filterStatus, searchTerm]);
 
   // Group items by fabric for multi-color display
   const fabricGroups = useMemo(() => {
     const groups: Record<string, FabricGroup> = {};
     
     filteredItems.forEach(item => {
-      const key = `${item.clientId}-${item.fabric}-${item.orderId}`;
+      // When filtering by client, include dyehouse in the key to separate by dyehouse
+      const key = selectedClient 
+        ? `${item.clientId}-${item.fabric}-${item.orderId}-${item.dyehouse}`
+        : `${item.clientId}-${item.fabric}-${item.orderId}`;
       
       if (!groups[key]) {
         groups[key] = {
@@ -337,8 +362,16 @@ export const DyehouseActiveWorkPage: React.FC = () => {
       }
     });
     
-    return Object.values(groups).sort((a, b) => a.clientName.localeCompare(b.clientName));
-  }, [filteredItems]);
+    return Object.values(groups).sort((a, b) => {
+      // When filtering by client, sort by dyehouse first
+      if (selectedClient) {
+        const dyeA = a.items[0]?.dyehouse || '';
+        const dyeB = b.items[0]?.dyehouse || '';
+        if (dyeA !== dyeB) return dyeA.localeCompare(dyeB);
+      }
+      return a.clientName.localeCompare(b.clientName);
+    });
+  }, [filteredItems, selectedClient]);
 
   const statusGroups = useMemo(() => {
     const groups: Record<string, ActiveWorkItem[]> = {};
@@ -943,12 +976,48 @@ export const DyehouseActiveWorkPage: React.FC = () => {
           </div>
           
           <div className="flex items-center gap-3">
+            {/* Client Filter */}
+            <div className="relative">
+              <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+              <select
+                value={selectedClient}
+                onChange={(e) => {
+                  setSelectedClient(e.target.value);
+                  if (e.target.value) {
+                    setSelectedDyehouse(''); // Clear dyehouse when client is selected
+                  }
+                }}
+                className={`pl-10 pr-8 py-2 border rounded-lg shadow-sm font-medium appearance-none cursor-pointer min-w-[180px] focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm ${
+                  selectedClient 
+                    ? 'bg-indigo-50 border-indigo-300 text-indigo-700' 
+                    : 'bg-white border-slate-200 text-slate-700'
+                }`}
+              >
+                <option value="">كل العملاء</option>
+                {uniqueClients.map(client => (
+                  <option key={client.id} value={client.id}>{client.name}</option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
+            </div>
+            
+            {/* Dyehouse Filter */}
             <div className="relative">
               <Factory className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
               <select
                 value={selectedDyehouse}
-                onChange={(e) => setSelectedDyehouse(e.target.value)}
-                className="pl-10 pr-8 py-2 border border-slate-200 rounded-lg bg-white shadow-sm font-medium text-slate-700 appearance-none cursor-pointer min-w-[180px] focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
+                onChange={(e) => {
+                  setSelectedDyehouse(e.target.value);
+                  if (e.target.value) {
+                    setSelectedClient(''); // Clear client when dyehouse is selected
+                  }
+                }}
+                disabled={!!selectedClient}
+                className={`pl-10 pr-8 py-2 border rounded-lg shadow-sm font-medium appearance-none cursor-pointer min-w-[180px] focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm ${
+                  selectedClient 
+                    ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed' 
+                    : 'bg-white border-slate-200 text-slate-700'
+                }`}
               >
                 <option value="">اختر المصبغة</option>
                 {allDyehouses.map(dh => (
@@ -961,7 +1030,7 @@ export const DyehouseActiveWorkPage: React.FC = () => {
         </div>
       </div>
 
-      {selectedDyehouse ? (
+      {(selectedDyehouse || selectedClient) ? (
         <>
           {/* Stats */}
           <div className="px-6 py-3 bg-white border-b border-slate-200">
@@ -1035,6 +1104,22 @@ export const DyehouseActiveWorkPage: React.FC = () => {
                 {statusGroups['UNSET']?.length} بدون وضع
               </span>
             )}
+            
+            {/* Show selected client indicator */}
+            {selectedClient && (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded-lg border border-indigo-200">
+                <User size={14} />
+                <span className="text-sm font-medium">
+                  {uniqueClients.find(c => c.id === selectedClient)?.name} - كل المصابغ
+                </span>
+                <button 
+                  onClick={() => setSelectedClient('')}
+                  className="p-0.5 hover:bg-indigo-200 rounded transition-colors"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Cards Grid */}
@@ -1042,20 +1127,33 @@ export const DyehouseActiveWorkPage: React.FC = () => {
             {fabricGroups.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-slate-400">
                 <Package size={48} strokeWidth={1} />
-                <p className="mt-4 text-lg">لا توجد أصناف في هذه المصبغة</p>
+                <p className="mt-4 text-lg">
+                  {selectedClient ? 'لا توجد أصناف لهذا العميل' : 'لا توجد أصناف في هذه المصبغة'}
+                </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
                 {fabricGroups.map(group => {
                   const hasMultipleColors = group.items.length > 1;
+                  // Get dyehouse name for this group (when filtering by client)
+                  const groupDyehouse = group.items[0]?.dyehouse;
                   
                   return (
                     <div 
-                      key={`${group.clientId}-${group.fabric}`}
+                      key={`${group.clientId}-${group.fabric}-${groupDyehouse}`}
                       className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden"
                     >
                       {/* Card Header */}
                       <div className="px-4 py-3 bg-gradient-to-r from-indigo-50 via-white to-white border-b border-slate-100">
+                        {/* Show Dyehouse badge when filtering by client */}
+                        {selectedClient && groupDyehouse && (
+                          <div className="mb-2 flex items-center gap-1.5">
+                            <Factory size={12} className="text-slate-400" />
+                            <span className="text-xs font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                              {groupDyehouse}
+                            </span>
+                          </div>
+                        )}
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             {/* Machine Badge - Prominent */}
