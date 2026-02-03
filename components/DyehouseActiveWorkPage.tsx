@@ -674,6 +674,18 @@ export const DyehouseActiveWorkPage: React.FC = () => {
     const activeIndex = getStatusIndex(item.dyehouseStatus);
     const historyMap = new Map((item.dyehouseHistory || []).map(h => [h.status, h]));
     
+    // Get the most recent history entry for "last modified by" info
+    const lastHistoryEntry = (item.dyehouseHistory || [])
+      .filter(h => h.updatedBy || h.modifiedBy)
+      .sort((a, b) => {
+        const dateA = new Date(a.lastModified || a.enteredAt || a.date);
+        const dateB = new Date(b.lastModified || b.enteredAt || b.date);
+        return dateB.getTime() - dateA.getTime();
+      })[0];
+    
+    const lastModifiedBy = lastHistoryEntry?.modifiedBy || lastHistoryEntry?.updatedBy;
+    const lastModifiedDate = lastHistoryEntry?.lastModified || lastHistoryEntry?.enteredAt;
+    
     return (
       <div className="py-4 px-3">
         {/* Progress Line Background */}
@@ -741,6 +753,21 @@ export const DyehouseActiveWorkPage: React.FC = () => {
             })}
           </div>
         </div>
+        
+        {/* Last Modified By Info */}
+        {lastModifiedBy && (
+          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-center gap-2 text-[9px] text-slate-400">
+            <User size={10} />
+            <span>آخر تعديل:</span>
+            <span className="font-medium text-slate-500">{lastModifiedBy.split('@')[0]}</span>
+            {lastModifiedDate && (
+              <>
+                <span>•</span>
+                <span className="font-mono">{formatDate(lastModifiedDate)}</span>
+              </>
+            )}
+          </div>
+        )}
       </div>
     );
   };
