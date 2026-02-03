@@ -1112,7 +1112,9 @@ const MemoizedOrderRow = React.memo(({
   onOpenSentModal,
   onOpenFabricDyehouse,
   onOpenColorApproval,
-  onOpenDyehouseTracking
+  onOpenDyehouseTracking,
+  visibleColumns,
+  onToggleColumnVisibility
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -1143,9 +1145,12 @@ const MemoizedOrderRow = React.memo(({
   onOpenFabricDyehouse: (order: OrderRow) => void;
   onOpenColorApproval: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
   onOpenDyehouseTracking: (data: { isOpen: boolean; orderId: string; batchIdx: number; batch: DyeingBatch }) => void;
+  visibleColumns: Record<string, boolean>;
+  onToggleColumnVisibility: (columnId: string) => void;
 }) => {
   const [showMachineDetails, setShowMachineDetails] = useState<{ capacity: number; batches: any[] } | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
   const refCode = row.material ? `${selectedCustomerName}-${row.material}` : '-';
   const hasActive = statusInfo && statusInfo.active.length > 0;
   const displayRemaining = hasActive ? statusInfo.remaining : row.remainingQty;
@@ -2165,22 +2170,106 @@ const MemoizedOrderRow = React.memo(({
               <table className="w-full text-xs" dir="rtl">
                 <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                   <tr>
-                    <th className="px-3 py-2 text-right min-w-[120px]">اللون</th>
-                    <th className="px-3 py-2 text-right w-24">موافقة اللون</th>
-                    <th className="px-3 py-2 text-right w-24">رقم الازن</th>
-                    <th className="px-3 py-2 text-right w-32">تاريخ التشكيل</th>
-                    <th className="px-3 py-2 text-center w-20 text-[9px] text-slate-400">ايام بعد التشكيل</th>
-                    <th className="px-3 py-2 text-right w-32">تاريخ الارسال</th>
-                    <th className="px-3 py-2 text-center w-20 text-[9px] text-slate-400">ايام بعد الارسال</th>
-                    <th className="px-3 py-2 text-right w-32">المصبغة</th>
-                    <th className="px-3 py-2 text-center w-20" title="Customer Demand">مطلوب</th>
-                    <th className="px-3 py-2 text-center w-24" title="Vessel Capacity">ماكنة الصباغة</th>
-                    <th className="px-3 py-2 text-center w-16">اكسسوار</th>
-                    <th className="px-3 py-2 text-center w-20" title="Sent">مرسل</th>
-                    <th className="px-3 py-2 text-center w-24" title="Click to add receive">مستلم</th>
-                    <th className="px-3 py-2 text-center w-20">الحالة</th>
-                    <th className="px-3 py-2 text-center w-36">وضع جوا المصبغة</th>
-                    <th className="px-3 py-2 text-right">ملاحظات</th>
+                    <th className="px-3 py-2 text-right min-w-[120px] relative">
+                      <div className="flex items-center gap-2">
+                        <span>اللون</span>
+                        {/* Column Visibility Toggle */}
+                        <div className="relative">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowColumnPicker(!showColumnPicker);
+                            }}
+                            className="w-4 h-4 rounded bg-slate-200 hover:bg-indigo-100 hover:text-indigo-600 flex items-center justify-center transition-colors"
+                            title="إخفاء/إظهار الأعمدة"
+                          >
+                            <Eye size={10} />
+                          </button>
+                          
+                          {/* Column Picker Dropdown */}
+                          {showColumnPicker && (
+                            <div 
+                              className="fixed right-4 top-1/4 z-[9999] bg-white border border-slate-200 rounded-lg shadow-xl p-3 min-w-[200px] max-h-[400px] overflow-y-auto"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div className="flex items-center justify-between mb-2 border-b border-slate-100 pb-2">
+                                <span className="text-xs font-bold text-slate-700">إخفاء/إظهار الأعمدة</span>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => {
+                                      // Reset all columns to visible
+                                      const resetState: Record<string, boolean> = {};
+                                      ['colorApproval', 'dispatchNumber', 'formationDate', 'daysAfterFormation', 'dateSent', 'daysAfterSent', 'dyehouse', 'quantity', 'machine', 'accessory', 'sent', 'received', 'remaining', 'status', 'dyehouseStatus', 'notes'].forEach(id => {
+                                        resetState[id] = true;
+                                      });
+                                      onToggleColumnVisibility('__RESET__');
+                                    }}
+                                    className="text-[9px] text-blue-500 hover:text-blue-700 hover:underline"
+                                    title="إظهار الكل"
+                                  >
+                                    إظهار الكل
+                                  </button>
+                                  <button
+                                    onClick={() => setShowColumnPicker(false)}
+                                    className="text-slate-400 hover:text-slate-600"
+                                    title="إغلاق"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              </div>
+                              {[
+                                { id: 'colorApproval', label: 'موافقة اللون' },
+                                { id: 'dispatchNumber', label: 'رقم الازن' },
+                                { id: 'formationDate', label: 'تاريخ التشكيل' },
+                                { id: 'daysAfterFormation', label: 'ايام بعد التشكيل' },
+                                { id: 'dateSent', label: 'تاريخ الارسال' },
+                                { id: 'daysAfterSent', label: 'ايام بعد الارسال' },
+                                { id: 'dyehouse', label: 'المصبغة' },
+                                { id: 'quantity', label: 'مطلوب' },
+                                { id: 'machine', label: 'ماكنة الصباغة' },
+                                { id: 'accessory', label: 'اكسسوار' },
+                                { id: 'sent', label: 'مرسل' },
+                                { id: 'received', label: 'مستلم' },
+                                { id: 'remaining', label: 'متبقي' },
+                                { id: 'status', label: 'الحالة' },
+                                { id: 'dyehouseStatus', label: 'وضع جوا المصبغة' },
+                                { id: 'notes', label: 'ملاحظات' },
+                              ].map((col) => (
+                                <label
+                                  key={col.id}
+                                  className="flex items-center gap-2 py-1 px-1 hover:bg-slate-50 rounded cursor-pointer text-[11px]"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={visibleColumns[col.id] !== false}
+                                    onChange={() => onToggleColumnVisibility(col.id)}
+                                    className="w-3 h-3 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                  />
+                                  <span className="text-slate-700">{col.label}</span>
+                                </label>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </th>
+                    {visibleColumns['colorApproval'] !== false && <th className="px-3 py-2 text-right w-24">موافقة اللون</th>}
+                    {visibleColumns['dispatchNumber'] !== false && <th className="px-3 py-2 text-right w-24">رقم الازن</th>}
+                    {visibleColumns['formationDate'] !== false && <th className="px-3 py-2 text-right w-32">تاريخ التشكيل</th>}
+                    {visibleColumns['daysAfterFormation'] !== false && <th className="px-3 py-2 text-center w-20 text-[9px] text-slate-400">ايام بعد التشكيل</th>}
+                    {visibleColumns['dateSent'] !== false && <th className="px-3 py-2 text-right w-32">تاريخ الارسال</th>}
+                    {visibleColumns['daysAfterSent'] !== false && <th className="px-3 py-2 text-center w-20 text-[9px] text-slate-400">ايام بعد الارسال</th>}
+                    {visibleColumns['dyehouse'] !== false && <th className="px-3 py-2 text-right w-32">المصبغة</th>}
+                    {visibleColumns['quantity'] !== false && <th className="px-3 py-2 text-center w-20" title="Customer Demand">مطلوب</th>}
+                    {visibleColumns['machine'] !== false && <th className="px-3 py-2 text-center w-24" title="Vessel Capacity">ماكنة الصباغة</th>}
+                    {visibleColumns['accessory'] !== false && <th className="px-3 py-2 text-center w-16">اكسسوار</th>}
+                    {visibleColumns['sent'] !== false && <th className="px-3 py-2 text-center w-20" title="Sent">مرسل</th>}
+                    {visibleColumns['received'] !== false && <th className="px-3 py-2 text-center w-24" title="Click to add receive">مستلم</th>}
+                    {visibleColumns['remaining'] !== false && <th className="px-3 py-2 text-center w-20" title="Sent - Received">متبقي</th>}
+                    {visibleColumns['status'] !== false && <th className="px-3 py-2 text-center w-20">الحالة</th>}
+                    {visibleColumns['dyehouseStatus'] !== false && <th className="px-3 py-2 text-center w-36">وضع جوا المصبغة</th>}
+                    {visibleColumns['notes'] !== false && <th className="px-3 py-2 text-right">ملاحظات</th>}
                     <th className="px-3 py-2 w-10"></th>
                   </tr>
                 </thead>
@@ -2246,6 +2335,7 @@ const MemoizedOrderRow = React.memo(({
                             />
                         </div>
                       </td>
+                      {visibleColumns['colorApproval'] !== false && (
                       <td className="p-0 relative bg-transparent">
                         <button
                              className="w-full h-full min-h-[48px] cursor-pointer hover:bg-indigo-50 transition-colors flex flex-col items-center justify-center px-1 py-1 relative group/approval"
@@ -2269,6 +2359,8 @@ const MemoizedOrderRow = React.memo(({
                              <Plus size={8} className="absolute left-1 top-1 text-slate-300 opacity-0 group-hover/approval:opacity-100 transition-opacity" />
                         </button>
                       </td>
+                      )}
+                      {visibleColumns['dispatchNumber'] !== false && (
                       <td className="p-0">
                         <input
                           type="text"
@@ -2282,10 +2374,12 @@ const MemoizedOrderRow = React.memo(({
                           placeholder="رقم..."
                         />
                       </td>
+                      )}
+                      {visibleColumns['formationDate'] !== false && (
                       <td className="p-0 relative group/date">
                         <input
                             type="date"
-                            className="w-full h-full px-2 py-2 bg-transparent outline-none focus:bg-blue-50 text-center text-xs font-mono text-slate-700 cursor-pointer"
+                            className="w-full h-full px-2 py-2 bg-transparent outline-none focus:bg-blue-50 text-center text-[10px] font-mono text-slate-700 cursor-pointer"
                             value={batch.formationDate || ''}
                             onChange={(e) => {
                                 const newPlan = [...(row.dyeingPlan || [])];
@@ -2294,17 +2388,21 @@ const MemoizedOrderRow = React.memo(({
                             }}
                         />
                       </td>
+                      )}
+                      {visibleColumns['daysAfterFormation'] !== false && (
                       <td className="p-0 text-center align-middle">
                         {batch.formationDate && (
-                          <span className="text-[10px] text-slate-400 font-mono">
+                          <span className="text-xs font-bold text-black font-mono">
                             {Math.floor((new Date().getTime() - new Date(batch.formationDate).getTime()) / (1000 * 60 * 60 * 24))}
                           </span>
                         )}
                       </td>
+                      )}
+                      {visibleColumns['dateSent'] !== false && (
                       <td className="p-0 relative group/date">
                         <input
                             type="date"
-                            className="w-full h-full px-2 py-2 bg-transparent outline-none focus:bg-blue-50 text-center text-xs font-mono text-slate-700 cursor-pointer"
+                            className="w-full h-full px-2 py-2 bg-transparent outline-none focus:bg-blue-50 text-center text-[10px] font-mono text-slate-700 cursor-pointer"
                             value={batch.dateSent || ''}
                             onChange={(e) => {
                                 const newPlan = [...(row.dyeingPlan || [])];
@@ -2313,13 +2411,17 @@ const MemoizedOrderRow = React.memo(({
                             }}
                         />
                       </td>
+                      )}
+                      {visibleColumns['daysAfterSent'] !== false && (
                       <td className="p-0 text-center align-middle">
                         {batch.dateSent && (
-                          <span className="text-[10px] text-slate-400 font-mono">
+                          <span className="text-xs font-bold text-black font-mono">
                             {Math.floor((new Date().getTime() - new Date(batch.dateSent).getTime()) / (1000 * 60 * 60 * 24))}
                           </span>
                         )}
                       </td>
+                      )}
+                      {visibleColumns['dyehouse'] !== false && (
                       <td className="p-0">
                         {(() => {
                            const effectiveDyehouse = batch.dyehouse || (batch.colorApprovals && batch.colorApprovals.length > 0 ? batch.colorApprovals[0]?.dyehouseName : '') || row.dyehouse || '';
@@ -2376,7 +2478,9 @@ const MemoizedOrderRow = React.memo(({
                            );
                         })()}
                       </td>
+                      )}
                       {/* Required (Customer Demand) */}
+                      {visibleColumns['quantity'] !== false && (
                       <td className="p-0">
                         <input
                           type="number"
@@ -2391,7 +2495,9 @@ const MemoizedOrderRow = React.memo(({
                           title="Customer Demand"
                         />
                       </td>
+                      )}
                       {/* Vessel (Planned Capacity) -> Machine Selection */}
+                      {visibleColumns['machine'] !== false && (
                       <td className="p-0 relative">
                         {(() => {
                             const selectedDyehouse = dyehouses.find(d => d.name === batch.dyehouse);
@@ -2441,7 +2547,9 @@ const MemoizedOrderRow = React.memo(({
                             );
                         })()}
                       </td>
+                      )}
                       {/* Accessory Type */}
+                      {visibleColumns['accessory'] !== false && (
                       <td className="p-0">
                         <input
                           type="text"
@@ -2456,7 +2564,9 @@ const MemoizedOrderRow = React.memo(({
                           title="Accessory Type"
                         />
                       </td>
+                      )}
                       {/* مرسل - Sent (Clickable for modal) */}
+                      {visibleColumns['sent'] !== false && (
                       <td className="p-0 relative">
                         {(() => {
                            const events = batch.sentEvents || [];
@@ -2493,7 +2603,9 @@ const MemoizedOrderRow = React.memo(({
                            );
                         })()}
                       </td>
+                      )}
                       {/* مستلم - Received (Clickable for modal) */}
+                      {visibleColumns['received'] !== false && (
                       <td className="p-0 relative">
                         {(() => {
                           const events = batch.receiveEvents || [];
@@ -2516,12 +2628,9 @@ const MemoizedOrderRow = React.memo(({
                               title="Click to add/view receives"
                             >
                               <div className="flex flex-col items-center justify-center min-h-[40px]">
-                                <div className="flex items-baseline gap-1">
-                                    <span className={`font-mono font-bold text-xs ${recRaw > 0 ? 'text-emerald-600' : 'text-slate-300'}`}>
-                                      {recRaw > 0 ? Math.round(recRaw) : '-'}
-                                    </span>
-                                    {remainingRaw > 0 && sentRaw > 0 && <span className="text-[8px] text-amber-500 font-bold">-{Math.round(remainingRaw)}</span>}
-                                </div>
+                                <span className={`font-mono font-bold text-xs ${recRaw > 0 ? 'text-emerald-600' : 'text-slate-300'}`}>
+                                  {recRaw > 0 ? Math.round(recRaw) : '-'}
+                                </span>
 
                                 {recAcc > 0 && (
                                     <div className="flex items-center gap-0.5 bg-emerald-100 px-1 rounded-sm mt-0.5 border border-emerald-200">
@@ -2529,18 +2638,45 @@ const MemoizedOrderRow = React.memo(({
                                         <span className="text-[7px] text-emerald-500 uppercase">Acc</span>
                                     </div>
                                 )}
-
-                                {events.length > 1 && (
-                                  <span className="text-[7px] text-slate-400 mt-0.5">
-                                    {events.length} loads
-                                  </span>
-                                )}
                               </div>
                               <Plus size={8} className="absolute left-1 top-1 text-slate-300 opacity-0 group-hover/receive:opacity-100 transition-opacity" />
                             </button>
                           );
                         })()}
                       </td>
+                      )}
+                      {/* متبقي - Remaining */}
+                      {visibleColumns['remaining'] !== false && (
+                      <td className="p-0 relative">
+                        {(() => {
+                           const events = batch.receiveEvents || [];
+                           const sentEvents = batch.sentEvents || [];
+                           const recRaw = events.reduce((s, e) => s + (Number(e.quantityRaw) || 0), 0) + (Number(batch.receivedQuantity) || 0);
+                           const recAcc = events.reduce((s, e) => s + (Number(e.quantityAccessory) || 0), 0);
+
+                           const sentRaw = sentEvents.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
+                           const sentAcc = sentEvents.reduce((s, e) => s + (Number(e.accessorySent) || 0), 0) + (Number(batch.quantitySentAccessory) || 0);
+                           
+                           const remainingRaw = Math.max(0, sentRaw - recRaw);
+                           const remainingAcc = Math.max(0, sentAcc - recAcc);
+
+                           return (
+                              <div className="w-full h-full flex flex-col items-center justify-center min-h-[40px] px-1 py-1">
+                                  <span className={`font-mono font-bold text-xs ${remainingRaw > 0 ? 'text-amber-600' : 'text-slate-300'}`}>
+                                      {remainingRaw > 0 ? Math.round(remainingRaw) : '-'}
+                                  </span>
+                                  {remainingAcc > 0 && (
+                                    <div className="flex items-center gap-0.5 bg-amber-50 px-1 rounded-sm mt-0.5 border border-amber-200">
+                                        <span className="text-[9px] font-bold text-amber-700">+{remainingAcc}</span>
+                                        <span className="text-[7px] text-amber-500 uppercase">Acc</span>
+                                    </div>
+                                  )}
+                              </div>
+                           );
+                        })()}
+                      </td>
+                      )}
+                      {visibleColumns['status'] !== false && (
                       <td className="p-0 text-center align-middle relative group/status">
                         {(() => {
                            const events = batch.receiveEvents || [];
@@ -2604,8 +2740,10 @@ const MemoizedOrderRow = React.memo(({
                            );
                         })()}
                       </td>
+                      )}
 
                       {/* Dyehouse Internal Status (Placement: After Status, Before Notes) */}
+                      {visibleColumns['dyehouseStatus'] !== false && (
                       <td className="p-1 min-w-[120px]">
                         <div className="flex flex-col gap-1 w-full group/tracker">
                             <button
@@ -2651,7 +2789,9 @@ const MemoizedOrderRow = React.memo(({
                             )}
                         </div>
                       </td>
+                      )}
 
+                      {visibleColumns['notes'] !== false && (
                       <td className="p-0">
                         <input
                           type="text"
@@ -2665,6 +2805,7 @@ const MemoizedOrderRow = React.memo(({
                           placeholder="ملاحظات..."
                         />
                       </td>
+                      )}
                       <td className="p-0 h-full">
                         <div className="flex items-center justify-center h-full gap-0.5">
                             {/* Link Button */}
@@ -2883,6 +3024,34 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   // const [showRemainingWork, setShowRemainingWork] = useState(false); // Removed
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
   const [externalFactories, setExternalFactories] = useState<any[]>([]);
+
+  // Column Visibility State (localStorage for user-only persistence)
+  const [manageColorsVisibleColumns, setManageColorsVisibleColumns] = useState<Record<string, boolean>>(() => {
+    try {
+      const saved = localStorage.getItem('manageColorsVisibleColumns');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  // Persist Column Visibility
+  useEffect(() => {
+    localStorage.setItem('manageColorsVisibleColumns', JSON.stringify(manageColorsVisibleColumns));
+  }, [manageColorsVisibleColumns]);
+
+  // Toggle column visibility handler
+  const handleToggleColumnVisibility = (columnId: string) => {
+    if (columnId === '__RESET__') {
+      // Reset all columns to visible
+      setManageColorsVisibleColumns({});
+      return;
+    }
+    setManageColorsVisibleColumns(prev => ({
+      ...prev,
+      [columnId]: prev[columnId] === false ? true : false
+    }));
+  };
   
   // Seasons State
   const [seasons, setSeasons] = useState<Season[]>([]);
@@ -4508,6 +4677,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       "اكسسوار",
       "مرسل", 
       "مستلم", 
+      "متبقي",
       "الحالة", 
       "ملاحظات"
     ];
@@ -4557,28 +4727,37 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                font: { ...cellStyle.font, color: { rgb: textColor } }
            };
 
-           // Color Approval Flattening
+           // Color Approval - Only show selected value, no dates
            let approvalText = batch.colorApproval || '-';
-           if (batch.colorApprovals && batch.colorApprovals.length > 0) {
-             const history = batch.colorApprovals.map(a => 
-               `[${a.status === 'approved' ? 'OK' : 'X'}] ${new Date(a.date).toLocaleDateString('ar-EG')}`
-             ).join('\n');
-             approvalText = `${approvalText}\n${history}`;
-           }
 
-           // Sent Flattening
-           let sentText = String((batch.quantitySent || 0) + (batch.quantitySentAccessory || 0));
-           if (batch.sentEvents && batch.sentEvents.length > 0) {
-              const details = batch.sentEvents.map(e => `${e.quantity} (${new Date(e.date).toLocaleDateString('ar-EG')})`).join('\n');
-              sentText = `${sentText}\n---\n${details}`;
-           }
+           // Format with max 2 decimals
+           const formatNum = (n: number) => Number.isInteger(n) ? String(n) : n.toFixed(2);
 
-           // Received Flattening
-           let recvText = String(batch.receivedQuantity || 0);
-           if (batch.receiveEvents && batch.receiveEvents.length > 0) {
-              const details = batch.receiveEvents.map(e => `${(e.quantityRaw||0) + (e.quantityAccessory||0)} (${new Date(e.date).toLocaleDateString('ar-EG')})`).join('\n');
-              recvText = `${recvText}\n---\n${details}`;
-           }
+           // Sent - Only show total, no dates, max 2 decimals
+           const sentTotal = (batch.quantitySent || 0) + (batch.quantitySentAccessory || 0) + 
+             (batch.sentEvents || []).reduce((s, e) => s + (Number(e.quantity) || 0) + (Number(e.accessorySent) || 0), 0);
+           let sentText = formatNum(sentTotal);
+
+           // Received - Only show total, no dates, max 2 decimals
+           const recvTotal = (batch.receivedQuantity || 0) + 
+             (batch.receiveEvents || []).reduce((s, e) => s + (Number(e.quantityRaw) || 0) + (Number(e.quantityAccessory) || 0), 0);
+           let recvText = formatNum(recvTotal);
+
+           // Calculate Remaining for Export - limit to 2 decimal places
+           const sEvents = batch.sentEvents || [];
+           const rEvents = batch.receiveEvents || [];
+           const totalSentRaw = sEvents.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
+           const totalSentAcc = sEvents.reduce((s, e) => s + (Number(e.accessorySent) || 0), 0) + (Number(batch.quantitySentAccessory) || 0);
+           
+           const totalRecvRaw = rEvents.reduce((s, e) => s + (Number(e.quantityRaw) || 0), 0) + (Number(batch.receivedQuantity) || 0);
+           const totalRecvAcc = rEvents.reduce((s, e) => s + (Number(e.quantityAccessory) || 0), 0);
+
+           const remRaw = Math.max(0, totalSentRaw - totalRecvRaw);
+           const remAcc = Math.max(0, totalSentAcc - totalRecvAcc);
+           
+           let remText = formatNum(remRaw);
+           if (remAcc > 0) remText += ` (+${formatNum(remAcc)} Acc)`;
+
 
            const row = [
              { v: batch.color || '', s: colorCellStyle }, // Use colored style
@@ -4592,6 +4771,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
              { v: batch.accessoryType ? `${batch.accessoryType}\n${batch.accessoryQty||0}` : '-', s: cellStyle },
              { v: sentText, s: cellStyle },
              { v: recvText, s: cellStyle },
+             { v: remText, s: cellStyle },
              { v: batch.status || 'Pending', s: cellStyle },
              { v: batch.notes || '', s: cellStyle }
            ];
@@ -5249,6 +5429,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                 setNewSent({ date: new Date().toISOString().split('T')[0], quantity: 0, notes: '' });
                               }}
                               onOpenDyehouseTracking={(data) => setDyehouseTrackingModal(data)}
+                              visibleColumns={manageColorsVisibleColumns}
+                              onToggleColumnVisibility={handleToggleColumnVisibility}
                             />
                           );
                         })}

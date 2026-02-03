@@ -955,51 +955,62 @@ export const SampleTrackingPage: React.FC = () => {
   // Render Status Timeline
   const renderStatusTimeline = (sample: Sample) => {
     const activeIndex = getStatusIndex(sample.status);
-    const historyMap = new Map((sample.statusHistory || []).map(h => [h.status, h]));
     
     return (
-      <div className="flex items-center gap-1">
-        {STATUS_ORDER.map((status, index) => {
-          const config = STATUS_CONFIG[status];
-          const Icon = config.icon;
-          const isActive = index === activeIndex;
-          const isCompleted = index < activeIndex;
-          const historyEntry = historyMap.get(status);
-          
-          return (
-            <React.Fragment key={status}>
+      <div className="relative py-2 mt-1">
+        {/* Track Line */}
+        <div className="absolute top-1/2 left-2 right-2 h-1 bg-slate-100 -translate-y-1/2 rounded-full z-0"></div>
+        
+        {/* Progress Line */}
+        <div 
+            className="absolute top-1/2 right-2 h-1 bg-emerald-400 -translate-y-1/2 rounded-full z-0 transition-all duration-500 ease-out"
+            style={{ 
+              width: `calc(${(activeIndex / (STATUS_ORDER.length - 1)) * 100}% - 16px)`
+            }}
+        ></div>
+
+        <div className="relative z-10 flex justify-between w-full px-1">
+          {STATUS_ORDER.map((status, index) => {
+            const isActive = index === activeIndex;
+            const isCompleted = index < activeIndex;
+            const config = STATUS_CONFIG[status];
+            const Icon = config.icon;
+            
+            return (
               <button
-                onClick={() => handleStatusChange(sample, status)}
+                key={status}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleStatusChange(sample, status);
+                }}
                 disabled={updatingId === sample.id}
-                className={`relative flex flex-col items-center group transition-all ${
-                  isActive ? 'scale-110' : 'hover:scale-105'
-                }`}
-                title={`${config.labelAr} / ${config.label}${historyEntry ? ` - ${formatDate(historyEntry.date)}` : ''}`}
+                className="group flex flex-col items-center relative"
+                title={config.labelAr}
               >
                 <div className={`
-                  w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all
-                  ${isActive ? `${config.bg} ${config.border} ${config.color} ring-2 ring-offset-1 ring-${config.color.split('-')[1]}-300` : 
-                    isCompleted ? `bg-emerald-100 border-emerald-400 text-emerald-600` : 
-                    'bg-slate-50 border-slate-200 text-slate-400'}
+                  w-7 h-7 rounded-full flex items-center justify-center transition-all duration-300 border-[3px]
+                  ${isActive 
+                    ? `bg-white border-${config.color.split('-')[1]}-500 text-${config.color.split('-')[1]}-600 scale-110 shadow-md` 
+                    : isCompleted 
+                        ? 'bg-emerald-500 border-white text-white shadow-sm ring-1 ring-emerald-100' 
+                        : 'bg-slate-50 border-white text-slate-300 ring-1 ring-slate-100'}
                 `}>
-                  <Icon size={14} />
-                  {isCompleted && (
-                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 rounded-full flex items-center justify-center">
-                      <CheckCircle size={8} className="text-white" />
-                    </div>
-                  )}
+                  {isCompleted ? <CheckCircle size={14} strokeWidth={3} /> : <Icon size={14} strokeWidth={isActive ? 2.5 : 2} />}
                 </div>
-                <span className={`text-[9px] mt-1 font-medium ${isActive ? config.color : isCompleted ? 'text-emerald-600' : 'text-slate-400'}`}>
-                  {config.labelAr}
-                </span>
+                
+                {/* Active Label */}
+                {isActive && (
+                  <div className={`
+                    absolute -bottom-6 text-[10px] font-bold whitespace-nowrap px-2 py-0.5 rounded-full shadow-sm animate-in fade-in slide-in-from-top-1
+                    ${config.bg} ${config.color}
+                  `}>
+                    {config.labelAr}
+                  </div>
+                )}
               </button>
-              
-              {index < STATUS_ORDER.length - 1 && (
-                <div className={`w-6 h-0.5 ${index < activeIndex ? 'bg-emerald-400' : 'bg-slate-200'}`} />
-              )}
-            </React.Fragment>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     );
   };
@@ -1063,43 +1074,49 @@ export const SampleTrackingPage: React.FC = () => {
     return (
       <div 
         key={sample.id}
-        className={`bg-white rounded-xl border shadow-sm hover:shadow-md transition-all ${
-          isOverdue ? 'border-red-300 bg-red-50/30' : 
-          isDueSoon ? 'border-amber-300 bg-amber-50/30' : 
-          'border-slate-200'
-        }`}
+        className="group relative bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 border border-slate-100 overflow-hidden"
       >
-        <div className="flex">
-          {/* Image Section - Left Side */}
-          <div className="w-24 flex-shrink-0 border-l border-slate-100">
+        {/* Status Indicator Strip */}
+        <div className={`absolute top-0 bottom-0 left-0 w-1 ${
+          isOverdue ? 'bg-red-500' : 
+          isDueSoon ? 'bg-amber-400' : 
+          'bg-slate-200'
+        }`} />
+
+        <div className="flex h-full">
+          {/* Image Section - Right Side in RTL layout (visually left) */}
+          <div className="w-28 relative flex-shrink-0 bg-slate-50">
             {sample.imageUrl ? (
-              <div className="relative group h-full">
+              <div className="relative w-full h-full group/image overflow-hidden">
                 <img 
                   src={sample.imageUrl} 
                   alt={sample.name}
-                  className="w-full h-full min-h-[120px] object-cover rounded-r-xl cursor-pointer"
+                  className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110 cursor-pointer"
                   onClick={() => setViewingImage(sample.imageUrl!)}
                 />
+                <div className="absolute inset-0 bg-black/0 group-hover/image:bg-black/10 transition-colors" />
                 <button
                   onClick={() => handleDeleteSampleImage(sample.id, sample.imagePath!)}
                   disabled={uploadingImageFor === sample.id}
-                  className="absolute top-1 right-1 p-1 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
+                  className="absolute bottom-2 right-2 p-1.5 bg-red-500/90 text-white rounded-full opacity-0 group-hover/image:opacity-100 transition-all hover:bg-red-600 scale-90 hover:scale-100 shadow-sm backdrop-blur-sm"
                 >
                   {uploadingImageFor === sample.id ? (
-                    <Loader size={10} className="animate-spin" />
+                    <Loader size={12} className="animate-spin" />
                   ) : (
-                    <Trash2 size={10} />
+                    <Trash2 size={12} />
                   )}
                 </button>
               </div>
             ) : (
-              <label className="flex flex-col items-center justify-center h-full min-h-[120px] cursor-pointer hover:bg-slate-50 transition-colors rounded-r-xl">
+              <label className="flex flex-col items-center justify-center h-full cursor-pointer hover:bg-slate-100 text-slate-300 hover:text-slate-400 transition-all">
                 {uploadingImageFor === sample.id ? (
                   <Loader size={20} className="animate-spin text-slate-400" />
                 ) : (
                   <>
-                    <Camera size={20} className="text-slate-300" />
-                    <span className="text-[10px] text-slate-400 mt-1">صورة</span>
+                    <div className="p-2 rounded-full bg-white shadow-sm mb-1">
+                      <Camera size={16} />
+                    </div>
+                    <span className="text-[10px] font-medium">صورة</span>
                   </>
                 )}
                 <input
@@ -1117,101 +1134,103 @@ export const SampleTrackingPage: React.FC = () => {
             )}
           </div>
           
-          {/* Content Section - Right Side */}
-          <div className="flex-1 p-4">
+          {/* Content Section */}
+          <div className="flex-1 p-4 flex flex-col justify-between">
             {/* Header */}
-            <div className="flex items-start justify-between mb-3">
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  {/* Priority Badge */}
-                  <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-black ${
-                    (sample.priority || 999) === 1 ? 'bg-red-100 text-red-700 ring-2 ring-red-300' :
-                    (sample.priority || 999) === 2 ? 'bg-orange-100 text-orange-700' :
-                    (sample.priority || 999) === 3 ? 'bg-amber-100 text-amber-700' :
-                    'bg-slate-100 text-slate-600'
-                  }`}>
-                    {sample.priority || '-'}
-                  </span>
-                  <Beaker size={16} className="text-violet-600" />
-                  <h3 className="font-bold text-slate-800">{sample.name}</h3>
+            <div>
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`flex-shrink-0 w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shadow-sm ${
+                      (sample.priority || 999) === 1 ? 'bg-red-500 text-white' :
+                      (sample.priority || 999) === 2 ? 'bg-orange-500 text-white' :
+                      (sample.priority || 999) === 3 ? 'bg-amber-500 text-white' :
+                      'bg-slate-200 text-slate-600'
+                    }`}>
+                      {sample.priority || '-'}
+                    </span>
+                    <h3 className="font-bold text-slate-800 truncate text-base leading-tight" title={sample.name}>
+                      {sample.name}
+                    </h3>
+                  </div>
+                  {sample.notes && (
+                    <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed pl-1">{sample.notes}</p>
+                  )}
                 </div>
-                {sample.notes && (
-                  <p className="text-xs text-slate-500 mt-1 line-clamp-2">{sample.notes}</p>
-                )}
+                
+                {/* Actions */}
+                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity translate-x-2 group-hover:translate-x-0 duration-200">
+                  <button
+                    onClick={() => {
+                      setShowSampleDataModal(sample);
+                      setSampleDataForm({
+                        rawWeight: sample.rawWeight?.toString() || '',
+                        zeroWeight: sample.zeroWeight?.toString() || '',
+                        rawWidth: sample.rawWidth?.toString() || '',
+                        zeroWidth: sample.zeroWidth?.toString() || '',
+                        requiredFinishedWeight: sample.requiredFinishedWeight?.toString() || '',
+                        requiredFinishedWidth: sample.requiredFinishedWidth?.toString() || '',
+                        finishingNazeem: sample.finishingNazeem || false,
+                        finishingTathbeet: sample.finishingTathbeet || false,
+                        finishingKasra: sample.finishingKasra || false,
+                        finishingCarbon: sample.finishingCarbon || false,
+                        finishingRam: sample.finishingRam || false,
+                        finishingCompacter: sample.finishingCompacter || false
+                      });
+                    }}
+                    className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                    title="بيانات العينة"
+                  >
+                    <Activity size={14} />
+                  </button>
+                  <button
+                    onClick={() => openEditModal(sample)}
+                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                  >
+                    <Edit3 size={14} />
+                  </button>
+                  <button
+                    onClick={() => handleDeleteSample(sample.id)}
+                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </div>
-              
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => {
-                    setShowSampleDataModal(sample);
-                    setSampleDataForm({
-                      rawWeight: sample.rawWeight?.toString() || '',
-                      zeroWeight: sample.zeroWeight?.toString() || '',
-                      rawWidth: sample.rawWidth?.toString() || '',
-                      zeroWidth: sample.zeroWidth?.toString() || '',
-                      requiredFinishedWeight: sample.requiredFinishedWeight?.toString() || '',
-                      requiredFinishedWidth: sample.requiredFinishedWidth?.toString() || '',
-                      finishingNazeem: sample.finishingNazeem || false,
-                      finishingTathbeet: sample.finishingTathbeet || false,
-                      finishingKasra: sample.finishingKasra || false,
-                      finishingCarbon: sample.finishingCarbon || false,
-                      finishingRam: sample.finishingRam || false,
-                      finishingCompacter: sample.finishingCompacter || false
-                    });
-                  }}
-                  className="p-1.5 text-slate-400 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors"
-                  title="بيانات العينة"
-                >
-                  <Activity size={14} />
-                </button>
-                <button
-                  onClick={() => openEditModal(sample)}
-                  className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                  title="Edit"
-                >
-                  <Edit3 size={14} />
-                </button>
-                <button
-                  onClick={() => handleDeleteSample(sample.id)}
-                  className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                  title="Delete"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            </div>
-          
-          {/* Info Row */}
-          <div className="flex flex-wrap items-center gap-3 mb-4 text-xs">
-            <div className="flex items-center gap-1 text-slate-600">
-              <Settings size={12} className="text-slate-400" />
-              <span className="font-medium">{sample.machineName}</span>
-            </div>
-            <div className="flex items-center gap-1 text-slate-600">
-              <Clock size={12} className="text-slate-400" />
-              <span className="font-medium">{sample.estimatedDays || 1} يوم</span>
-            </div>
-            <div className={`flex items-center gap-1 ${isOverdue ? 'text-red-600' : isDueSoon ? 'text-amber-600' : 'text-slate-600'}`}>
-              <Calendar size={12} />
-              <span className="font-medium">{formatDate(sample.expectedDate)}</span>
-              {daysUntilExpected !== null && sample.status !== 'DONE' && (
-                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                  isOverdue ? 'bg-red-100 text-red-700' : 
-                  isDueSoon ? 'bg-amber-100 text-amber-700' : 
-                  'bg-slate-100 text-slate-600'
+
+              {/* Tags/Badges Row */}
+              <div className="flex flex-wrap items-center gap-2 mb-3">
+                <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-50 border border-slate-100">
+                  <Settings size={12} className="text-slate-400" />
+                  <span className="text-[10px] font-bold text-slate-600 truncate max-w-[80px]">{sample.machineName}</span>
+                </div>
+                
+                <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md border ${
+                   isOverdue ? 'bg-red-50 border-red-100' : 
+                   isDueSoon ? 'bg-amber-50 border-amber-100' : 
+                   'bg-slate-50 border-slate-100'
                 }`}>
-                  {isOverdue ? `متأخر ${Math.abs(daysUntilExpected)} يوم` : 
-                   daysUntilExpected === 0 ? 'اليوم' : 
-                   `${daysUntilExpected} يوم`}
-                </span>
-              )}
+                  <Calendar size={12} className={isOverdue ? 'text-red-500' : isDueSoon ? 'text-amber-500' : 'text-slate-400'} />
+                  <span className={`text-[10px] font-bold ${
+                    isOverdue ? 'text-red-700' : isDueSoon ? 'text-amber-700' : 'text-slate-600'
+                  }`}>
+                    {formatDate(sample.expectedDate)}
+                  </span>
+                  {(daysUntilExpected !== null && sample.status !== 'DONE' && (isOverdue || isDueSoon)) && (
+                     <span className={`text-[9px] px-1 rounded-sm ${
+                        isOverdue ? 'bg-red-200 text-red-800' : 'bg-amber-200 text-amber-800'
+                     }`}>
+                       {Math.abs(daysUntilExpected)} يوم
+                     </span>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
-          
-          {/* Status Timeline */}
-          <div className="pt-3 border-t border-slate-100">
-            {renderStatusTimeline(sample)}
-          </div>
+
+            {/* Status Timeline Compact */}
+            <div className="py-2 border-t border-slate-100 mt-1">
+              {renderStatusTimeline(sample)}
+            </div>
           </div>
         </div>
       </div>
@@ -1240,45 +1259,50 @@ export const SampleTrackingPage: React.FC = () => {
       </div>
 
       {/* قلب اليوم - Daily Work Section with Date Picker */}
-      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+      <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm ring-1 ring-slate-100">
         {/* Header with Date Picker */}
-        <div className="bg-slate-800 px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-slate-700 rounded-lg">
-              <Zap size={24} className="text-white" />
+        <div className="bg-white px-8 py-6 flex items-center justify-between border-b border-slate-100">
+          <div className="flex items-center gap-4">
+            <div className="p-3 bg-violet-50 rounded-2xl border border-violet-100 shadow-sm">
+              <Zap size={28} className="text-violet-600 fill-violet-600/10" />
             </div>
             <div>
-              <h2 className="text-xl font-black text-white">قلب اليوم</h2>
-              <p className="text-slate-400 text-sm">سجل العمل اليومي</p>
+              <h2 className="text-2xl font-black text-slate-800 tracking-tight">قلب اليوم</h2>
+              <div className="flex items-center gap-2 text-slate-500 text-sm font-medium mt-0.5">
+                <Activity size={14} />
+                <span>سجل العمل اليومي للماكينات</span>
+              </div>
             </div>
           </div>
           
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-4">
             {/* Date Picker */}
-            <div className="flex items-center gap-2 bg-slate-700 px-3 py-2 rounded-lg">
-              <Calendar size={16} className="text-slate-400" />
+            <div className="group flex items-center gap-3 bg-slate-50 hover:bg-slate-100/80 transition-colors px-4 py-3 rounded-2xl border border-slate-200">
+              <Calendar size={20} className="text-slate-400 group-hover:text-slate-600" />
               <input
                 type="date"
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
-                className="bg-transparent text-white text-sm font-medium outline-none cursor-pointer"
+                className="bg-transparent text-slate-700 text-sm font-bold outline-none cursor-pointer font-mono"
               />
               {isToday && (
-                <span className="px-2 py-0.5 bg-slate-600 text-slate-300 rounded text-xs font-bold">اليوم</span>
+                <span className="px-2 py-0.5 bg-violet-100 text-violet-700 rounded-md text-[10px] font-black tracking-wide uppercase">اليوم</span>
               )}
             </div>
             
-            <div className="text-left text-white px-3">
-              <div className="text-2xl font-black">{selectedDateWork.length}</div>
-              <div className="text-slate-400 text-xs">أعمال</div>
+            <div className="h-10 w-px bg-slate-200 mx-2"></div>
+
+            <div className="flex flex-col items-end px-2">
+              <span className="text-2xl font-black text-slate-800 leading-none">{selectedDateWork.length}</span>
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">سجل</span>
             </div>
             
             <button
               onClick={() => setShowDailyWorkModal(true)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-white text-slate-800 rounded-xl font-bold hover:bg-slate-100 transition-colors"
+              className="flex items-center gap-2 px-6 py-3 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300"
             >
-              <Plus size={18} />
-              إضافة عمل
+              <Plus size={20} />
+              <span>إضافة عمل</span>
             </button>
           </div>
         </div>
@@ -1562,68 +1586,86 @@ export const SampleTrackingPage: React.FC = () => {
       </div>
 
       {/* Samples by Group */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
         {/* Planned */}
-        <div className="space-y-4">
-          <div className="flex items-center gap-2 px-2">
-            <div className="p-2 bg-slate-100 rounded-lg">
-              <Target size={18} className="text-slate-600" />
+        <div className="flex flex-col gap-4 bg-slate-50/80 rounded-3xl p-4 border border-slate-100 min-h-[400px]">
+          <div className="flex items-center justify-between px-1 mb-2">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-white rounded-xl shadow-sm border border-slate-100">
+                <Target size={20} className="text-slate-600" />
+              </div>
+              <div>
+                <h2 className="font-ex-bold text-lg text-slate-800">مخطط</h2>
+                <p className="text-xs text-slate-400 font-medium">خطط مستقبلية</p>
+              </div>
             </div>
-            <h2 className="font-bold text-slate-700">مخطط</h2>
-            <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full text-xs font-bold">
+            <span className="px-3 py-1 bg-white text-slate-600 border border-slate-200 rounded-full text-xs font-black shadow-sm">
               {groupedSamples['PLANNED'].length}
             </span>
           </div>
           
-          <div className="space-y-3">
+          <div className="space-y-4">
             {groupedSamples['PLANNED'].map(sample => renderSampleCard(sample))}
             {groupedSamples['PLANNED'].length === 0 && (
-              <div className="text-center py-8 text-slate-400 text-sm">
-                لا توجد سامبلات مخططة
+              <div className="flex flex-col items-center justify-center py-12 text-slate-300 border-2 border-dashed border-slate-200 rounded-2xl">
+                <Target size={32} className="mb-2 opacity-50" />
+                <p className="text-sm font-medium">لا توجد سامبلات مخططة</p>
               </div>
             )}
           </div>
         </div>
         
         {/* In Progress */}
-        <div className="space-y-4">
-          <div className="flex items-center gap-2 px-2">
-            <div className="p-2 bg-amber-100 rounded-lg">
-              <Play size={18} className="text-amber-600" />
+        <div className="flex flex-col gap-4 bg-amber-50/30 rounded-3xl p-4 border border-amber-100/50 min-h-[400px]">
+          <div className="flex items-center justify-between px-1 mb-2">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-white rounded-xl shadow-sm border border-amber-100">
+                <Play size={20} className="text-amber-500" fill="currentColor" fillOpacity={0.2} />
+              </div>
+              <div>
+                <h2 className="font-ex-bold text-lg text-amber-900">قيد التنفيذ</h2>
+                <p className="text-xs text-amber-600/70 font-medium">جاري العمل عليها</p>
+              </div>
             </div>
-            <h2 className="font-bold text-amber-700">قيد التنفيذ</h2>
-            <span className="px-2 py-0.5 bg-amber-100 text-amber-600 rounded-full text-xs font-bold">
+            <span className="px-3 py-1 bg-white text-amber-600 border border-amber-100 rounded-full text-xs font-black shadow-sm">
               {groupedSamples['IN_PROGRESS'].length}
             </span>
           </div>
           
-          <div className="space-y-3">
+          <div className="space-y-4">
             {groupedSamples['IN_PROGRESS'].map(sample => renderSampleCard(sample))}
             {groupedSamples['IN_PROGRESS'].length === 0 && (
-              <div className="text-center py-8 text-slate-400 text-sm">
-                لا توجد سامبلات قيد التنفيذ
+              <div className="flex flex-col items-center justify-center py-12 text-amber-300 border-2 border-dashed border-amber-200/50 rounded-2xl">
+                <Play size={32} className="mb-2 opacity-50" />
+                <p className="text-sm font-medium">لا توجد سامبلات قيد التنفيذ</p>
               </div>
             )}
           </div>
         </div>
         
         {/* Done */}
-        <div className="space-y-4">
-          <div className="flex items-center gap-2 px-2">
-            <div className="p-2 bg-emerald-100 rounded-lg">
-              <CheckCircle size={18} className="text-emerald-600" />
+        <div className="flex flex-col gap-4 bg-emerald-50/30 rounded-3xl p-4 border border-emerald-100/50 min-h-[400px]">
+          <div className="flex items-center justify-between px-1 mb-2">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-white rounded-xl shadow-sm border border-emerald-100">
+                <CheckCircle size={20} className="text-emerald-500" />
+              </div>
+              <div>
+                <h2 className="font-ex-bold text-lg text-emerald-900">مكتمل</h2>
+                <p className="text-xs text-emerald-600/70 font-medium">تم الانتهاء منها</p>
+              </div>
             </div>
-            <h2 className="font-bold text-emerald-700">مكتمل</h2>
-            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-600 rounded-full text-xs font-bold">
+            <span className="px-3 py-1 bg-white text-emerald-600 border border-emerald-100 rounded-full text-xs font-black shadow-sm">
               {groupedSamples['DONE'].length}
             </span>
           </div>
           
-          <div className="space-y-3">
+          <div className="space-y-4">
             {groupedSamples['DONE'].map(sample => renderSampleCard(sample))}
             {groupedSamples['DONE'].length === 0 && (
-              <div className="text-center py-8 text-slate-400 text-sm">
-                لا توجد سامبلات مكتملة
+              <div className="flex flex-col items-center justify-center py-12 text-emerald-300 border-2 border-dashed border-emerald-200/50 rounded-2xl">
+                <CheckCircle size={32} className="mb-2 opacity-50" />
+                <p className="text-sm font-medium">لا توجد سامبلات مكتملة</p>
               </div>
             )}
           </div>
