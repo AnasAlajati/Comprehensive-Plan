@@ -105,7 +105,12 @@ export const DyehouseBalanceReport: React.FC = () => {
             }
             
             if (batch.dateSent || totalSent > 0) {
-              const dyehouse = batch.dyehouse || 'Unassigned';
+              // Smart Dyehouse Display Logic
+              const dyehouse = batch.dyehouse || 
+                               (batch.colorApprovals && batch.colorApprovals.length > 0 ? batch.colorApprovals[0].dyehouseName : '') || 
+                               order.dyehouse || 
+                               'Unassigned';
+                               
               allDyehouses.add(dyehouse);
 
               // Calculate total received from events

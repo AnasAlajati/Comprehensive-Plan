@@ -69,7 +69,9 @@ import {
   Truck,
   LayoutList,
   Link,
-  Link2
+  Link2,
+  Edit2,
+  Unlink
 } from 'lucide-react';
 
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
@@ -1148,6 +1150,11 @@ const MemoizedOrderRow = React.memo(({
   visibleColumns: Record<string, boolean>;
   onToggleColumnVisibility: (columnId: string) => void;
 }) => {
+  const [isGroupingMode, setIsGroupingMode] = React.useState(false);
+  const [selectedForGroup, setSelectedForGroup] = React.useState<number[]>([]);
+  const [newGroupNote, setNewGroupNote] = React.useState('');
+  const [editingGroupId, setEditingGroupId] = React.useState<string | null>(null);
+  const [editGroupNote, setEditGroupNote] = React.useState('');
   const [showMachineDetails, setShowMachineDetails] = useState<{ capacity: number; batches: any[] } | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const [showColumnPicker, setShowColumnPicker] = useState(false);
@@ -2304,21 +2311,188 @@ const MemoizedOrderRow = React.memo(({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {(row.dyeingPlan || []).map((batch, idx) => {
-                    // Determine if batch is locked (not draft)
-                    const batchStatus = batch.status || 'pending';
-                    // Previously locked if not draft. Now we want everything editable.
-                    // If we want to lock sent/received items, we can check batchStatus === 'sent' || batchStatus === 'received'
-                    // But user asked to just remove draft functionality, likely meaning "make everything like draft used to be" or "make everything active but editable".
-                    // Let's keep it editable.
-                    const isLocked = false; 
-                    const rowBgClass = 'hover:bg-blue-50/30';
+                  {(() => {
+                    // Group batches by colorGroupId
+                    const batchesWithIdx = (row.dyeingPlan || []).map((batch, idx) => ({ batch, idx }));
+                    const colorGroups = row.colorGroups || [];
                     
-                    return (
-                    <tr key={batch.id || idx} className={`group/batch ${rowBgClass}`}>
+                    // Sort batches: grouped ones first (by group), then ungrouped
+                    const sortedBatches = [...batchesWithIdx].sort((a, b) => {
+                      const groupA = a.batch.colorGroupId;
+                      const groupB = b.batch.colorGroupId;
+                      
+                      if (!groupA && !groupB) return a.idx - b.idx; // Both ungrouped, keep order
+                      if (!groupA) return 1; // Ungrouped goes after grouped
+                      if (!groupB) return -1;
+                      
+                      // Both grouped - sort by group order
+                      const groupIdxA = colorGroups.findIndex(g => g.id === groupA);
+                      const groupIdxB = colorGroups.findIndex(g => g.id === groupB);
+                      if (groupIdxA !== groupIdxB) return groupIdxA - groupIdxB;
+                      
+                      return a.idx - b.idx; // Same group, keep original order
+                    });
+
+                    let lastGroupId: string | null = null;
+                    const elements: React.ReactNode[] = [];
+
+                    sortedBatches.forEach(({ batch, idx: originalIdx }) => {
+                      const currentGroupId = batch.colorGroupId || null;
+                      const group = currentGroupId ? colorGroups.find(g => g.id === currentGroupId) : null;
+                      
+                      // Add group header if new group starts
+                      if (currentGroupId && currentGroupId !== lastGroupId) {
+                        const groupIndex = colorGroups.findIndex(g => g.id === currentGroupId) + 1;
+                        const groupBatches = batchesWithIdx.filter(b => b.batch.colorGroupId === currentGroupId);
+                        
+                        elements.push(
+                          <tr key={`group-header-${currentGroupId}`}>
+                            <td colSpan={20} className="p-0 border-t border-indigo-100">
+                                <div className="bg-gradient-to-r from-indigo-50/80 to-white px-3 py-2 border-l-4 border-l-indigo-500 flex items-center justify-between shadow-sm my-2 mb-0 rounded-tl-md mr-1">
+                                    <div className="flex items-center gap-3 flex-1">
+                                      <div className="flex items-center gap-2 w-full">
+                                        <div className="w-6 h-6 rounded bg-white flex items-center justify-center text-xs font-bold text-indigo-600 shadow-sm border border-indigo-100 mb-0.5 shrink-0">
+                                            {groupIndex}
+                                        </div>
+                                        
+                                        {/* Editable Group Title */}
+                                        {editingGroupId === currentGroupId ? (
+                                           <div className="flex items-center gap-2 flex-1 max-w-md animate-in fade-in duration-200">
+                                               <input 
+                                                   type="text"
+                                                   value={editGroupNote}
+                                                   onChange={(e) => setEditGroupNote(e.target.value)}
+                                                   className="flex-1 w-full text-xs px-2 py-1 rounded border border-indigo-300 focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm"
+                                                   placeholder="اسم المجموعة..."
+                                                   autoFocus
+                                                   onKeyDown={(e) => {
+                                                       if (e.key === 'Enter') {
+                                                            const updatedGroups = colorGroups.map(g => 
+                                                              g.id === currentGroupId ? { ...g, note: editGroupNote, name: editGroupNote || g.name } : g
+                                                            );
+                                                            handleUpdateOrder(row.id, { colorGroups: updatedGroups });
+                                                            setEditingGroupId(null);
+                                                       } else if (e.key === 'Escape') {
+                                                           setEditingGroupId(null);
+                                                       }
+                                                   }}
+                                               />
+                                               <button 
+                                                   onClick={() => {
+                                                        const updatedGroups = colorGroups.map(g => 
+                                                          g.id === currentGroupId ? { ...g, note: editGroupNote, name: editGroupNote || g.name } : g
+                                                        );
+                                                        handleUpdateOrder(row.id, { colorGroups: updatedGroups });
+                                                        setEditingGroupId(null);
+                                                   }}
+                                                   className="p-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 shadow-sm"
+                                               >
+                                                   <Check size={12} />
+                                               </button>
+                                               <button 
+                                                   onClick={() => setEditingGroupId(null)}
+                                                   className="p-1 bg-white text-slate-500 border border-slate-200 rounded hover:bg-slate-50"
+                                               >
+                                                   <X size={12} />
+                                               </button>
+                                           </div>
+                                        ) : (
+                                            <div className="flex flex-col">
+                                                <span className="text-xs font-bold text-indigo-800 flex items-center gap-2">
+                                                    {group?.name || `مجموعة ${groupIndex}`}
+                                                    {group?.note && <span className="text-[10px] font-normal text-slate-500 mx-1">({group.note})</span>}
+                                                </span>
+                                                <span className="text-[10px] text-indigo-400 font-mono">{groupBatches.length} ألوان</span>
+                                            </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-1 opacity-100">
+                                      {editingGroupId !== currentGroupId && (
+                                      <button
+                                        onClick={() => {
+                                          setEditingGroupId(currentGroupId);
+                                          setEditGroupNote(group?.note || group?.name || '');
+                                        }}
+                                        className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-white rounded transition-colors"
+                                        title="Edit Group"
+                                      >
+                                        <Edit2 size={12} />
+                                      </button>
+                                      )}
+                                      <button
+                                        onClick={() => {
+                                          if (confirm('هل تريد فك تجميع هذه الألوان؟')) {
+                                            const updatedPlan = (row.dyeingPlan || []).map(b => 
+                                              b.colorGroupId === currentGroupId ? { ...b, colorGroupId: undefined } : b
+                                            );
+                                            const updatedGroups = colorGroups.filter(g => g.id !== currentGroupId);
+                                            handleUpdateOrder(row.id, { dyeingPlan: updatedPlan, colorGroups: updatedGroups });
+                                          }
+                                        }}
+                                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-white rounded transition-colors"
+                                        title="Ungroup"
+                                      >
+                                        <Unlink size={12} />
+                                      </button>
+                                    </div>
+                                </div>
+                            </td>
+                          </tr>
+                        );
+                      }
+                      
+                      // Check if this is the last item in a group (need to add separator after)
+                      const isLastInGroup = currentGroupId && (() => {
+                        const currentIdx = sortedBatches.findIndex(b => b.idx === originalIdx);
+                        const nextBatch = sortedBatches[currentIdx + 1];
+                        return !nextBatch || nextBatch.batch.colorGroupId !== currentGroupId;
+                      })();
+                      
+                      lastGroupId = currentGroupId;
+                      
+                      const idx = originalIdx;
+                      // Determine if batch is locked (not draft)
+                      const batchStatus = batch.status || 'pending';
+                      const isLocked = false; 
+                      
+                      let rowBgClass = 'hover:bg-blue-50/30';
+                      let rowStyle = {};
+                      
+                      if (currentGroupId) {
+                          rowBgClass = 'bg-slate-50/50 hover:bg-indigo-50/30';
+                          rowStyle = {
+                              borderLeft: '4px solid #6366f1', // Indigo-500
+                          };
+                      }
+                    
+                      elements.push(
+                    <tr key={batch.id || idx} className={`group/batch ${rowBgClass}`} style={rowStyle}>
                       {/* Planned Info Tooltip for locked batches */}
                       <td className="p-0 relative">
-                        <div className="flex items-center h-full">
+                        <div className="flex items-center h-full pl-2">
+                            {/* Checkbox for grouping */}
+                            {isGroupingMode && (
+                                <div className="absolute left-0 top-0 bottom-0 z-50 flex items-center justify-center bg-white/90 w-8 border-r border-indigo-100">
+                                    <input 
+                                        type="checkbox"
+                                        checked={selectedForGroup.includes(originalIdx)}
+                                        onChange={(e) => {
+                                            if (e.target.checked) {
+                                                setSelectedForGroup(prev => [...prev, originalIdx]);
+                                            } else {
+                                                setSelectedForGroup(prev => prev.filter(i => i !== originalIdx));
+                                            }
+                                        }}
+                                        className="w-3.5 h-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                    />
+                                </div>
+                            )}
+
+                             {/* Group indicator */}
+                             {currentGroupId && !isGroupingMode && (
+                               <div className="absolute -right-0.5 top-0 bottom-0 w-1 bg-indigo-400/50 rounded-l"></div>
+                             )}
                             {/* Status indicator dot */}
                             {isLocked && (
                                 <div className="absolute -right-1 top-1/2 -translate-y-1/2 group/info">
@@ -2892,31 +3066,121 @@ const MemoizedOrderRow = React.memo(({
                         </div>
                       </td>
                     </tr>
-                  );
-                  })}
+                      );
+                      
+                      // Add blue separator line after the last item in a group
+                      if (isLastInGroup) {
+                        elements.push(
+                          <tr key={`group-separator-${currentGroupId}`}>
+                            <td colSpan={20} className="p-0">
+                              <div className="h-1 bg-gradient-to-r from-blue-500 via-blue-400 to-transparent mx-1 rounded-full shadow-sm"></div>
+                            </td>
+                          </tr>
+                        );
+                      }
+                    });
+                    
+                    return elements;
+                  })()}
                   {/* Add Button Row */}
                   <tr>
                     <td colSpan={13} className="p-2">
-                      <button
-                        onClick={() => {
-                          const newBatch = {
-                            id: crypto.randomUUID(),
-                            color: '',
-                            quantity: 0,
-                            dyehouse: '',
-                            machine: '',
-                            notes: '',
-                            status: 'pending' as const // New batches start as pending
-                          };
-                          handleUpdateOrder(row.id, { 
-                            dyeingPlan: [...(row.dyeingPlan || []), newBatch] 
-                          });
-                        }}
-                        className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50 transition-colors"
-                      >
-                        <Plus className="w-3 h-3" />
-                        اضافة لون
-                      </button>
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => {
+                            const newBatch = {
+                              id: crypto.randomUUID(),
+                              color: '',
+                              quantity: 0,
+                              dyehouse: '',
+                              machine: '',
+                              notes: '',
+                              status: 'pending' as const
+                            };
+                            handleUpdateOrder(row.id, { 
+                              dyeingPlan: [...(row.dyeingPlan || []), newBatch] 
+                            });
+                          }}
+                          className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50 transition-colors"
+                        >
+                          <Plus className="w-3 h-3" />
+                          اضافة لون
+                        </button>
+                        
+                        {/* Add Group Button */}
+                        {(row.dyeingPlan || []).length >= 2 && (
+                          !isGroupingMode ? (
+                            <button
+                              onClick={() => {
+                                setIsGroupingMode(true);
+                                setSelectedForGroup([]);
+                                setNewGroupNote('');
+                              }}
+                              className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 px-2 py-1 rounded hover:bg-indigo-50 transition-colors border border-indigo-200"
+                            >
+                              <Plus className="w-3 h-3" />
+                              تجميع ألوان
+                            </button>
+                          ) : (
+                            <div className="flex items-center gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
+                              <span className="text-xs text-slate-500 font-medium bg-slate-100 px-2 py-1 rounded">تم اختيار {selectedForGroup.length}</span>
+                              
+                              <input
+                                type="text"
+                                value={newGroupNote}
+                                onChange={(e) => setNewGroupNote(e.target.value)}
+                                placeholder="اسم المجموعة..."
+                                className="w-32 text-xs px-2 py-1 rounded border border-indigo-300 focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm transition-all"
+                              />
+                              
+                              <button
+                                onClick={() => {
+                                  if (selectedForGroup.length < 2) {
+                                    alert('يرجى اختيار لونين على الأقل');
+                                    return;
+                                  }
+                                  
+                                  const groupNote = newGroupNote;
+                                  const newGroupId = crypto.randomUUID();
+                                  const existingGroups = row.colorGroups || [];
+                                  const newGroup = { 
+                                    id: newGroupId, 
+                                    name: groupNote || `Group ${existingGroups.length + 1}`,
+                                    note: groupNote 
+                                  };
+                                  
+                                  const updatedPlan = (row.dyeingPlan || []).map((b, i) => 
+                                    selectedForGroup.includes(i) ? { ...b, colorGroupId: newGroupId } : b
+                                  );
+                                  
+                                  handleUpdateOrder(row.id, { 
+                                    dyeingPlan: updatedPlan,
+                                    colorGroups: [...existingGroups, newGroup]
+                                  });
+                                  
+                                  setIsGroupingMode(false);
+                                  setSelectedForGroup([]);
+                                  setNewGroupNote('');
+                                }}
+                                disabled={selectedForGroup.length < 2}
+                                className="text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 px-3 py-1 rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                              >
+                                حفظ المجموعة
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setIsGroupingMode(false);
+                                  setSelectedForGroup([]);
+                                  setNewGroupNote('');
+                                }}
+                                className="text-xs font-medium text-slate-600 hover:text-slate-800 px-2 py-1 rounded hover:bg-slate-100 transition-colors border border-slate-200"
+                              >
+                                الغاء
+                              </button>
+                            </div>
+                          )
+                        )}
+                      </div>
                     </td>
                   </tr>
                 </tbody>

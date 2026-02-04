@@ -232,6 +232,7 @@ export interface DyeingBatch {
   accessoryType?: string;       // نوع الاكسسوار
   sentEvents?: SentEvent[];     // NEW: Multiple sent events
   batchGroupId?: string;        // NEW: ID for grouping multiple batches into one machine load
+  colorGroupId?: string;        // NEW: ID for visual color grouping
 
   
   // Receive events array (multiple receives over time)
@@ -328,6 +329,7 @@ export interface OrderRow {
   dyehouseMachine?: string; // NEW: Dyehouse Machine
   fabricColor?: string; // NEW: Fabric Color
   dyeingPlan?: DyeingBatch[]; // NEW: Detailed Dyeing Plan
+  colorGroups?: { id: string; name: string; note?: string }[]; // NEW: Color grouping definitions
   externalPlan?: ExternalPlanAssignment[]; // NEW: External factory assignments
   orderReference?: string;
   customerId?: string;

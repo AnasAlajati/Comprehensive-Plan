@@ -116,7 +116,12 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                  (batch.dateSent ? 'sent' : 
                   (batch.color && batch.quantity && batch.dyehouse && batch.plannedCapacity ? 'pending' : 'draft')));
               
-              const dyehouseName = batch.dyehouse || order.dyehouse || 'Unassigned';
+              // Smart Dyehouse Display Logic
+              const dyehouseName = batch.dyehouse || 
+                                   (batch.colorApprovals && batch.colorApprovals.length > 0 ? batch.colorApprovals[0].dyehouseName : '') || 
+                                   order.dyehouse || 
+                                   'Unassigned';
+
               const machineName = batch.plannedCapacity ? `${batch.plannedCapacity}kg` : (batch.machine || order.dyehouseMachine || '');
               
               // Get fabric shortname - prefer from fabrics collection, fallback to parseFabricName
