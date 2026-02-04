@@ -18,6 +18,7 @@ import { DyehouseGlobalSchedule } from './DyehouseGlobalSchedule';
 import { DyehouseBalanceReport } from './DyehouseBalanceReport';
 import { DyehouseActiveWorkPage } from './DyehouseActiveWorkPage';
 import { DyehouseLateWorkPage } from './DyehouseLateWorkPage';
+import { DyehouseDailyMovement } from './DyehouseDailyMovement';
 import { 
   Plus, 
   Trash2, 
@@ -33,7 +34,8 @@ import {
   List,
   FileBarChart,
   Droplets,
-  AlertTriangle
+  AlertTriangle,
+  Activity
 } from 'lucide-react';
 
 export const DyehouseDirectoryPage: React.FC = () => {
@@ -47,7 +49,7 @@ export const DyehouseDirectoryPage: React.FC = () => {
   const [editForm, setEditForm] = useState<Dyehouse | null>(null);
   
   // New State
-  const [viewMode, setViewMode] = useState<'directory' | 'global' | 'balance' | 'active-work' | 'late-work'>('directory');
+  const [viewMode, setViewMode] = useState<'directory' | 'global' | 'balance' | 'active-work' | 'late-work' | 'daily-movement'>('directory');
   const [selectedMachine, setSelectedMachine] = useState<{ dyehouse: string, capacity: number } | null>(null);
   const [machineCounts, setMachineCounts] = useState<Record<string, { sent: number, planned: number }>>({});
   const [dyehouseStock, setDyehouseStock] = useState<Record<string, number>>({});
@@ -282,6 +284,13 @@ export const DyehouseDirectoryPage: React.FC = () => {
               <AlertTriangle size={16} />
               Late Work
             </button>
+            <button 
+              onClick={() => setViewMode('daily-movement')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'daily-movement' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              <Activity size={16} />
+              Daily Movement
+            </button>
           </div>
 
           {viewMode === 'directory' && (
@@ -335,6 +344,8 @@ export const DyehouseDirectoryPage: React.FC = () => {
           <DyehouseActiveWorkPage />
         ) : viewMode === 'late-work' ? (
           <DyehouseLateWorkPage />
+        ) : viewMode === 'daily-movement' ? (
+          <DyehouseDailyMovement />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {allDyehouses.map((dyehouse) => (
