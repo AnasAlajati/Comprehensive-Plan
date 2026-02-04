@@ -1856,6 +1856,11 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       }
 
       await DataService.updateMachineInMachineSS(machineId, updatePayload);
+      
+      // Also update the subcollection log to ensure History Modal works correctly
+      if (updatedLogs[logIndex]) {
+          await DataService.updateDailyLog(machineId, updatedLogs[logIndex].date, updatedLogs[logIndex]);
+      }
 
       // Optimistic update already handled the UI. No need to re-fetch immediately.
       showMessage('✅ Updated');
