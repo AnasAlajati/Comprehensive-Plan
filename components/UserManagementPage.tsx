@@ -355,6 +355,7 @@ export const UserManagementPage: React.FC = () => {
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
                 <th className="px-6 py-4 font-semibold text-slate-700">User</th>
+                <th className="px-6 py-4 font-semibold text-slate-700">Password</th>
                 <th className="px-6 py-4 font-semibold text-slate-700">Status</th>
                 <th className="px-6 py-4 font-semibold text-slate-700">Current Page</th>
                 <th className="px-6 py-4 font-semibold text-slate-700">Last Modification</th>
@@ -365,7 +366,7 @@ export const UserManagementPage: React.FC = () => {
             <tbody className="divide-y divide-slate-100">
               {users.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
+                  <td colSpan={7} className="px-6 py-8 text-center text-slate-500">
                     No users found. Add the first user above.
                   </td>
                 </tr>
@@ -418,6 +419,19 @@ export const UserManagementPage: React.FC = () => {
                           </div>
                         );
                       })()}
+                    </td>
+                    {/* Password Column */}
+                    <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
+                      {user.password ? (
+                        <div className="flex items-center gap-2">
+                          <Key className="w-3.5 h-3.5 text-amber-500" />
+                          <code className="text-xs font-mono bg-amber-50 text-amber-800 px-2 py-1 rounded border border-amber-200 select-all">
+                            {user.password}
+                          </code>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-400 italic">Not stored</span>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       {(() => {
@@ -584,7 +598,7 @@ export const UserManagementPage: React.FC = () => {
                   {/* Expanded Activity Row */}
                   {expandedUserId === user.id && (
                     <tr className="bg-indigo-50/50">
-                      <td colSpan={6} className="px-6 py-4">
+                      <td colSpan={7} className="px-6 py-4">
                         <div className="bg-white rounded-lg border border-indigo-100 p-4">
                           <h4 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
                             <Activity size={16} className="text-indigo-600" />

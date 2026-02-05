@@ -1150,6 +1150,9 @@ const MemoizedOrderRow = React.memo(({
   visibleColumns: Record<string, boolean>;
   onToggleColumnVisibility: (columnId: string) => void;
 }) => {
+  // Viewer role is read-only
+  const isReadOnly = userRole === 'viewer';
+  
   const [isGroupingMode, setIsGroupingMode] = React.useState(false);
   const [selectedForGroup, setSelectedForGroup] = React.useState<number[]>([]);
   const [newGroupNote, setNewGroupNote] = React.useState('');
@@ -1573,8 +1576,9 @@ const MemoizedOrderRow = React.memo(({
                         <select
                             value={row.variantId || ''}
                             onChange={(e) => handleUpdateOrder(row.id, { variantId: e.target.value })}
-                            className={`w-full text-[10px] p-1 border rounded focus:outline-none cursor-pointer ${!row.variantId ? 'bg-amber-50 border-amber-300 text-amber-700 font-bold animate-pulse' : 'bg-slate-50 border-slate-200 text-slate-600'}`}
+                            className={`w-full text-[10px] p-1 border rounded focus:outline-none ${isReadOnly ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} ${!row.variantId ? 'bg-amber-50 border-amber-300 text-amber-700 font-bold animate-pulse' : 'bg-slate-50 border-slate-200 text-slate-600'}`}
                             onClick={(e) => e.stopPropagation()}
+                            disabled={isReadOnly}
                         >
                             <option value="">{row.variantId ? 'Change Variant...' : '⚠️ Select Variant (Required)'}</option>
                             {fabricDetails.variants.map((v, idx) => (
@@ -1621,10 +1625,11 @@ const MemoizedOrderRow = React.memo(({
           <td className="p-0 border-r border-slate-200">
             <input 
               type="number"
-              className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs"
+              className={`w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
               value={row.requiredGsm ?? ''}
               onChange={(e) => handleUpdateOrder(row.id, { requiredGsm: Number(e.target.value) })}
               placeholder="-"
+              disabled={isReadOnly}
             />
           </td>
 
@@ -1632,10 +1637,11 @@ const MemoizedOrderRow = React.memo(({
           <td className="p-0 border-r border-slate-200">
             <input 
               type="number"
-              className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs"
+              className={`w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
               value={row.requiredWidth ?? ''}
               onChange={(e) => handleUpdateOrder(row.id, { requiredWidth: Number(e.target.value) })}
               placeholder="-"
+              disabled={isReadOnly}
             />
           </td>
 
@@ -1643,10 +1649,11 @@ const MemoizedOrderRow = React.memo(({
           <td className="p-0 border-r border-slate-200 relative">
             <input 
               type="text"
-              className="w-full h-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50"
+              className={`w-full h-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
               value={row.accessory}
               onChange={(e) => handleUpdateOrder(row.id, { accessory: e.target.value })}
               placeholder=""
+              disabled={isReadOnly}
             />
             {row.accessoryPercentage != null && row.accessoryPercentage > 0 && (
               <div className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded pointer-events-none">
@@ -1659,10 +1666,11 @@ const MemoizedOrderRow = React.memo(({
           <td className="p-0 border-r border-slate-200">
               <input 
               type="number"
-              className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs"
+              className={`w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
               value={row.accessoryQty ?? ''}
               onChange={(e) => handleUpdateOrder(row.id, { accessoryQty: Number(e.target.value) })}
               placeholder="-"
+              disabled={isReadOnly}
             />
           </td>
         </>
@@ -1704,11 +1712,12 @@ const MemoizedOrderRow = React.memo(({
                      return (
                         <button 
                           onClick={() => onOpenCreatePlan(row)}
-                          className="text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit hover:bg-amber-100 hover:border-amber-300 transition-colors flex items-center gap-1"
-                          title="Click to assign machine"
+                          className={`text-[10px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-amber-100 w-fit hover:bg-amber-100 hover:border-amber-300 transition-colors flex items-center gap-1 ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                          title={isReadOnly ? 'View only mode' : 'Click to assign machine'}
+                          disabled={isReadOnly}
                         >
                           Not Planned
-                          <Plus size={10} />
+                          {!isReadOnly && <Plus size={10} />}
                         </button>
                      );
                   }
@@ -1979,7 +1988,8 @@ const MemoizedOrderRow = React.memo(({
             )}
             <button 
             onClick={() => handleDeleteRow(row.id)}
-            className="p-2 text-slate-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+            className={`p-2 text-slate-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 ${isReadOnly ? 'hidden' : ''}`}
+            disabled={isReadOnly}
             >
             <Trash2 className="w-4 h-4" />
             </button>

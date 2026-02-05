@@ -536,7 +536,12 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                       </div>
                    </div>
                    <div className="text-sm font-medium text-slate-300 bg-slate-700 px-3 py-1 rounded-full border border-slate-600">
-                      Total: {dyehouseBatches.reduce((sum, b) => sum + (b.quantity || 0), 0).toLocaleString()} kg
+                      Total: {dyehouseBatches.reduce((sum, b) => {
+                        const sent = b.quantitySent || 0;
+                        const received = b.totalReceived || 0;
+                        const remaining = Math.max(0, sent - received);
+                        return sum + remaining;
+                      }, 0).toLocaleString()} kg
                    </div>
                 </div>
 

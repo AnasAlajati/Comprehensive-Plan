@@ -45,7 +45,14 @@ interface GroupedYarn {
   isFavorite: boolean;
 }
 
-export const YarnInventoryPage: React.FC = () => {
+interface YarnInventoryPageProps {
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager' | null;
+}
+
+export const YarnInventoryPage: React.FC<YarnInventoryPageProps> = ({ userRole }) => {
+  // Viewer role is read-only
+  const isReadOnly = userRole === 'viewer';
+  
   const [inventory, setInventory] = useState<YarnInventoryItem[]>([]);
   const [masterYarns, setMasterYarns] = useState<Yarn[]>([]); // NEW: To check for unlinked items
   const [loading, setLoading] = useState(false);

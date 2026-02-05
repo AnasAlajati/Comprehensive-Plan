@@ -83,7 +83,11 @@ export const DyehouseDirectoryPage: React.FC = () => {
 
         if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
             order.dyeingPlan.forEach((batch: any, bIdx: number) => {
-              const dyehouseName = batch.dyehouse || order.dyehouse || '';
+              // Smart Dyehouse Display Logic (same as Balance Report)
+              const dyehouseName = batch.dyehouse || 
+                                   (batch.colorApprovals && batch.colorApprovals.length > 0 ? batch.colorApprovals[0].dyehouseName : '') || 
+                                   order.dyehouse || 
+                                   '';
               if (!dyehouseName) return;
 
               // --- Stock Calculation Logic (same as DyehouseBalanceReport) ---

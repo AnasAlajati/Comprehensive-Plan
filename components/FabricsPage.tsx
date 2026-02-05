@@ -15,7 +15,14 @@ const getMachineCategory = (type: string = '') => {
   return 'Other';
 };
 
-export const FabricsPage: React.FC = () => {
+interface FabricsPageProps {
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager' | null;
+}
+
+export const FabricsPage: React.FC<FabricsPageProps> = ({ userRole }) => {
+  // Viewer role is read-only
+  const isReadOnly = userRole === 'viewer';
+  
   const [parsedFabrics, setParsedFabrics] = useState<FabricDefinition[]>([]);
   const [existingFabrics, setExistingFabrics] = useState<FabricDefinition[]>([]);
   const [loading, setLoading] = useState(false);
@@ -564,20 +571,24 @@ export const FabricsPage: React.FC = () => {
             <p className="text-slate-500 text-sm mt-1">Import fabrics, yarns, and work centers from Excel</p>
           </div>
           <div className="flex gap-2">
-            <button
-              onClick={() => handleOpenModal()}
-              className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 transition-colors flex items-center gap-2"
-            >
-              <Plus size={16} />
-              Add Fabric
-            </button>
-            <button
-              onClick={handleCleanAllShortNames}
-              disabled={saving}
-              className="px-4 py-2 rounded-lg text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-colors"
-            >
-              {saving ? 'Updating...' : 'Update Names'}
-            </button>
+            {!isReadOnly && (
+              <>
+                <button
+                  onClick={() => handleOpenModal()}
+                  className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 transition-colors flex items-center gap-2"
+                >
+                  <Plus size={16} />
+                  Add Fabric
+                </button>
+                <button
+                  onClick={handleCleanAllShortNames}
+                  disabled={saving}
+                  className="px-4 py-2 rounded-lg text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-colors"
+                >
+                  {saving ? 'Updating...' : 'Update Names'}
+                </button>
+              </>
+            )}
             <button
               onClick={() => setActiveTab('preview')}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
@@ -867,20 +878,24 @@ export const FabricsPage: React.FC = () => {
                             </div>
                           </td>
                           <td className="p-4 align-top text-right">
-                            <button 
-                              onClick={() => handleOpenModal(fabric)}
-                              className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
-                              title="Edit Fabric"
-                            >
-                              <Edit size={16} />
-                            </button>
-                            <button 
-                              onClick={() => handleDeleteFabric(fabric.id!)}
-                              className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100 ml-1"
-                              title="Delete Fabric"
-                            >
-                              <Trash2 size={16} />
-                            </button>
+                            {!isReadOnly && (
+                              <>
+                                <button 
+                                  onClick={() => handleOpenModal(fabric)}
+                                  className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                                  title="Edit Fabric"
+                                >
+                                  <Edit size={16} />
+                                </button>
+                                <button 
+                                  onClick={() => handleDeleteFabric(fabric.id!)}
+                                  className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100 ml-1"
+                                  title="Delete Fabric"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </>
+                            )}
                           </td>
                         </tr>
                       );

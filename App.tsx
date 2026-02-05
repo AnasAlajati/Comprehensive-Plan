@@ -1008,6 +1008,7 @@ const App: React.FC = () => {
                 machines={machines}
                 onNavigateToPlanning={handleNavigateToPlanning}
                 onNavigateToOrder={handleNavigateToOrder}
+                userRole={userRole}
               />
             )}
 
@@ -1033,11 +1034,11 @@ const App: React.FC = () => {
             )}
 
             {viewMode === 'dyehouse-inventory' && (
-              <DyehouseInventoryPage />
+              <DyehouseInventoryPage userRole={userRole} />
             )}
 
             {viewMode === 'dyehouse-directory' && (
-              <DyehouseDirectoryPage />
+              <DyehouseDirectoryPage userRole={userRole} />
             )}
 
             {viewMode === 'sample-tracking' && (
@@ -1045,7 +1046,7 @@ const App: React.FC = () => {
             )}
 
             {viewMode === 'idle' && (
-              <IdleMachineMonitor />
+              <IdleMachineMonitor userRole={userRole} />
             )}
 
             {viewMode === 'orders' && (
@@ -1057,7 +1058,7 @@ const App: React.FC = () => {
             )}
 
             {viewMode === 'yarn-inventory' && (
-              <YarnInventoryPage />
+              <YarnInventoryPage userRole={userRole} />
             )}
 
             {viewMode === 'compare' && (
@@ -1080,15 +1081,15 @@ const App: React.FC = () => {
             )}
 
             {viewMode === 'fabrics' && (
-              <FabricsPage />
+              <FabricsPage userRole={userRole} />
             )}
 
             {viewMode === 'machines' && (
-              <MachinesPage machines={machines} />
+              <MachinesPage machines={machines} userRole={userRole} />
             )}
 
             {viewMode === 'users' && (
-              <UserManagementPage />
+              <UserManagementPage userRole={userRole} />
             )}
         </div>
       </main>

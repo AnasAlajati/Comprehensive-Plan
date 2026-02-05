@@ -194,6 +194,9 @@ interface SampleTrackingPageProps {
 }
 
 export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole }) => {
+  // Viewer role is read-only
+  const isReadOnly = userRole === 'viewer';
+  
   const [samples, setSamples] = useState<Sample[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
   const [machineSchedules, setMachineSchedules] = useState<Record<string, MachineScheduleInfo>>({});
@@ -1030,11 +1033,11 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                 key={status}
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleStatusChange(sample, status);
+                  if (!isReadOnly) handleStatusChange(sample, status);
                 }}
-                disabled={updatingId === sample.id}
-                className="group flex flex-col items-center relative"
-                title={config.labelAr}
+                disabled={updatingId === sample.id || isReadOnly}
+                className={`group flex flex-col items-center relative ${isReadOnly ? 'cursor-not-allowed' : ''}`}
+                title={isReadOnly ? 'View only mode' : config.labelAr}
               >
                 <div className={`
                   w-5 h-5 sm:w-7 sm:h-7 rounded-full flex items-center justify-center transition-all duration-300 border-2 sm:border-[3px]
@@ -1255,18 +1258,22 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                   >
                     <Activity size={14} />
                   </button>
-                  <button
-                    onClick={() => openEditModal(sample)}
-                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-                  >
-                    <Edit3 size={14} />
-                  </button>
-                  <button
-                    onClick={() => handleDeleteSample(sample.id)}
-                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  {!isReadOnly && (
+                    <>
+                      <button
+                        onClick={() => openEditModal(sample)}
+                        className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                      >
+                        <Edit3 size={14} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteSample(sample.id)}
+                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -1362,15 +1369,17 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
   return (
     <div className="space-y-6" dir="rtl">
       {/* Compact Header - Add Sample Icon */}
-      <div className="flex items-center justify-end mb-2">
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="flex items-center justify-center w-10 h-10 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 transition-colors shadow-lg"
-          title="إضافة عينة"
-        >
-          <Beaker size={20} />
-        </button>
-      </div>
+      {!isReadOnly && (
+        <div className="flex items-center justify-end mb-2">
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="flex items-center justify-center w-10 h-10 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 transition-colors shadow-lg"
+            title="إضافة عينة"
+          >
+            <Beaker size={20} />
+          </button>
+        </div>
+      )}
 
       {/* قلب اليوم - Daily Work Section with Date Picker */}
       <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm ring-1 ring-slate-100">

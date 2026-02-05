@@ -120,6 +120,7 @@ interface SearchDropdownProps {
   onFocus?: () => void;
   placeholder?: string;
   strict?: boolean;
+  disabled?: boolean;
 }
 
 interface StagedLog {
@@ -172,7 +173,8 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
   onKeyDown,
   onFocus,
   placeholder = '---',
-  strict = false
+  strict = false,
+  disabled = false
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -277,6 +279,7 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
         value={inputValue}
         onChange={handleInputChange}
         onFocus={() => {
+          if (disabled) return;
           window.dispatchEvent(new CustomEvent('searchdropdown:open', { detail: { id } }));
           setIsOpen(true);
           onFocus?.();
@@ -284,7 +287,8 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
         onBlur={handleInputBlur}
         onKeyDown={onKeyDown}
         placeholder={placeholder}
-        className="w-full px-1 py-0 text-xs outline-none bg-transparent"
+        disabled={disabled}
+        className={`w-full px-1 py-0 text-xs outline-none bg-transparent ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
       />
       {isOpen && (
         <div className="fixed bg-white border border-slate-300 rounded shadow-lg z-[9999] max-h-48 overflow-y-auto min-w-[150px]" style={{
@@ -333,14 +337,19 @@ interface FetchDataPageProps {
   machines?: any[];
   onNavigateToPlanning?: (mode: 'INTERNAL' | 'EXTERNAL') => void;
   onNavigateToOrder?: (client: string, fabric?: string) => void;
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager' | null;
 }
 
 const FetchDataPage: React.FC<FetchDataPageProps> = ({ 
   selectedDate: propSelectedDate,
   machines = [],
   onNavigateToPlanning,
-  onNavigateToOrder
+  onNavigateToOrder,
+  userRole
 }) => {
+  // Viewer role is read-only
+  const isReadOnly = userRole === 'viewer';
+  
   const [selectedDate, setSelectedDate] = useState<string>(propSelectedDate || new Date().toISOString().split('T')[0]);
   const [importDate, setImportDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [activeDay, setActiveDay] = useState<string>('');
@@ -2967,7 +2976,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                               }}
                               onChange={(e) => handleBlur(e, log.machineId, log.id, 'status')}
                               onKeyDown={(e) => handleKeyDown(e, idx, 'status')}
-                              className="w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none appearance-none font-bold text-[10px]"
+                              disabled={isReadOnly}
+                              className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none appearance-none font-bold text-[10px] ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
                             >
                               {(Object.values(MachineStatus) as MachineStatus[]).map((status) => (
                                 <option key={status} value={status}>
@@ -2981,7 +2991,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                                 defaultValue={customStatusNote}
                                 placeholder="اكتب الحالة..."
                                 onBlur={(e) => handleBlur({ target: { value: e.target.value, type: 'text' } } as any, log.machineId, log.id, 'customStatusNote')}
-                                className="w-full border-t border-slate-200 bg-white/70 text-[10px] text-center p-1 outline-none"
+                                disabled={isReadOnly}
+                                className={`w-full border-t border-slate-200 bg-white/70 text-[10px] text-center p-1 outline-none ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
                               />
                             )}
                           </div>
@@ -3001,7 +3012,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             onChange={(e) => handleUpdateLog(log.machineId, log.id, 'avgProduction', e.target.value, true)}
                             onBlur={(e) => handleUpdateLog(log.machineId, log.id, 'avgProduction', Number(e.target.value), false)}
                             onKeyDown={(e) => handleKeyDown(e, idx, 'avgProduction')}
-                            className="w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none"
+                            disabled={isReadOnly}
+                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
                           />
                         </td>
 
@@ -3019,7 +3031,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             onChange={(e) => handleUpdateLog(log.machineId, log.id, 'dayProduction', e.target.value, true)}
                             onBlur={(e) => handleUpdateLog(log.machineId, log.id, 'dayProduction', Number(e.target.value), false)}
                             onKeyDown={(e) => handleKeyDown(e, idx, 'dayProduction')}
-                            className="w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none font-semibold text-slate-800"
+                            disabled={isReadOnly}
+                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none font-semibold text-slate-800 ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
                           />
                         </td>
 
@@ -3101,7 +3114,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                                 handleUpdateLog(log.machineId, log.id, 'remainingMfg', finalVal, false);
                             }}
                             onKeyDown={(e) => handleKeyDown(e, idx, 'remainingMfg')}
-                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none ${
+                            disabled={isReadOnly}
+                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''} ${
                               (Number(log.remainingMfg) || 0) === 0 && (Number(log.dayProduction) || 0) > 0 
                                 ? 'text-green-600 font-bold' 
                                 : (Number(log.remainingMfg) || 0) === 0 && log.status !== 'Working'

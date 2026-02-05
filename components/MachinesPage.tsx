@@ -6,6 +6,7 @@ import { Settings, Box, Info, Search, X, Layers, List, CheckCircle2 } from 'luci
 
 interface MachinesPageProps {
   machines: MachineRow[];
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager' | null;
 }
 
 // Helper to normalize machine type
@@ -21,13 +22,15 @@ const EditableCell = ({
   onSave, 
   type = 'text', 
   className = '',
-  options = [] as string[]
+  options = [] as string[],
+  disabled = false
 }: { 
   value: string | number; 
   onSave: (val: string | number) => void; 
   type?: 'text' | 'number' | 'select';
   className?: string;
   options?: string[];
+  disabled?: boolean;
 }) => {
   const [localValue, setLocalValue] = useState(value);
 
@@ -36,7 +39,7 @@ const EditableCell = ({
   }, [value]);
 
   const handleBlur = () => {
-    if (localValue !== value) {
+    if (localValue !== value && !disabled) {
       onSave(localValue);
     }
   };
@@ -52,10 +55,12 @@ const EditableCell = ({
       <select
         value={localValue}
         onChange={(e) => {
+          if (disabled) return;
           setLocalValue(e.target.value);
           onSave(e.target.value);
         }}
-        className={`w-full bg-transparent border-none focus:ring-2 focus:ring-blue-500 rounded px-2 py-1 text-sm ${className}`}
+        disabled={disabled}
+        className={`w-full bg-transparent border-none focus:ring-2 focus:ring-blue-500 rounded px-2 py-1 text-sm ${className} ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
       >
         {options.map(opt => (
           <option key={opt} value={opt}>{opt}</option>
@@ -68,10 +73,11 @@ const EditableCell = ({
     <input
       type={type}
       value={localValue}
-      onChange={(e) => setLocalValue(type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value)}
+      onChange={(e) => !disabled && setLocalValue(type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value)}
       onBlur={handleBlur}
       onKeyDown={handleKeyDown}
-      className={`w-full bg-transparent border border-transparent hover:border-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded px-2 py-1 text-sm transition-all ${className}`}
+      disabled={disabled}
+      className={`w-full bg-transparent border border-transparent hover:border-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded px-2 py-1 text-sm transition-all ${className} ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
     />
   );
 };
@@ -96,7 +102,10 @@ const getEngineeringAdvice = (baseNeedles: number, targetNeedles: number) => {
   };
 };
 
-export const MachinesPage: React.FC<MachinesPageProps> = ({ machines }) => {
+export const MachinesPage: React.FC<MachinesPageProps> = ({ machines, userRole }) => {
+  // Viewer role is read-only
+  const isReadOnly = userRole === 'viewer';
+  
   const [fabrics, setFabrics] = useState<FabricDefinition[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<string>('all'); // 'all', 'single', 'double'
@@ -358,33 +367,38 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines }) => {
                         <td className="p-2">
                           <EditableCell 
                             value={machine.dia || ''} 
-                            onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'dia', val)} 
+                            onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'dia', val)}
+                            disabled={isReadOnly}
                           />
                         </td>
                         <td className="p-2">
                           <EditableCell 
                             value={machine.gauge || ''} 
-                            onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'gauge', val)} 
+                            onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'gauge', val)}
+                            disabled={isReadOnly}
                           />
                         </td>
                         <td className="p-2">
                           <EditableCell 
                             value={machine.feeders || 0} 
                             type="number"
-                            onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'feeders', val)} 
+                            onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'feeders', val)}
+                            disabled={isReadOnly}
                           />
                         </td>
                         <td className="p-2">
                           <EditableCell 
                             value={machine.needles || 0} 
                             type="number"
-                            onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'needles', val)} 
+                            onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'needles', val)}
+                            disabled={isReadOnly}
                           />
                         </td>
                         <td className="p-2">
                           <EditableCell 
                             value={machine.origin || ''} 
-                            onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'origin', val)} 
+                            onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'origin', val)}
+                            disabled={isReadOnly}
                           />
                         </td>
                         <td className="p-2">
@@ -392,13 +406,15 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines }) => {
                             value={machine.tubularOpen || 'Tubular'} 
                             type="select"
                             options={['Tubular', 'Open']}
-                            onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'tubularOpen', val)} 
+                            onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'tubularOpen', val)}
+                            disabled={isReadOnly}
                           />
                         </td>
                         <td className="p-2">
                           <EditableCell 
                             value={machine.tracks || ''} 
-                            onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'tracks', val)} 
+                            onSave={(val) => handleUpdateMachine(machine.firestoreId || machine.id.toString(), 'tracks', val)}
+                            disabled={isReadOnly}
                           />
                         </td>
                         
