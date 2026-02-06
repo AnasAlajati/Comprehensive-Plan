@@ -21,6 +21,7 @@ interface FabricDetailsModalProps {
   onUpdateOrderAllocations?: (orderId: string, allocations: Record<string, YarnAllocationItem[]>) => Promise<void>;
   onUpdateOrderVariant?: (variantId: string) => Promise<void>;
   variantId?: string;
+  onEditFabric?: (fabricId: string, highlightAddVariant?: boolean) => void;
 }
 
 const normalizeAllocations = (input: Record<string, any>): Record<string, YarnAllocationItem[]> => {
@@ -40,6 +41,118 @@ const normalizeAllocations = (input: Record<string, any>): Record<string, YarnAl
     return safe;
 };
 
+// Manual Yarn Allocation Component for unlinked yarns
+const ManualYarnAllocation: React.FC<{
+    yarnName: string;
+    requiredQty: number;
+    allocations: YarnAllocationItem[];
+    onUpdate: (allocations: YarnAllocationItem[]) => void;
+}> = ({ yarnName, requiredQty, allocations, onUpdate }) => {
+    const [lotNumber, setLotNumber] = useState('');
+    const [inputQty, setInputQty] = useState<number>(requiredQty);
+
+    const totalAllocated = allocations.reduce((sum, a) => sum + (a.quantity || 0), 0);
+    const remaining = Math.max(0, requiredQty - totalAllocated);
+
+    // Update input qty when remaining changes (after adding/removing)
+    React.useEffect(() => {
+        setInputQty(remaining > 0 ? remaining : requiredQty);
+    }, [remaining, requiredQty]);
+
+    const handleAdd = () => {
+        if (!lotNumber.trim() || inputQty <= 0) return;
+        const newAllocation: YarnAllocationItem = {
+            lotNumber: lotNumber.trim(),
+            quantity: inputQty,
+            allocatedAt: new Date().toISOString(),
+            isManual: true
+        };
+        onUpdate([...allocations, newAllocation]);
+        setLotNumber('');
+    };
+
+    const handleRemove = (idx: number) => {
+        onUpdate(allocations.filter((_, i) => i !== idx));
+    };
+
+    const handleUpdateQty = (idx: number, newQty: number) => {
+        const updated = allocations.map((a, i) => 
+            i === idx ? { ...a, quantity: newQty } : a
+        );
+        onUpdate(updated);
+    };
+
+    return (
+        <div className="space-y-2">
+            {/* Untracked Badge */}
+            <div className="flex items-center gap-2 text-xs">
+                <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full font-medium flex items-center gap-1">
+                    <AlertCircle size={10} />
+                    Untracked
+                </span>
+                <span className="text-slate-500">Manual allocation (not linked to inventory)</span>
+            </div>
+
+            {/* Existing Allocations */}
+            {allocations.length > 0 && (
+                <div className="space-y-1">
+                    {allocations.map((alloc, idx) => (
+                        <div key={idx} className="flex items-center gap-2 bg-amber-50 p-2 rounded border border-amber-200">
+                            <span className="flex-1 font-mono text-sm text-slate-700">{alloc.lotNumber}</span>
+                            <input
+                                type="number"
+                                value={alloc.quantity || 0}
+                                onChange={(e) => handleUpdateQty(idx, Number(e.target.value))}
+                                className="w-24 px-2 py-1 border border-amber-300 rounded text-sm text-right focus:outline-none focus:ring-2 focus:ring-amber-400"
+                            />
+                            <span className="text-sm text-slate-500">kg</span>
+                            <button 
+                                onClick={() => handleRemove(idx)}
+                                className="p-1 text-red-400 hover:text-red-600"
+                            >
+                                <Trash2 size={14} />
+                            </button>
+                        </div>
+                    ))}
+                    <div className={`text-xs text-right ${totalAllocated >= requiredQty ? 'text-emerald-600' : 'text-amber-600'}`}>
+                        Allocated: {totalAllocated.toLocaleString()} / {requiredQty.toLocaleString()} kg
+                        {totalAllocated < requiredQty && (
+                            <span className="ml-2 font-medium">(Remaining: {remaining.toLocaleString()} kg)</span>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Add New Lot */}
+            <div className="flex gap-2 items-center">
+                <input
+                    type="text"
+                    placeholder="Enter Lot Number..."
+                    value={lotNumber}
+                    onChange={(e) => setLotNumber(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+                    className="flex-1 px-3 py-2 border border-slate-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                />
+                <input
+                    type="number"
+                    value={inputQty}
+                    onChange={(e) => setInputQty(Number(e.target.value))}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+                    className="w-24 px-2 py-2 border border-slate-200 rounded-md text-sm text-right focus:outline-none focus:ring-2 focus:ring-amber-400"
+                />
+                <span className="text-sm text-slate-500">kg</span>
+                <button
+                    onClick={handleAdd}
+                    disabled={!lotNumber.trim() || inputQty <= 0}
+                    className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-md text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    Add
+                </button>
+            </div>
+        </div>
+    );
+};
+
 export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
   isOpen,
   onClose,
@@ -53,7 +166,9 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
   customerName,
   existingAllocations,
   onUpdateOrderAllocations,
-  variantId
+  onUpdateOrderVariant,
+  variantId,
+  onEditFabric
 }) => {
   const [composition, setComposition] = useState<any[]>([]);
   const [activeVariantId, setActiveVariantId] = useState<string | null>(null);
@@ -644,9 +759,13 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
                     {!isEditingVariant ? (
                         <button
                             onClick={() => {
-                                setIsEditingVariant(true);
-                                if (composition.length === 0) {
-                                    setComposition([{ yarnId: '', percentage: 100, scrapPercentage: 0 }]);
+                                if (onEditFabric) {
+                                    onEditFabric(fabric.id, true);
+                                } else {
+                                    setIsEditingVariant(true);
+                                    if (composition.length === 0) {
+                                        setComposition([{ yarnId: '', percentage: 100, scrapPercentage: 0 }]);
+                                    }
                                 }
                             }}
                             className="text-sm bg-white text-blue-600 px-3 py-1.5 rounded border border-blue-200 hover:bg-blue-50 font-medium flex items-center gap-1 shadow-sm"
@@ -827,7 +946,7 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
                                             </div>
                                         )}
                                         {!comp.yarnId && (
-                                            <div className="text-[10px] text-red-500 font-bold flex items-center gap-1 mt-1">
+                                            <div className="text-[10px] text-amber-600 font-bold flex items-center gap-1 mt-1">
                                                 <AlertCircle size={10} />
                                                 Unlinked Yarn
                                             </div>
@@ -835,91 +954,12 @@ export const FabricDetailsModal: React.FC<FabricDetailsModalProps> = ({
                                     </div>
                                     <div className="col-span-9 relative">
                                         {!comp.yarnId ? (
-                                            <div className="flex flex-col gap-2">
-                                                <div className="p-3 bg-red-50 border border-red-100 rounded text-xs text-red-600 flex items-center gap-2">
-                                                    <AlertCircle size={14} />
-                                                    Please select a valid yarn in the Composition tab to enable allocation.
-                                                </div>
-                                                
-                                                {/* Quick Fix for Inventory Match */}
-                                                {(() => {
-                                                    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
-                                                    const target = normalize(comp.name || '');
-                                                    const inventoryMatch = inventoryYarnNames.find(n => normalize(n) === target);
-                                                    
-                                                    if (inventoryMatch) {
-                                                        return (
-                                                            <button
-                                                                onClick={async () => {
-                                                                    if (confirm(`Create Master Yarn for "${inventoryMatch}"?`)) {
-                                                                        try {
-                                                                            const newId = await onAddYarn(inventoryMatch);
-                                                                            // Update local composition state to link immediately
-                                                                            const newComp = [...composition];
-                                                                            newComp[index] = { ...newComp[index], yarnId: newId };
-                                                                            setComposition(newComp);
-                                                                        } catch (e) {
-                                                                            alert("Failed to create yarn: " + e);
-                                                                        }
-                                                                    }
-                                                                }}
-                                                                className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-medium flex items-center justify-center gap-2 shadow-sm"
-                                                            >
-                                                                <CheckCircle2 size={14} />
-                                                                Fix: Create Master Yarn from Stock
-                                                            </button>
-                                                        );
-                                                    }
-                                                    return null;
-                                                })()}
-
-                                                {/* DEBUG TOOL */}
-                                                <div className="p-2 bg-slate-100 border border-slate-200 rounded text-[10px] font-mono text-slate-600">
-                                                    <div className="font-bold mb-1">DEBUG INFO:</div>
-                                                    <div>Raw Name: "{comp.name}"</div>
-                                                    <div>Normalized: "{comp.name?.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '')}"</div>
-                                                    <div>Master Yarns Loaded: {allYarns.length}</div>
-                                                    
-                                                    <div className="mt-2 font-bold">Potential Candidates in Master List:</div>
-                                                    {(() => {
-                                                        const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
-                                                        const target = normalize(comp.name || '');
-                                                        // Find anything that shares the first 5 chars or is included
-                                                        const candidates = allYarns.filter(y => {
-                                                            const normY = normalize(y.name);
-                                                            return normY.includes(target) || target.includes(normY) || (target.length > 4 && normY.startsWith(target.substring(0, 5)));
-                                                        }).slice(0, 5);
-
-                                                        // Check Inventory List as well
-                                                        const inventoryMatch = inventoryYarnNames.find(n => normalize(n) === target);
-
-                                                        return (
-                                                            <>
-                                                                {inventoryMatch && (
-                                                                    <div className="mb-2 p-1 bg-green-50 border border-green-200 rounded text-green-700">
-                                                                        <strong>Found in Inventory!</strong><br/>
-                                                                        "{inventoryMatch}" exists in stock but is missing from the Master Yarn List. You must create it to link it.
-                                                                    </div>
-                                                                )}
-                                                                
-                                                                {candidates.length === 0 ? (
-                                                                    <div>No close matches found in Master List.</div>
-                                                                ) : (
-                                                                    candidates.map(c => (
-                                                                        <div key={c.id} className="border-t border-slate-200 mt-1 pt-1">
-                                                                            <div>Name: "{c.name}"</div>
-                                                                            <div>Norm: "{normalize(c.name)}"</div>
-                                                                            <div className="text-red-500">
-                                                                                Match: {normalize(c.name) === target ? "YES (Why didn't it link?)" : "NO"}
-                                                                            </div>
-                                                                        </div>
-                                                                    ))
-                                                                )}
-                                                            </>
-                                                        );
-                                                    })()}
-                                                </div>
-                                            </div>
+                                            <ManualYarnAllocation
+                                                yarnName={yarnName}
+                                                requiredQty={requiredWeight}
+                                                allocations={Array.isArray(allocations[`manual_${index}`]) ? allocations[`manual_${index}`] : []}
+                                                onUpdate={(newAllocations) => handleUpdateAllocations(`manual_${index}`, newAllocations)}
+                                            />
                                         ) : isSearchingInventory === comp.yarnId ? (
                                             <div className="absolute inset-0 z-10 bg-white border border-indigo-300 rounded-md shadow-lg flex flex-col min-h-[150px]">
                                                 <div className="flex items-center border-b border-slate-100 p-1">

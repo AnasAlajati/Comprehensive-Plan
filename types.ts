@@ -96,6 +96,9 @@ export interface FabricDefinition {
   // Production rate fields (Option 2 - Fabric-based rates)
   avgProductionPerDay?: number; // Default kg/day for ALL machines
   machineOverrides?: Record<string, number>; // machineId -> kg/day for exceptions
+  // Fabric Image
+  imageUrl?: string; // URL to fabric image in Firebase Storage
+  imagePath?: string; // Storage path for deletion
 }
 
 export interface CustomerOrder {
@@ -301,6 +304,7 @@ export interface YarnAllocationItem {
   lotNumber: string;
   quantity: number;
   allocatedAt: string;
+  isManual?: boolean; // True if manually entered (not linked to inventory)
 }
 
 export interface OrderRow {

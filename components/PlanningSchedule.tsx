@@ -422,6 +422,17 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
       }
     };
     loadData();
+
+    // Listen for fabric-saved events from GlobalFabricButton or other places
+    const handleFabricSaved = (event: CustomEvent) => {
+      // Refresh fabrics list when a fabric is added/edited anywhere
+      DataService.getFabrics().then(setFabrics).catch(console.error);
+    };
+    window.addEventListener('fabric-saved', handleFabricSaved as EventListener);
+    
+    return () => {
+      window.removeEventListener('fabric-saved', handleFabricSaved as EventListener);
+    };
   }, []);
 
   const handleDateChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1502,20 +1513,20 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-center border-collapse text-sm">
+              <table className="w-full text-center border-collapse text-sm min-w-[900px]">
                 <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
                   <tr>
-                    <th className="py-3 px-2 border-r border-slate-100 w-10 text-slate-400 hidden md:table-cell">::</th>
-                    <th className="py-3 px-2 border-r border-slate-100 w-28 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Start Date</span><span className="text-[10px] text-slate-400">تاريخ البدء</span></div></th>
-                    <th className="py-3 px-2 border-r border-slate-100 w-28 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">End Date</span><span className="text-[10px] text-slate-400">تاريخ الانتهاء</span></div></th>
-                    <th className="py-3 px-2 border-r border-slate-100 w-24 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Orig. Machine</span><span className="text-[10px] text-slate-400">الاصل</span></div></th>
-                    <th className="py-3 px-2 border-r border-slate-100 w-20 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Days</span><span className="text-[10px] text-slate-400">المدة</span></div></th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-10 text-slate-400">::</th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-28"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Start Date</span><span className="text-[10px] text-slate-400">تاريخ البدء</span></div></th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-28"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">End Date</span><span className="text-[10px] text-slate-400">تاريخ الانتهاء</span></div></th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-24"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Orig. Machine</span><span className="text-[10px] text-slate-400">الاصل</span></div></th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-20"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Days</span><span className="text-[10px] text-slate-400">المدة</span></div></th>
                     <th className="py-3 px-2 border-r border-slate-100 w-24"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Client</span><span className="text-[10px] text-slate-400">العميل</span></div></th>
-                    <th className="py-3 px-2 border-r border-slate-100 w-20 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Remaining</span><span className="text-[10px] text-slate-400">متبقي</span></div></th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-20"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Remaining</span><span className="text-[10px] text-slate-400">متبقي</span></div></th>
                     <th className="py-3 px-2 border-r border-slate-100 w-20"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Qty</span><span className="text-[10px] text-slate-400">الكمية</span></div></th>
-                    <th className="py-3 px-2 border-r border-slate-100 w-20 hidden md:table-cell"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Prod/Day</span><span className="text-[10px] text-slate-400">انتاج/يوم</span></div></th>
+                    <th className="py-3 px-2 border-r border-slate-100 w-20"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Prod/Day</span><span className="text-[10px] text-slate-400">انتاج/يوم</span></div></th>
                     <th className="py-3 px-2 border-r border-slate-100"><div className="flex flex-col"><span className="text-xs text-slate-500 uppercase tracking-wider">Fabric / Notes</span><span className="text-[10px] text-slate-400">الخامة / ملاحظات</span></div></th>
-                    <th className="py-3 px-2 w-10 text-slate-400 hidden md:table-cell">#</th>
+                    <th className="py-3 px-2 w-10 text-slate-400">#</th>
                     <th className="py-3 px-2 w-20 text-slate-400">Actions</th>
                   </tr>
                 </thead>
@@ -1523,11 +1534,11 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                   {/* Current Machine Status Row */}
                   {isWorking ? (
                     <tr className="bg-emerald-50 border-b-2 border-emerald-100 relative group">
-                      <td className="p-2 text-center align-middle hidden md:table-cell"><span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-200 text-emerald-700 text-[10px] font-bold">Now</span></td>
-                      <td className="p-2 text-xs font-bold text-emerald-800 align-middle hidden md:table-cell">{activeDay}</td>
-                      <td className="p-2 text-xs font-bold text-emerald-800 align-middle hidden md:table-cell">{currentEndDate}</td>
-                      <td className="p-2 text-center text-xs text-slate-400 align-middle hidden md:table-cell">-</td>
-                      <td className="p-2 text-center align-middle hidden md:table-cell"><div className="text-emerald-700 text-xs font-bold bg-white/50 py-1 rounded border border-emerald-200 mx-auto w-12">{currentRemainingDays}</div></td>
+                      <td className="p-2 text-center align-middle"><span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-200 text-emerald-700 text-[10px] font-bold">Now</span></td>
+                      <td className="p-2 text-xs font-bold text-emerald-800 align-middle">{activeDay}</td>
+                      <td className="p-2 text-xs font-bold text-emerald-800 align-middle">{currentEndDate}</td>
+                      <td className="p-2 text-center text-xs text-slate-400 align-middle">-</td>
+                      <td className="p-2 text-center align-middle"><div className="text-emerald-700 text-xs font-bold bg-white/50 py-1 rounded border border-emerald-200 mx-auto w-12">{currentRemainingDays}</div></td>
                       <td className="p-2 text-center text-xs font-bold text-blue-600 align-middle relative group">
                         {machine.client}
                         {machine.orderReference && (
@@ -1537,27 +1548,19 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                           </div>
                         )}
                       </td>
-                      <td className="p-2 text-center text-xs font-bold text-emerald-700 align-middle hidden md:table-cell">{machine.remainingMfg}</td>
+                      <td className="p-2 text-center text-xs font-bold text-emerald-700 align-middle">{machine.remainingMfg}</td>
                       <td className="p-2 text-center text-xs text-slate-500 align-middle">-</td>
-                      <td className="p-2 text-center text-xs text-slate-600 align-middle hidden md:table-cell">{machine.dayProduction}</td>
+                      <td className="p-2 text-center text-xs text-slate-600 align-middle">{machine.dayProduction}</td>
                       <td className="p-2 text-right text-xs font-medium text-slate-800 align-middle dir-rtl"><div className="flex items-center justify-end gap-2"><span>{getFabricShortName(machine.material)}</span><span className="px-2 py-0.5 bg-emerald-200 text-emerald-800 text-[9px] rounded-full uppercase font-bold tracking-wider">Active</span></div></td>
-                      <td className="p-2 text-center text-[10px] text-slate-400 align-middle hidden md:table-cell">0</td>
-                      <td className="p-2 text-center text-[10px] text-slate-400 italic align-middle">
-                        <span className="hidden md:inline">Live</span>
-                        <button 
-                          onClick={() => setDetailsModal({ isOpen: true, machine, isCurrent: true })}
-                          className="md:hidden px-2 py-1 bg-emerald-100 text-emerald-700 rounded text-[10px] font-bold"
-                        >
-                          More
-                        </button>
-                      </td>
+                      <td className="p-2 text-center text-[10px] text-slate-400 align-middle">0</td>
+                      <td className="p-2 text-center text-[10px] text-slate-400 italic align-middle">Live</td>
                     </tr>
                   ) : (
                     <tr className={`${isOther ? 'bg-purple-50 border-purple-200' : 'bg-amber-50/50 border-amber-100'} border-b-2`}>
-                      <td className="p-2 text-center align-middle hidden md:table-cell">
+                      <td className="p-2 text-center align-middle">
                         <span className={`w-3 h-3 rounded-full inline-block ${isOther ? 'bg-purple-500' : 'bg-amber-400'}`}></span>
                       </td>
-                      <td colSpan={machine.material || machine.client ? 5 : 12} className={`p-3 ${machine.material || machine.client ? '' : 'text-center'}`}>
+                      <td colSpan={machine.material || machine.client ? 5 : 11} className={`p-3 ${machine.material || machine.client ? '' : 'text-center'}`}>
                         <div className="flex items-center gap-3 flex-wrap">
                           <span className={`px-3 py-1.5 rounded-lg text-sm font-bold ${isOther ? 'bg-purple-100 text-purple-800' : 'bg-amber-100 text-amber-800'}`}>
                             {machine.status}
@@ -1572,13 +1575,13 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                       </td>
                       {(machine.material || machine.client) && (
                         <>
-                          <td className="p-2 text-center hidden md:table-cell">
+                          <td className="p-2 text-center">
                             <span className="text-xs text-slate-400">-</span>
                           </td>
                           <td className="p-2 text-center">
                             <span className="text-xs text-slate-400">-</span>
                           </td>
-                          <td className="p-2 text-center hidden md:table-cell">
+                          <td className="p-2 text-center">
                             <span className="text-xs text-slate-400">-</span>
                           </td>
                           <td className="p-3 text-right" dir="rtl">
@@ -1602,7 +1605,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                               )}
                             </div>
                           </td>
-                          <td className="p-2 text-center hidden md:table-cell">
+                          <td className="p-2 text-center">
                             <span className="text-xs text-slate-400">-</span>
                           </td>
                           <td className="p-2 text-center">
@@ -1631,10 +1634,10 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                         onDragOver={handleDragOver}
                         onDrop={(e) => handleDrop(e, machine.machineSSId, index)}
                       >
-                        <td className="p-2 text-slate-300 cursor-move hover:text-slate-500 drag-handle align-middle hidden md:table-cell">⠿</td>
-                        <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50 align-middle hidden md:table-cell">{formatDateShort(plan.startDate) || '-'}</td>
-                        <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50 align-middle hidden md:table-cell">{formatDateShort(plan.endDate) || '-'}</td>
-                        <td className="p-1 align-middle hidden md:table-cell">
+                        <td className="p-2 text-slate-300 cursor-move hover:text-slate-500 drag-handle align-middle">⠿</td>
+                        <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50 align-middle">{formatDateShort(plan.startDate) || '-'}</td>
+                        <td className="p-2 text-xs font-medium text-slate-500 bg-slate-50/50 align-middle">{formatDateShort(plan.endDate) || '-'}</td>
+                        <td className="p-1 align-middle">
                           {!isSettings && (
                              <SearchDropdown
                                 id={`orig-${machine.machineSSId}-${index}`}
@@ -1651,7 +1654,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                              />
                           )}
                         </td>
-                        <td className="p-1 align-middle hidden md:table-cell">
+                        <td className="p-1 align-middle">
                           {isSettings ? (
                              <input type="number" min="1" max="30" className="w-full text-center py-1.5 px-2 rounded bg-white border border-amber-200 focus:ring-1 focus:ring-amber-500 outline-none font-bold text-amber-700" value={plan.days} onChange={(e) => handlePlanChange(machine, index, 'days', Number(e.target.value))} />
                           ) : (
@@ -1677,13 +1680,13 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                             </div>
                           )}
                         </td>
-                        <td className="p-1 align-middle hidden md:table-cell">
+                        <td className="p-1 align-middle">
                           {!isSettings && <input type="number" className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-600" value={plan.remaining} onChange={(e) => handlePlanChange(machine, index, 'remaining', Number(e.target.value))} />}
                         </td>
                         <td className="p-1 align-middle">
                           {!isSettings && <input type="number" className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-600 font-medium" value={plan.quantity} onChange={(e) => handlePlanChange(machine, index, 'quantity', Number(e.target.value))} />}
                         </td>
-                        <td className="p-1 align-middle hidden md:table-cell">
+                        <td className="p-1 align-middle">
                            {!isSettings && <input type="number" className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-slate-600" value={plan.productionPerDay} onChange={(e) => handlePlanChange(machine, index, 'productionPerDay', Number(e.target.value))} />}
                         </td>
                         <td className="p-1 align-middle relative">
@@ -1720,7 +1723,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                              />
                           )}
                         </td>
-                        <td className="p-2 text-xs text-slate-300 font-mono align-middle hidden md:table-cell">{index + 1}</td>
+                        <td className="p-2 text-xs text-slate-300 font-mono align-middle">{index + 1}</td>
                         <td className="p-1 align-middle">
                            <div className="flex items-center justify-center gap-1">
                               {/* Production History Button */}

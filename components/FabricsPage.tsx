@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { collection, getDocs, writeBatch, doc, query, where, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { DataService } from '../services/dataService';
 import { parseFabricName } from '../services/data';
 import { FabricDefinition, FabricYarn, FabricVariant } from '../types';
 import { FabricFormModal } from './FabricFormModal';
@@ -210,43 +211,11 @@ export const FabricsPage: React.FC<FabricsPageProps> = ({ userRole }) => {
 
     setSaving(true);
     try {
-      const docId = editingFabric?.id || formData.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+      // Use centralized upsertFabric from DataService
+      const savedFabric = await DataService.upsertFabric(formData, machines, editingFabric?.id);
       
-      // Auto-calculate specs based on work centers
-      const workCenterList = formData.workCenters || [];
-      let specs = undefined;
-      
-      if (workCenterList.length > 0) {
-        // Find all machines linked to these work centers
-        const linkedMachines = machines.filter(m => workCenterList.includes(m.machineName || m.name));
-        
-        if (linkedMachines.length > 0) {
-          // Check if they are all in the same group (Type + Gauge)
-          // And ideally same SubGroup (Dia + Needles) for "Tier 1" DNA
-          // For now, we take the first machine as the "DNA Source" if they are compatible
-          // Or we can store the "Group DNA"
-          
-          const firstM = linkedMachines[0];
-          specs = {
-            gauge: firstM.gauge || 'Unknown',
-            diameter: firstM.dia || 'Unknown',
-            needles: Number(firstM.needles) || 0,
-            type: firstM.type || 'Unknown'
-          };
-        }
-      }
-
-      const fabricData: FabricDefinition = {
-        id: docId,
-        name: formData.name,
-        code: formData.code,
-        shortName: formData.shortName,
-        workCenters: workCenterList,
-        variants: formData.variants,
-        ...(specs ? { specs } : {})
-      };
-
-      await setDoc(doc(db, 'FabricSS', docId), fabricData, { merge: true });
+      // Dispatch global event for cross-component sync
+      window.dispatchEvent(new CustomEvent('fabric-saved', { detail: savedFabric }));
       
       setSuccess(editingFabric ? 'Fabric updated successfully' : 'Fabric added successfully');
       handleCloseModal();

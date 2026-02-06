@@ -3,14 +3,14 @@ import { writeBatch, doc, getDoc, onSnapshot, collection, setDoc } from 'firebas
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
 import { parseFabricName } from '../services/data';
-import { PlanItem, MachineStatus, CustomerOrder, MachineRow } from '../types';
+import { PlanItem, MachineStatus, CustomerOrder, MachineRow, FabricDefinition } from '../types';
 import { LinkOrderModal } from './LinkOrderModal';
 import { toJpeg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 import { CheckCircle, Send, Link, Truck, Layout, Factory, FileSpreadsheet, Upload, X, Check, Sparkles, Edit, ArrowRight, History, CheckCircle2, XCircle, AlertTriangle, Download, Plus, Search, Calendar, FileText, Book, Trash2 } from 'lucide-react';
 import { ExternalProductionSheet } from './ExternalProductionSheet'; // New Component - Force Refresh
-import { FabricFormModal } from './FabricFormModal';
+import { StandaloneFabricEditor } from './FabricEditor';
 import { FabricDirectoryModal } from './FabricDirectoryModal';
 import { MachineHistoryModal } from './MachineHistoryModal';
 import { DailySummaryModal } from './DailySummaryModal';
@@ -363,6 +363,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [fetchSourceDate, setFetchSourceDate] = useState<string>('');
   const [lastValidDate, setLastValidDate] = useState<string>('');
   const [isFabricModalOpen, setIsFabricModalOpen] = useState(false);
+  const [editingFabric, setEditingFabric] = useState<FabricDefinition | null>(null);
   const [isFabricDirectoryOpen, setIsFabricDirectoryOpen] = useState(false);
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
   const [historyModalOpen, setHistoryModalOpen] = useState<{
@@ -601,54 +602,13 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [labScrap, setLabScrap] = useState<number>(0);
   const [showExternalSheet, setShowExternalSheet] = useState(false); // Toggle for External Sheet
   
-  const handleSaveFabric = async (formData: any) => {
-    if (!formData.name) return;
-    setLoading(true);
-    try {
-      // 1. Generate Deterministic ID
-      const docId = formData.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-      
-      // 2. Auto-calculate specs based on work centers
-      const workCenterList = formData.workCenters || [];
-      let specs = undefined;
-      
-      if (workCenterList.length > 0) {
-        // Use rawMachines (Component State)
-        const linkedMachines = rawMachines.filter((m: any) => workCenterList.includes(m.machineName || m.name));
-        
-        if (linkedMachines.length > 0) {
-          const firstM = linkedMachines[0];
-          specs = {
-            gauge: firstM.gauge || 'Unknown',
-            diameter: firstM.dia || 'Unknown',
-            needles: Number(firstM.needles) || 0,
-            type: firstM.type || 'Unknown'
-          };
-        }
-      }
-
-      // 3. Construct Clean Object
-      const fabricData = {
-        id: docId,
-        name: formData.name,
-        code: formData.code,
-        shortName: formData.shortName,
-        workCenters: workCenterList,
-        variants: formData.variants,
-        ...(specs ? { specs } : {})
-      };
-
-      await setDoc(doc(db, 'FabricSS', docId), fabricData, { merge: true });
-
-      const updatedFabrics = await DataService.getFabrics();
-      setFabrics(updatedFabrics);
-      setIsFabricModalOpen(false);
-      showMessage('✅ Fabric added successfully');
-    } catch (error: any) {
-      showMessage('❌ Error adding fabric: ' + error.message, true);
-    } finally {
-      setLoading(false);
-    }
+  // Centralized fabric save handler using DataService.upsertFabric
+  const handleFabricSaved = async (savedFabric: FabricDefinition) => {
+    const updatedFabrics = await DataService.getFabrics();
+    setFabrics(updatedFabrics);
+    setIsFabricModalOpen(false);
+    setEditingFabric(null);
+    showMessage(editingFabric ? '✅ Fabric updated successfully' : '✅ Fabric added successfully');
   };
 
   // Import ODOO State
@@ -4709,12 +4669,13 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           </div>
         </div>
       )}
-      {/* Add/Edit Modal */}
-      <FabricFormModal
+      {/* Add/Edit Modal - Using Centralized Editor */}
+      <StandaloneFabricEditor
         isOpen={isFabricModalOpen}
         onClose={() => setIsFabricModalOpen(false)}
-        onSave={handleSaveFabric}
+        onSaved={handleFabricSaved}
         machines={rawMachines}
+        initialData={editingFabric}
       />
 
       {/* Fabric Directory Modal */}

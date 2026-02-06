@@ -654,7 +654,7 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
             </div>
         </div>
 
-        <div className="flex-1 overflow-hidden flex flex-col lg:flex-row bg-slate-50">
+        <div className="flex-1 overflow-x-auto flex flex-row bg-slate-50">
             
             {/* LEFT PANEL: Allocation Helper (Tabs) */}
             <div className="flex-1 flex flex-col border-r border-slate-200 bg-white overflow-hidden min-w-[350px]">
@@ -970,7 +970,7 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
             </div>
 
             {/* RIGHT PANEL: Current Schedule Overview */}
-            <div className="w-full lg:w-[350px] xl:w-[400px] flex flex-col h-full bg-slate-50/50 shrink-0 border-t lg:border-t-0 lg:border-l border-slate-200">
+            <div className="w-[350px] xl:w-[400px] flex flex-col h-full bg-slate-50/50 shrink-0 border-l border-slate-200">
                 <div className="p-4 border-b border-slate-200 bg-white">
                     <h3 className="font-bold text-slate-800 flex items-center gap-2">
                         <Calendar size={18} className="text-slate-400" />

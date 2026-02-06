@@ -165,8 +165,27 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
 
 
 
-  // Helper to get yarn name
+  // Helper to get yarn name (handles manual allocations for unlinked yarns)
   const getYarnName = (id: string) => {
+    // Check if this is a manual allocation key (e.g., "manual_0", "manual_1")
+    if (id.startsWith('manual_')) {
+      const index = parseInt(id.replace('manual_', ''), 10);
+      if (!isNaN(index) && fabric) {
+        // Try to get yarn name from fabric variant composition
+        const activeVariant = order.variantId 
+          ? fabric.variants?.find(v => v.id === order.variantId)
+          : fabric.variants?.[0];
+        
+        if (activeVariant?.yarns && activeVariant.yarns[index]) {
+          const comp = activeVariant.yarns[index];
+          // FabricYarn has 'name' property directly
+          if (comp.name) return comp.name;
+          return `Yarn ${index + 1}`;
+        }
+      }
+      return `Manual Yarn ${id.replace('manual_', '')}`;
+    }
+    
     const y = allYarns.find(y => y.id === id || y.yarnId === id);
     return y ? y.name : id;
   };

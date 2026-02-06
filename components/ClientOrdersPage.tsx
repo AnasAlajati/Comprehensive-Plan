@@ -17,14 +17,15 @@ import {
   writeBatch,
   deleteField
 } from 'firebase/firestore';
-import { db, auth } from '../services/firebase';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { db, auth, storage } from '../services/firebase';
 import { DataService } from '../services/dataService';
 import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem, FabricDefinition, Dyehouse, DyehouseMachine, Season, ReceiveEvent, DyeingBatch, ExternalPlanAssignment } from '../types';
 import { FabricDetailsModal } from './FabricDetailsModal';
 import { FabricDyehouseModal } from './FabricDyehouseModal';
 import { ColorApprovalModal } from './ColorApprovalModal';
 import { DyehouseTrackingModal } from './DyehouseTrackingModal';
-import { FabricFormModal } from './FabricFormModal';
+import { StandaloneFabricEditor } from './FabricEditor';
 import { CreatePlanModal } from './CreatePlanModal';
 import { FabricProductionOrderModal } from './FabricProductionOrderModal';
 import { OrderProductionHistoryModal } from './OrderProductionHistoryModal';
@@ -71,7 +72,9 @@ import {
   Link,
   Link2,
   Edit2,
-  Unlink
+  Unlink,
+  Image as ImageIcon,
+  Camera
 } from 'lucide-react';
 
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
@@ -1116,7 +1119,8 @@ const MemoizedOrderRow = React.memo(({
   onOpenColorApproval,
   onOpenDyehouseTracking,
   visibleColumns,
-  onToggleColumnVisibility
+  onToggleColumnVisibility,
+  onUploadFabricImage
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -1124,7 +1128,7 @@ const MemoizedOrderRow = React.memo(({
   isSelected: boolean;
   toggleSelectRow: (id: string) => void;
   handleUpdateOrder: (id: string, updates: Partial<OrderRow>) => void;
-  handleCreateFabric: (name: string) => void;
+  handleCreateFabric: (name: string, targetRowId?: string) => void;
   handlePlanSearch: (client: string, material: string) => void;
   handleDeleteRow: (id: string) => void;
   selectedCustomerName: string;
@@ -1149,6 +1153,7 @@ const MemoizedOrderRow = React.memo(({
   onOpenDyehouseTracking: (data: { isOpen: boolean; orderId: string; batchIdx: number; batch: DyeingBatch }) => void;
   visibleColumns: Record<string, boolean>;
   onToggleColumnVisibility: (columnId: string) => void;
+  onUploadFabricImage: (fabricId: string, file: File) => void;
 }) => {
   // Viewer role is read-only
   const isReadOnly = userRole === 'viewer';
@@ -1161,6 +1166,8 @@ const MemoizedOrderRow = React.memo(({
   const [showMachineDetails, setShowMachineDetails] = useState<{ capacity: number; batches: any[] } | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const [showColumnPicker, setShowColumnPicker] = useState(false);
+  const [showImagePreview, setShowImagePreview] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const refCode = row.material ? `${selectedCustomerName}-${row.material}` : '-';
   const hasActive = statusInfo && statusInfo.active.length > 0;
   const displayRemaining = hasActive ? statusInfo.remaining : row.remainingQty;
@@ -1405,8 +1412,16 @@ const MemoizedOrderRow = React.memo(({
         <>
           {/* Fabric (Read-only in Dyehouse View) */}
           <td className="p-0 border-r border-slate-200 relative group/fabric" title={refCode}>
-             <div className="flex items-center justify-between h-full w-full px-3 py-2">
-                <div className="text-slate-700 font-medium truncate mr-2">
+             <div className="flex items-center h-full w-full px-3 py-2 gap-2">
+                {/* Fabric Image */}
+                {fabricDetails?.imageUrl && (
+                  <img 
+                    src={fabricDetails.imageUrl} 
+                    alt={fabricDetails.shortName || fabricDetails.name}
+                    className="w-8 h-8 object-cover rounded border border-slate-200 shadow-sm flex-shrink-0"
+                  />
+                )}
+                <div className="text-slate-700 font-medium truncate flex-1">
                     {(() => {
                       const fabricDef = fabrics.find(f => f.name === row.material);
                       return fabricDef ? (fabricDef.shortName || fabricDef.name) : (row.material || '-');
@@ -1556,7 +1571,93 @@ const MemoizedOrderRow = React.memo(({
         <>
           {/* Fabric */}
           <td className="p-0 border-r border-slate-200 relative group/fabric" title={refCode}>
-            <div className="flex items-center h-full w-full">
+            <div className="flex items-center h-full w-full gap-3">
+              {/* Fabric Image Thumbnail with Hover Popup */}
+              <div className="relative flex-shrink-0 ml-2 group/img">
+                {fabricDetails?.imageUrl ? (
+                  <>
+                    <img 
+                      src={fabricDetails.imageUrl} 
+                      alt={fabricDetails.shortName || fabricDetails.name}
+                      className="w-10 h-10 object-cover rounded-lg border border-slate-200 shadow-sm cursor-pointer hover:ring-2 hover:ring-blue-400 transition-all"
+                      onClick={() => setShowImagePreview(true)}
+                    />
+                    {/* Hover Popup - Large Preview */}
+                    <div className="absolute left-12 top-0 z-50 hidden group-hover/img:block pointer-events-none">
+                      <div className="bg-white p-2 rounded-xl shadow-2xl border border-slate-200">
+                        <img 
+                          src={fabricDetails.imageUrl} 
+                          alt={fabricDetails.shortName || fabricDetails.name}
+                          className="w-56 h-56 object-cover rounded-lg"
+                        />
+                        <p className="text-center text-xs font-medium text-slate-600 mt-2 truncate max-w-[224px]">
+                          {fabricDetails.shortName || fabricDetails.name}
+                        </p>
+                      </div>
+                    </div>
+                    {/* Upload Button */}
+                    {!isReadOnly && (
+                      <label className="absolute -bottom-1 -right-1 p-1 bg-white rounded-full shadow border border-slate-200 cursor-pointer opacity-0 group-hover/img:opacity-100 transition-opacity hover:bg-blue-50 pointer-events-auto">
+                        <Camera size={10} className="text-blue-600" />
+                        <input 
+                          type="file" 
+                          accept="image/*" 
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file && fabricDetails?.id) {
+                              onUploadFabricImage(fabricDetails.id, file);
+                            }
+                          }}
+                        />
+                      </label>
+                    )}
+                  </>
+                ) : (
+                  <label className={`w-10 h-10 flex items-center justify-center bg-slate-50 rounded-lg border-2 border-dashed border-slate-300 ${isReadOnly ? 'cursor-not-allowed' : 'cursor-pointer hover:border-blue-400 hover:bg-blue-50'} transition-all`}>
+                    <ImageIcon size={16} className="text-slate-400" />
+                    {!isReadOnly && fabricDetails?.id && (
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file && fabricDetails?.id) {
+                            onUploadFabricImage(fabricDetails.id, file);
+                          }
+                        }}
+                      />
+                    )}
+                  </label>
+                )}
+                
+                {/* Image Preview Modal */}
+                {showImagePreview && fabricDetails?.imageUrl && (
+                  <div 
+                    className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center p-4"
+                    onClick={() => setShowImagePreview(false)}
+                  >
+                    <div className="relative max-w-2xl max-h-[80vh]">
+                      <img 
+                        src={fabricDetails.imageUrl} 
+                        alt={fabricDetails.shortName || fabricDetails.name}
+                        className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl"
+                      />
+                      <button 
+                        onClick={() => setShowImagePreview(false)}
+                        className="absolute -top-3 -right-3 p-2 bg-white rounded-full shadow-lg hover:bg-red-50 text-red-500"
+                      >
+                        <X size={16} />
+                      </button>
+                      <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/80 to-transparent rounded-b-lg">
+                        <p className="text-white font-medium text-center">{fabricDetails.shortName || fabricDetails.name}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              
               <div className="flex-1 h-full flex flex-col justify-center">
                 <SearchDropdown
                   id={`fabric-${row.id}`}
@@ -1566,7 +1667,7 @@ const MemoizedOrderRow = React.memo(({
                       // Reset variant when fabric changes
                       handleUpdateOrder(row.id, { material: val, variantId: undefined });
                   }}
-                  onCreateNew={handleCreateFabric}
+                  onCreateNew={(name) => handleCreateFabric(name, row.id)}
                   placeholder="Select Fabric..."
                 />
                 
@@ -1590,23 +1691,41 @@ const MemoizedOrderRow = React.memo(({
                     </div>
                 )}
 
-                {/* Total Yarn Display */}
-                {hasComposition && row.requiredQty > 0 && (
+                {/* Yarn Info / Add Yarn Button - Always show when fabric exists */}
+                {row.material && (
                    <div className="mt-1 px-1 flex items-center gap-2">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onOpenFabricDetails(row.material, row.requiredQty, row.id);
-                        }}
-                        className="text-[10px] font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 hover:bg-blue-100 transition-colors flex items-center gap-1"
-                        title="View Yarn Details"
-                      >
-                        <Calculator size={10} />
-                        Yarn Info
-                      </button>
-                      <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200" title="Total Yarn Required including scrap">
-                        Total: {totalYarnForOrder.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
-                      </span>
+                      {hasComposition ? (
+                        <>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenFabricDetails(row.material, row.requiredQty || 0, row.id);
+                            }}
+                            className="text-[10px] font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 hover:bg-blue-100 transition-colors flex items-center gap-1"
+                            title="View Yarn Details"
+                          >
+                            <Calculator size={10} />
+                            Yarn Info
+                          </button>
+                          {totalYarnForOrder > 0 && (
+                            <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200" title="Total Yarn Required including scrap">
+                              Total: {totalYarnForOrder.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCreateFabric(row.material, row.id);
+                          }}
+                          className="text-[10px] font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 hover:bg-amber-100 transition-colors flex items-center gap-1"
+                          title="Add Yarn Composition"
+                        >
+                          <AlertCircle size={10} />
+                          Add Yarn
+                        </button>
+                      )}
                    </div>
                 )}
 
@@ -3506,12 +3625,18 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   // Fabric Dictionary Modal State
   const [fabricDictionaryModal, setFabricDictionaryModal] = useState(false);
 
-  // Fabric Form Modal State
+  // Fabric Form Modal State - includes targetRowId for auto-selection after save
   const [fabricFormModal, setFabricFormModal] = useState<{
     isOpen: boolean;
     initialName?: string;
-    existingId?: string; // Track ID for editing
+    existingId?: string;
+    targetRowId?: string; // Row to auto-update after fabric is saved
+    oldName?: string; // Track original name for cascade rename
+    highlightAddVariant?: boolean; // Highlight the Add Variant button
   }>({ isOpen: false });
+
+  // Success notification state
+  const [successNotification, setSuccessNotification] = useState<string | null>(null);
 
   // Receive Modal State
   const [receiveModal, setReceiveModal] = useState<{
@@ -3623,6 +3748,26 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     };
   }, []);
 
+  // Listen for fabric-saved events from GlobalFabricButton
+  useEffect(() => {
+    const handleGlobalFabricSaved = (event: CustomEvent<FabricDefinition>) => {
+      // Add the new fabric to the list immediately
+      setFabrics(prev => {
+        const exists = prev.some(f => f.id === event.detail.id);
+        if (exists) {
+          return prev.map(f => f.id === event.detail.id ? event.detail : f);
+        }
+        return [...prev, event.detail];
+      });
+      // Show notification
+      setSuccessNotification(`✅ "${event.detail.shortName || event.detail.name}" added successfully`);
+      setTimeout(() => setSuccessNotification(null), 3000);
+    };
+
+    window.addEventListener('fabric-saved', handleGlobalFabricSaved as EventListener);
+    return () => window.removeEventListener('fabric-saved', handleGlobalFabricSaved as EventListener);
+  }, []);
+
   // Separate effect for External Scrap (depends on selectedCustomer)
   useEffect(() => {
     let unsubExternalLogs = () => {};
@@ -3719,6 +3864,13 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                 return true;
              });
         }
+        
+        // Sort orders by createdAt (oldest first, newest at end)
+        finalOrders.sort((a, b) => {
+            const dateA = a.createdAt || a.orderReceiptDate || '0';
+            const dateB = b.createdAt || b.orderReceiptDate || '0';
+            return dateA.localeCompare(dateB);
+        });
         
         return { ...c, orders: finalOrders };
     }).filter(c => {
@@ -4155,7 +4307,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       batchDeliveries: '',
       accessoryDeliveries: '',
       customerId: selectedCustomerId, // Link to parent
-      seasonId: selectedSeasonId || '2025-summer' // Add Season ID
+      seasonId: selectedSeasonId || '2025-summer', // Add Season ID
+      createdAt: new Date().toISOString() // Add creation timestamp for ordering
     };
 
     // Check if we should use sub-collection (if already migrated or empty)
@@ -4703,47 +4856,83 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     });
   };
 
-  const handleCreateFabric = async (name: string) => {
+  const handleCreateFabric = async (name: string, targetRowId?: string) => {
     // Check if fabric exists to enable edit mode
     const existing = fabrics.find(f => f.name === name);
     setFabricFormModal({ 
         isOpen: true, 
         initialName: name,
-        existingId: existing?.id
+        existingId: existing?.id,
+        targetRowId, // Track which row requested this for auto-selection
+        oldName: existing?.name // Track original name for rename detection
     });
   };
 
-  const handleSaveNewFabric = async (fabricData: Partial<FabricDefinition>) => {
-    try {
-      // Sanitize input to remove undefined fields which Firestore hates
-      const cleanData = JSON.parse(JSON.stringify(fabricData));
+  // Centralized callback - when fabric is saved via StandaloneFabricEditor
+  const handleFabricSaved = async (savedFabric: FabricDefinition) => {
+    const isEdit = !!fabricFormModal.existingId;
+    const oldName = fabricFormModal.oldName;
+    const nameChanged = isEdit && oldName && oldName !== savedFabric.name;
+    
+    // 1. OPTIMISTIC UPDATE - Add to list immediately so user sees it
+    setFabrics(prev => {
+      const exists = prev.some(f => f.id === savedFabric.id);
+      if (exists) {
+        return prev.map(f => f.id === savedFabric.id ? savedFabric : f);
+      }
+      return [...prev, savedFabric];
+    });
+    
+    // 2. CASCADE RENAME - If fabric name changed, update ALL orders using old name
+    if (nameChanged) {
+      // Update local state immediately (optimistic)
+      setFlatOrders(prev => prev.map(order => {
+        if (order.material === oldName) {
+          return { ...order, material: savedFabric.name };
+        }
+        return order;
+      }));
       
-      // Try to find ID if missing, to prevent duplicates (Upsert logic)
-      let targetId = fabricData.id;
-      if (!targetId && fabricData.name) {
-         const existing = fabrics.find(f => f.name.toLowerCase().trim() === fabricData.name?.toLowerCase().trim());
-         if (existing) targetId = existing.id;
+      // Persist to database in background
+      const ordersToUpdate = flatOrders.filter(o => o.material === oldName);
+      if (ordersToUpdate.length > 0) {
+        Promise.all(
+          ordersToUpdate.map(order => 
+            updateDoc(doc(db, 'orders', order.id), { material: savedFabric.name })
+          )
+        ).catch(err => console.error('Failed to cascade rename:', err));
       }
-
-      if (targetId) {
-         // Update existing
-         delete cleanData.id; // Remove ID from payload if it's in the document body logic
-         await DataService.updateFabric(targetId, cleanData);
-      } else {
-         // Create new - Remove undefined ID if it exists
-         if (cleanData.id === undefined) delete cleanData.id;
-         
-         await DataService.addFabric({
-            ...cleanData,
-            fabricId: crypto.randomUUID(),
-            type: 'General'
-         } as FabricDefinition);
-      }
-      setFabrics(await DataService.getFabrics());
-      setFabricFormModal({ isOpen: false });
-    } catch (err) {
-      console.error("Failed to save fabric", err);
     }
+    
+    // 3. AUTO-SELECT - If a row triggered this, update that row's material
+    if (fabricFormModal.targetRowId) {
+      handleUpdateOrder(fabricFormModal.targetRowId, { material: savedFabric.name });
+    }
+    
+    // 4. SHOW SUCCESS NOTIFICATION
+    let message = isEdit 
+      ? `✅ "${savedFabric.shortName || savedFabric.name}" updated successfully`
+      : `✅ "${savedFabric.shortName || savedFabric.name}" added! Refresh page to see it in dropdown`;
+    
+    if (nameChanged) {
+      const affectedCount = flatOrders.filter(o => o.material === oldName).length;
+      if (affectedCount > 0) {
+        message += ` (${affectedCount} order${affectedCount > 1 ? 's' : ''} updated)`;
+      }
+    }
+    setSuccessNotification(message);
+    
+    // Auto-hide notification after 5 seconds (longer for new fabrics so user can read the refresh hint)
+    setTimeout(() => setSuccessNotification(null), isEdit ? 3000 : 5000);
+    
+    // 5. Close modal
+    setFabricFormModal({ isOpen: false });
+    
+    // 6. Background refresh to ensure consistency (delayed to avoid race condition with Firestore write)
+    // The optimistic update already shows the fabric immediately - this is just for consistency
+    setTimeout(() => {
+      DataService.getFabrics().then(setFabrics).catch(console.error);
+    }, 2000);
   };
 
   const handleCreateDyehouse = async (name: string) => {
@@ -4752,6 +4941,79 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       setDyehouses(await DataService.getDyehouses());
     } catch (err) {
       console.error("Failed to create dyehouse", err);
+    }
+  };
+
+  // Compress image before upload - efficient storage
+  const compressImage = (file: File, maxWidth: number = 800, quality: number = 0.7): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (event) => {
+        const img = new window.Image();
+        img.src = event.target?.result as string;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          
+          if (width > maxWidth) {
+            height = (height * maxWidth) / width;
+            width = maxWidth;
+          }
+          
+          canvas.width = width;
+          canvas.height = height;
+          
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+          
+          canvas.toBlob(
+            (blob) => {
+              if (blob) resolve(blob);
+              else reject(new Error('Failed to compress image'));
+            },
+            'image/webp', // WebP for best compression
+            quality
+          );
+        };
+        img.onerror = reject;
+      };
+      reader.onerror = reject;
+    });
+  };
+
+  // Upload fabric image handler
+  const handleUploadFabricImage = async (fabricId: string, file: File) => {
+    if (!file || !fabricId) return;
+    
+    try {
+      // Compress the image
+      const compressedBlob = await compressImage(file);
+      
+      // Create unique path
+      const timestamp = Date.now();
+      const imagePath = `fabrics/${fabricId}_${timestamp}.webp`;
+      const imageRef = ref(storage, imagePath);
+      
+      // Upload to Firebase Storage
+      await uploadBytes(imageRef, compressedBlob);
+      
+      // Get download URL
+      const imageUrl = await getDownloadURL(imageRef);
+      
+      // Update Fabric document in Firestore directly
+      await updateDoc(doc(db, 'FabricSS', fabricId), {
+        imageUrl,
+        imagePath
+      });
+      
+      // Refresh fabrics
+      setFabrics(await DataService.getFabrics());
+      
+    } catch (error) {
+      console.error('Error uploading fabric image:', error);
+      alert('فشل رفع الصورة. حاول مرة أخرى.');
     }
   };
 
@@ -5259,6 +5521,22 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   return (
     <div className="flex flex-col min-h-[calc(100vh-100px)] bg-slate-50 rounded-xl border border-slate-200 shadow-sm">
       <style>{globalStyles}</style>
+      
+      {/* Success Notification Banner */}
+      {successNotification && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[9999] animate-in slide-in-from-top fade-in duration-300">
+          <div className="bg-emerald-600 text-white px-6 py-3 rounded-xl shadow-lg flex items-center gap-3 font-medium">
+            <CheckCircle2 className="w-5 h-5" />
+            <span>{successNotification}</span>
+            <button 
+              onClick={() => setSuccessNotification(null)}
+              className="ml-2 hover:bg-white/20 rounded-full p-1 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
       
       {/* Top Bar: Control Center */}
       <div className="bg-white border-b border-slate-200 shadow-sm z-20">
@@ -5786,6 +6064,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                               onOpenDyehouseTracking={(data) => setDyehouseTrackingModal(data)}
                               visibleColumns={manageColorsVisibleColumns}
                               onToggleColumnVisibility={handleToggleColumnVisibility}
+                              onUploadFabricImage={handleUploadFabricImage}
                             />
                           );
                         })}
@@ -6077,6 +6356,14 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                 if (fabricDetailsModal.orderId && selectedCustomer) {
                     await handleUpdateOrder(fabricDetailsModal.orderId, { variantId });
                 }
+            }}
+            onEditFabric={(fabricId, highlightVariant) => {
+                setFabricDetailsModal(prev => ({ ...prev, isOpen: false }));
+                setFabricFormModal({ 
+                    isOpen: true, 
+                    existingId: fabricId, 
+                    highlightAddVariant: highlightVariant 
+                });
             }}
           />
         )}
@@ -6637,19 +6924,20 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             usedFabricNames={usedFabricNames}
         />
 
-        {/* Fabric Form Modal */}
-        <FabricFormModal
+        {/* Fabric Form Modal - Using Centralized Editor */}
+        <StandaloneFabricEditor
           isOpen={fabricFormModal.isOpen}
           onClose={() => setFabricFormModal({ isOpen: false })}
-          onSave={handleSaveNewFabric}
+          onSaved={handleFabricSaved}
           initialData={
               fabricFormModal.existingId 
                 ? fabrics.find(f => f.id === fabricFormModal.existingId) || null 
                 : fabricFormModal.initialName 
-                    ? { name: fabricFormModal.initialName } as any 
+                    ? { name: fabricFormModal.initialName } as FabricDefinition 
                     : null
           }
           machines={machines}
+          highlightAddVariant={fabricFormModal.highlightAddVariant}
         />
 
         {/* Production Order Modal */}

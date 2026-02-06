@@ -94,6 +94,56 @@ export const DataService = {
     return docRef.id;
   },
 
+  /**
+   * CENTRALIZED Fabric upsert function - use this everywhere!
+   * Handles both create and update with consistent logic
+   */
+  async upsertFabric(
+    formData: Partial<FabricDefinition>, 
+    machines: any[] = [],
+    existingId?: string
+  ): Promise<FabricDefinition> {
+    if (!formData.name) throw new Error('Fabric name is required');
+
+    // Generate deterministic ID from name if not provided
+    const docId = existingId || formData.id || formData.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+    
+    // Auto-calculate specs based on work centers (if machines provided)
+    const workCenterList = formData.workCenters || [];
+    let specs = formData.specs;
+    
+    if (workCenterList.length > 0 && machines.length > 0 && !specs) {
+      const linkedMachines = machines.filter(m => workCenterList.includes(m.machineName || m.name));
+      
+      if (linkedMachines.length > 0) {
+        const firstM = linkedMachines[0];
+        specs = {
+          gauge: firstM.gauge || 'Unknown',
+          diameter: firstM.dia || 'Unknown',
+          needles: Number(firstM.needles) || 0,
+          type: firstM.type || 'Unknown'
+        };
+      }
+    }
+
+    const fabricData: FabricDefinition = {
+      id: docId,
+      name: formData.name,
+      code: formData.code,
+      shortName: formData.shortName,
+      workCenters: workCenterList,
+      variants: formData.variants || [],
+      ...(specs ? { specs } : {}),
+      ...(formData.avgProductionPerDay ? { avgProductionPerDay: formData.avgProductionPerDay } : {}),
+      ...(formData.machineOverrides ? { machineOverrides: formData.machineOverrides } : {}),
+      ...(formData.imageUrl ? { imageUrl: formData.imageUrl, imagePath: formData.imagePath } : {})
+    };
+
+    await setDoc(doc(db, 'FabricSS', docId), fabricData, { merge: true });
+    
+    return fabricData;
+  },
+
   async addFabric(fabric: Omit<Fabric, 'id'>): Promise<string> {
     const docRef = await addDoc(collection(db, 'FabricSS'), {
       ...fabric,

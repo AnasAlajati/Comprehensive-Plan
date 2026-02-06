@@ -26,6 +26,7 @@ interface GlobalBatchItem {
   orderReference?: string;
   fabric: string;
   fabricShortName?: string;
+  fabricImageUrl?: string;
   color: string;
   colorHex?: string;
   quantity: number;
@@ -79,12 +80,15 @@ export const DyehouseGlobalSchedule: React.FC = () => {
         clientMap[doc.id] = data.name || 'Unknown Client';
       });
 
-      // 1b. Fetch Fabrics for shortName Lookup
+      // 1b. Fetch Fabrics for shortName and image Lookup
       const fabricsSnapshot = await getDocs(collection(db, 'fabrics'));
-      const fabricMap: Record<string, string> = {};
+      const fabricMap: Record<string, { shortName: string; imageUrl?: string }> = {};
       fabricsSnapshot.docs.forEach(doc => {
         const data = doc.data() as FabricDefinition;
-        fabricMap[data.name] = data.shortName || data.name;
+        fabricMap[data.name] = { 
+          shortName: data.shortName || data.name,
+          imageUrl: data.imageUrl
+        };
       });
 
       // 2. Fetch All Orders (Subcollection)
@@ -124,8 +128,10 @@ export const DyehouseGlobalSchedule: React.FC = () => {
 
               const machineName = batch.plannedCapacity ? `${batch.plannedCapacity}kg` : (batch.machine || order.dyehouseMachine || '');
               
-              // Get fabric shortname - prefer from fabrics collection, fallback to parseFabricName
-              const fabricShortName = fabricMap[order.material] || parseFabricName(order.material).shortName || order.material;
+              // Get fabric shortname and image - prefer from fabrics collection, fallback to parseFabricName
+              const fabricInfo = fabricMap[order.material];
+              const fabricShortName = fabricInfo?.shortName || parseFabricName(order.material).shortName || order.material;
+              const fabricImageUrl = fabricInfo?.imageUrl;
               
               allBatches.push({
                 id: `${order.id}-${idx}`,
@@ -135,6 +141,7 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                 orderReference: order.orderReference,
                 fabric: order.material,
                 fabricShortName: fabricShortName,
+                fabricImageUrl: fabricImageUrl,
                 color: batch.color,
                 colorHex: batch.colorHex,
                 quantity: batch.quantity,
@@ -640,7 +647,18 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                                             ></div>
                                         </div>
                                     </td>
-                                    <td className="px-4 py-3 text-slate-600 text-xs font-medium text-right">{batch.fabricShortName}</td>
+                                    <td className="px-4 py-3 text-right">
+                                        <div className="flex items-center justify-end gap-2">
+                                            {batch.fabricImageUrl && (
+                                                <img 
+                                                    src={batch.fabricImageUrl} 
+                                                    alt={batch.fabricShortName}
+                                                    className="w-8 h-8 object-cover rounded border border-slate-200 shadow-sm"
+                                                />
+                                            )}
+                                            <span className="text-slate-600 text-xs font-medium">{batch.fabricShortName}</span>
+                                        </div>
+                                    </td>
                                     <td className="px-4 py-3 text-center font-mono text-amber-600">{daysAfterFormation > 0 ? daysAfterFormation : '-'}</td>
                                     <td className="px-4 py-3 text-center text-slate-500 text-xs">{formatDate(batch.formationDate)}</td>
                                     <td className="px-4 py-3 text-center font-mono text-slate-600">{daysAfterSent > 0 ? daysAfterSent : '-'}</td>

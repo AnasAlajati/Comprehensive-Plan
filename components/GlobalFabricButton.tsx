@@ -1,58 +1,39 @@
 import React, { useState } from 'react';
-import { Plus } from 'lucide-react';
-import { doc, setDoc } from 'firebase/firestore';
-import { db } from '../services/firebase';
+import { Plus, Loader2 } from 'lucide-react';
 import { FabricDefinition } from '../types';
+import { DataService } from '../services/dataService';
 import { FabricFormModal } from './FabricFormModal';
+
+// ============================================================================
+// GLOBAL FABRIC BUTTON (Simplified - now uses DataService.upsertFabric)
+// For a floating action button to add fabrics from anywhere
+// ============================================================================
 
 interface GlobalFabricButtonProps {
   machines: any[];
+  onFabricSaved?: (fabric: FabricDefinition) => void;
 }
 
-export const GlobalFabricButton: React.FC<GlobalFabricButtonProps> = ({ machines }) => {
+export const GlobalFabricButton: React.FC<GlobalFabricButtonProps> = ({ machines, onFabricSaved }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const handleSaveFabric = async (formData: Partial<FabricDefinition>) => {
+  const handleSave = async (formData: Partial<FabricDefinition>) => {
     if (!formData.name) return;
 
     setSaving(true);
     try {
-      const docId = formData.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-      
-      // Auto-calculate specs based on work centers
-      const workCenterList = formData.workCenters || [];
-      let specs = undefined;
-      
-      if (workCenterList.length > 0) {
-        // Find all machines linked to these work centers
-        const linkedMachines = machines.filter(m => workCenterList.includes(m.machineName || m.name));
-        
-        if (linkedMachines.length > 0) {
-          const firstM = linkedMachines[0];
-          specs = {
-            gauge: firstM.gauge || 'Unknown',
-            diameter: firstM.dia || 'Unknown',
-            needles: Number(firstM.needles) || 0,
-            type: firstM.type || 'Unknown'
-          };
-        }
-      }
-
-      const fabricData: FabricDefinition = {
-        id: docId,
-        name: formData.name,
-        code: formData.code,
-        shortName: formData.shortName,
-        workCenters: workCenterList,
-        variants: formData.variants,
-        ...(specs ? { specs } : {})
-      };
-
-      await setDoc(doc(db, 'FabricSS', docId), fabricData, { merge: true });
+      // Use centralized service function
+      const savedFabric = await DataService.upsertFabric(formData, machines);
       
       setIsModalOpen(false);
-      // Optional: Show a toast or notification here
+      
+      // Callback to refresh fabric list in parent
+      if (onFabricSaved) onFabricSaved(savedFabric);
+      
+      // Dispatch global event so other components (like ClientOrdersPage) can refresh
+      window.dispatchEvent(new CustomEvent('fabric-saved', { detail: savedFabric }));
+      
     } catch (err) {
       console.error("Error saving fabric:", err);
       alert("Failed to save fabric");
@@ -65,10 +46,11 @@ export const GlobalFabricButton: React.FC<GlobalFabricButtonProps> = ({ machines
     <>
       <button
         onClick={() => setIsModalOpen(true)}
-        className="fixed bottom-6 right-6 z-50 bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-full shadow-lg transition-all duration-200 hover:scale-110 flex items-center justify-center group"
+        disabled={saving}
+        className="fixed bottom-6 right-6 z-50 bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-full shadow-lg transition-all duration-200 hover:scale-110 flex items-center justify-center group disabled:opacity-50"
         title="Add New Fabric"
       >
-        <Plus className="w-6 h-6" />
+        {saving ? <Loader2 className="w-6 h-6 animate-spin" /> : <Plus className="w-6 h-6" />}
         <span className="max-w-0 overflow-hidden group-hover:max-w-xs transition-all duration-300 ease-in-out whitespace-nowrap group-hover:ml-2">
           Add Fabric
         </span>
@@ -78,7 +60,7 @@ export const GlobalFabricButton: React.FC<GlobalFabricButtonProps> = ({ machines
         <FabricFormModal
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
-          onSave={handleSaveFabric}
+          onSave={handleSave}
           machines={machines}
           initialData={null}
         />

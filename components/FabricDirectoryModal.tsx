@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, getDocs, doc, setDoc } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { FabricDefinition } from '../types';
-import { FabricFormModal } from './FabricFormModal';
+import { StandaloneFabricEditor } from './FabricEditor';
 import { Search, X, Edit, Loader2, Book } from 'lucide-react';
 
 interface FabricDirectoryModalProps {
@@ -61,37 +61,20 @@ export const FabricDirectoryModal: React.FC<FabricDirectoryModalProps> = ({ isOp
     setIsEditModalOpen(true);
   };
 
-  const handleSaveFabric = async (formData: Partial<FabricDefinition>) => {
-    if (!formData.name) return;
-
-    try {
-      const docId = editingFabric?.id || formData.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-      
-      const fabricData: FabricDefinition = {
-        ...editingFabric, // Keep existing data
-        id: docId,
-        name: formData.name,
-        code: formData.code || '',
-        shortName: formData.shortName || '',
-        // Preserve other fields if they exist in formData or editingFabric
-        variants: formData.variants || editingFabric?.variants || [],
-        workCenters: formData.workCenters || editingFabric?.workCenters || [],
-      };
-
-      if (formData.specs) {
-        fabricData.specs = formData.specs;
+  // Centralized save handler using DataService.upsertFabric
+  const handleFabricSaved = async (savedFabric: FabricDefinition) => {
+    // Update local list immediately
+    setFabrics(prev => {
+      const idx = prev.findIndex(f => f.id === savedFabric.id);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = savedFabric;
+        return updated;
       }
-
-      await setDoc(doc(db, 'FabricSS', docId), fabricData, { merge: true });
-      
-      // Update local list
-      setFabrics(prev => prev.map(f => f.id === docId ? fabricData : f));
-      setIsEditModalOpen(false);
-      setEditingFabric(null);
-    } catch (err) {
-      console.error("Error saving fabric:", err);
-      alert("Failed to save fabric changes");
-    }
+      return [...prev, savedFabric];
+    });
+    setIsEditModalOpen(false);
+    setEditingFabric(null);
   };
 
   if (!isOpen) return null;
@@ -209,13 +192,13 @@ export const FabricDirectoryModal: React.FC<FabricDirectoryModalProps> = ({ isOp
         </div>
       </div>
 
-      {/* Edit Modal */}
+      {/* Edit Modal - Using Centralized Editor */}
       {isEditModalOpen && (
-        <FabricFormModal
+        <StandaloneFabricEditor
           isOpen={isEditModalOpen}
           onClose={() => setIsEditModalOpen(false)}
           initialData={editingFabric || undefined}
-          onSave={handleSaveFabric}
+          onSaved={handleFabricSaved}
           machines={machines}
         />
       )}

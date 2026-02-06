@@ -9,6 +9,7 @@ interface FabricFormModalProps {
   onSave: (fabric: Partial<FabricDefinition>) => Promise<void>;
   initialData?: FabricDefinition | null;
   machines: any[];
+  highlightAddVariant?: boolean;
 }
 
 // Helper to normalize machine type
@@ -24,8 +25,19 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
   onClose,
   onSave,
   initialData,
-  machines
+  machines,
+  highlightAddVariant = false
 }) => {
+  const [isHighlighting, setIsHighlighting] = useState(false);
+
+  // Handle highlight animation for Add Variant button
+  useEffect(() => {
+    if (isOpen && highlightAddVariant) {
+      setIsHighlighting(true);
+      const timer = setTimeout(() => setIsHighlighting(false), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen, highlightAddVariant]);
   const [modalForm, setModalForm] = useState<{
     name: string;
     code: string;
@@ -457,7 +469,11 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
                   ...prev,
                   variants: [...prev.variants, { id: `v${Date.now()}`, yarns: [] }]
                 }))}
-                className="text-xs flex items-center gap-1 text-blue-600 hover:text-blue-700 font-medium"
+                className={`text-xs flex items-center gap-1 font-medium px-2 py-1 rounded transition-all ${
+                  isHighlighting 
+                    ? 'bg-blue-100 text-blue-700 ring-2 ring-blue-400 ring-offset-1 animate-pulse shadow-lg scale-110' 
+                    : 'text-blue-600 hover:text-blue-700'
+                }`}
               >
                 <Plus size={14} />
                 Add Variant
