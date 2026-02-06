@@ -38,11 +38,9 @@ import { DyehouseDirectoryPage } from './components/DyehouseDirectoryPage';
 import { SampleTrackingPage } from './components/SampleTrackingPage';
 import { FabricsPage } from './components/FabricsPage';
 import { MachinesPage } from './components/MachinesPage';
-import { InstallPWA } from './components/InstallPWA';
 import { GlobalFabricButton } from './components/GlobalFabricButton';
 import { LoginPage } from './components/LoginPage';
 import { UserManagementPage } from './components/UserManagementPage';
-import ConnectivityStatus from './components/ConnectivityStatus';
 import { 
   Send, 
   CheckCircle, 
@@ -713,7 +711,6 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-teal-100 via-slate-50 to-slate-50 pb-20">
-      <ConnectivityStatus isDbConnected={isConnected} />
       {/* Header */}
       <div className="bg-white/80 backdrop-blur-md border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div className="max-w-[98%] mx-auto px-4 min-h-[64px] py-2 flex flex-wrap items-center justify-between gap-4">
@@ -758,7 +755,6 @@ const App: React.FC = () => {
                 </button>
              </div>
 
-             <InstallPWA />
           </div>
         </div>
       </div>
