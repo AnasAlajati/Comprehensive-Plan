@@ -141,18 +141,39 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
       }
       
       // Normalize Machines to ensure ID and Name exist
-      const normalizedMachines: MachineRow[] = rawMachines.map((m: any) => {
-          const mName = m.machineName || m.name || `Machine ${m.id || m.machineid}`;
+      const normalizedMachines: MachineRow[] = rawMachines.map((m: any, idx: number) => {
+          // Use firestoreId as the most reliable fallback since it's always set from doc.id
+          // Use index as last resort to ensure unique IDs
+          const machineId = m.id ?? m.machineid ?? m.firestoreId ?? `temp-${idx}`;
+          const mName = m.machineName || m.name || `Machine ${machineId}`;
           const mType = m.type || 'Unknown';
           return {
             ...m,
-            id: m.id !== undefined ? m.id : (m.machineid !== undefined ? m.machineid : Math.random()),
+            id: machineId,
             machineName: mName,
             type: mType,
             avgProduction: Number(m.avgProduction) || getDefaultProduction(mName, mType),
             remainingMfg: Number(m.remainingMfg) || 0,
           };
       });
+
+      // DEBUG: Log machines with problematic IDs
+      const problematicMachines = normalizedMachines.filter(m => 
+        String(m.id).startsWith('temp-') || 
+        m.machineName.includes('undefined') ||
+        !m.id
+      );
+      if (problematicMachines.length > 0) {
+        console.warn('[CreatePlanModal] ⚠️ Machines with missing/invalid IDs detected:', 
+          problematicMachines.map(m => ({
+            id: m.id,
+            firestoreId: m.firestoreId,
+            machineid: (m as any).machineid,
+            machineName: m.machineName,
+            rawData: m
+          }))
+        );
+      }
 
       setMachines(normalizedMachines);
 
@@ -241,6 +262,14 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
               });
           }
       });
+
+      // DEBUG: Log plans with undefined/missing machine names
+      const problematicPlans = found.filter(p => !p.name || p.name === 'undefined' || p.name.includes('undefined'));
+      if (problematicPlans.length > 0) {
+        console.warn('[CreatePlanModal] ⚠️ Plans with undefined machine names:', problematicPlans);
+        console.log('[CreatePlanModal] All found plans:', found);
+        console.log('[CreatePlanModal] Machine list used:', machineList.map(m => ({ id: m.id, name: m.machineName, firestoreId: m.firestoreId })));
+      }
 
       setExistingPlans(found);
   };
@@ -550,11 +579,16 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
   };
 
   const handleDeletePlan = async (plan: ExistingPlan) => {
-      if (!confirm(`Are you sure you want to remove this plan from ${plan.name}?`)) return;
+      if (!confirm(`Are you sure you want to remove this plan from ${plan.name || 'this machine'}?`)) return;
       setProcessing(true);
       try {
           if (plan.type === 'INTERNAL') {
-              const machine = machines.find(m => String(m.id) === plan.id);
+              // Find machine by ID or firestoreId
+              const machine = machines.find(m => 
+                  String(m.id) === plan.id || 
+                  String(m.firestoreId) === plan.id ||
+                  String(m.machineid) === plan.id
+              );
               if (machine) {
                   const updatedPlans = [...(machine.futurePlans || [])];
                   // Remove by index
@@ -575,6 +609,33 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
                       await DataService.updateMachineInMachineSS(machine.firestoreId || String(machine.id), {
                           futurePlans: recalculated
                       });
+                  }
+              } else {
+                  // Machine not found in current list - try direct Firestore delete
+                  console.warn(`Machine ${plan.id} not found in memory, attempting direct Firestore update...`);
+                  try {
+                      const machineRef = doc(db, 'MachineSS', plan.id);
+                      const machineSnap = await getDoc(machineRef);
+                      if (machineSnap.exists()) {
+                          const machineData = machineSnap.data();
+                          const updatedPlans = [...(machineData.futurePlans || [])];
+                          if (plan.idx !== undefined && updatedPlans[plan.idx]) {
+                              updatedPlans.splice(plan.idx, 1);
+                              await updateDoc(machineRef, { futurePlans: updatedPlans });
+                              // Remove from UI
+                              setExistingPlans(prev => prev.filter((_, i) => 
+                                  !(prev[i].id === plan.id && prev[i].idx === plan.idx)
+                              ));
+                          }
+                      } else {
+                          // Just remove from UI if machine doesn't exist at all
+                          setExistingPlans(prev => prev.filter((_, i) => 
+                              !(prev[i].id === plan.id && prev[i].idx === plan.idx)
+                          ));
+                      }
+                  } catch (directErr) {
+                      console.error('Direct Firestore delete failed:', directErr);
+                      throw directErr;
                   }
               }
           } else {
@@ -702,7 +763,7 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
                                      </tr>
                                  </thead>
                                  <tbody className="divide-y divide-slate-100">
-                                     {recommendations.filter(r => showAllMachines || r.isCompatible || r.score > 0).map(rec => {
+                                     {recommendations.filter(r => showAllMachines || r.isCompatible || r.score > 0).map((rec, recIdx) => {
                                          const isExpanded = expandedMachineId === String(rec.machine.id);
                                          
                                          // Highlight Logic
@@ -711,7 +772,7 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
                                          if (rec.score < 0) rowBg = 'bg-red-50/30';
 
                                          return (
-                                             <React.Fragment key={rec.machine.id}>
+                                             <React.Fragment key={`${rec.machine.id}-${rec.machine.firestoreId || recIdx}`}>
                                                  <tr 
                                                     className={`cursor-pointer transition-colors ${rowBg}`}
                                                     onClick={() => handleExpandMachine(String(rec.machine.id))}

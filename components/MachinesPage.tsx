@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { MachineRow, FabricDefinition, MachineStatus } from '../types';
-import { Settings, Box, Info, Search, X, Layers, List, CheckCircle2 } from 'lucide-react';
+import { Settings, Box, Info, Search, X, Layers, List, CheckCircle2, Trash2, AlertTriangle } from 'lucide-react';
 
 interface MachinesPageProps {
   machines: MachineRow[];
@@ -105,11 +105,17 @@ const getEngineeringAdvice = (baseNeedles: number, targetNeedles: number) => {
 export const MachinesPage: React.FC<MachinesPageProps> = ({ machines, userRole }) => {
   // Viewer role is read-only
   const isReadOnly = userRole === 'viewer';
+  const isAdmin = userRole === 'admin';
   
   const [fabrics, setFabrics] = useState<FabricDefinition[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<string>('all'); // 'all', 'single', 'double'
   const [viewMode, setViewMode] = useState<'list' | 'groups'>('list');
+  
+  // Multi-select for deletion (admin only)
+  const [selectedMachineIds, setSelectedMachineIds] = useState<Set<string>>(new Set());
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   
   // Related Fabrics Modal State
   const [viewingFabricsMachine, setViewingFabricsMachine] = useState<MachineRow | null>(null);
@@ -136,6 +142,56 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines, userRole }
     } catch (err) {
       console.error(`Error updating machine ${machineId} field ${field}:`, err);
       alert('Failed to update machine.');
+    }
+  };
+
+  // Toggle selection for a machine
+  const toggleMachineSelection = (machineId: string) => {
+    setSelectedMachineIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(machineId)) {
+        newSet.delete(machineId);
+      } else {
+        newSet.add(machineId);
+      }
+      return newSet;
+    });
+  };
+
+  // Select/deselect all visible machines
+  const toggleSelectAll = () => {
+    if (selectedMachineIds.size === filteredMachines.length) {
+      setSelectedMachineIds(new Set());
+    } else {
+      const allIds = filteredMachines.map(m => m.firestoreId || m.id.toString());
+      setSelectedMachineIds(new Set(allIds));
+    }
+  };
+
+  // Delete selected machines (admin only)
+  const handleDeleteSelectedMachines = async () => {
+    if (!isAdmin || selectedMachineIds.size === 0) return;
+    
+    setIsDeleting(true);
+    try {
+      const deletePromises = Array.from(selectedMachineIds).map(machineId => {
+        const docRef = doc(db, 'MachineSS', machineId);
+        return deleteDoc(docRef);
+      });
+      
+      await Promise.all(deletePromises);
+      
+      alert(`Successfully deleted ${selectedMachineIds.size} machine(s). Refresh to see changes.`);
+      setSelectedMachineIds(new Set());
+      setShowDeleteConfirm(false);
+      
+      // Force page reload to refresh machines list
+      window.location.reload();
+    } catch (err) {
+      console.error('Error deleting machines:', err);
+      alert('Failed to delete some machines. Check console for details.');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -233,6 +289,17 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines, userRole }
           </div>
           
           <div className="flex items-center gap-4">
+            {/* Admin Delete Button */}
+            {isAdmin && selectedMachineIds.size > 0 && (
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium text-sm transition-colors shadow-sm"
+              >
+                <Trash2 size={16} />
+                Delete ({selectedMachineIds.size})
+              </button>
+            )}
+            
             {/* View Toggle */}
             <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200">
               <button
@@ -290,15 +357,28 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines, userRole }
                 <div className="text-center py-10 bg-white rounded-xl text-slate-400 border border-slate-200">
                     No machines found
                 </div>
-             ) : filteredMachines.map(machine => (
-                 <div key={machine.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-3">
+             ) : filteredMachines.map(machine => {
+                 const machineId = machine.firestoreId || machine.id.toString();
+                 const isSelected = selectedMachineIds.has(machineId);
+                 return (
+                 <div key={machine.id} className={`bg-white p-4 rounded-xl border shadow-sm flex flex-col gap-3 ${isSelected ? 'border-red-300 bg-red-50' : 'border-slate-200'}`}>
                      <div className="flex justify-between items-start">
-                         <div>
-                             <h3 className="font-bold text-lg text-slate-800">{machine.machineName}</h3>
-                             <div className="text-xs text-slate-500 mt-1 flex items-center gap-2">
-                                 <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded">{machine.brand}</span>
-                                 <span>•</span>
-                                 <span>{machine.type}</span>
+                         <div className="flex items-start gap-3">
+                             {isAdmin && (
+                               <input
+                                 type="checkbox"
+                                 checked={isSelected}
+                                 onChange={() => toggleMachineSelection(machineId)}
+                                 className="w-5 h-5 mt-1 rounded border-slate-300 text-red-600 focus:ring-red-500 cursor-pointer"
+                               />
+                             )}
+                             <div>
+                                 <h3 className="font-bold text-lg text-slate-800">{machine.machineName}</h3>
+                                 <div className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+                                     <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded">{machine.brand}</span>
+                                     <span>•</span>
+                                     <span>{machine.type}</span>
+                                 </div>
                              </div>
                          </div>
                          <div className={`px-2 py-1 rounded-full text-xs font-bold ${
@@ -317,7 +397,8 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines, userRole }
 
                           {/* Action Buttons Removed */}
                  </div>
-             ))}
+             );
+             })}
           </div>
 
           {/* Desktop Table View */}
@@ -326,6 +407,17 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines, userRole }
               <table className="w-full text-sm text-left">
                 <thead className="bg-slate-50 text-slate-700 font-bold uppercase text-xs">
                   <tr>
+                    {isAdmin && (
+                      <th className="p-4 border-b border-slate-200 w-12">
+                        <input
+                          type="checkbox"
+                          checked={selectedMachineIds.size === filteredMachines.length && filteredMachines.length > 0}
+                          onChange={toggleSelectAll}
+                          className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          title="Select all"
+                        />
+                      </th>
+                    )}
                     <th className="p-4 border-b border-slate-200 w-32">Machine Name</th>
                     <th className="p-4 border-b border-slate-200 w-32">Status</th>
                     <th className="p-4 border-b border-slate-200 w-32">Brand</th>
@@ -343,11 +435,23 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines, userRole }
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filteredMachines.length === 0 ? (
-                    <tr><td colSpan={12} className="p-8 text-center text-slate-400">No machines found</td></tr>
+                    <tr><td colSpan={isAdmin ? 13 : 12} className="p-8 text-center text-slate-400">No machines found</td></tr>
                   ) : filteredMachines.map(machine => {
                     const linkedCount = fabrics.filter(f => f.workCenters?.includes(machine.machineName)).length;
+                    const machineId = machine.firestoreId || machine.id.toString();
+                    const isSelected = selectedMachineIds.has(machineId);
                     return (
-                      <tr key={machine.id} className="hover:bg-slate-50 transition-colors group">
+                      <tr key={machine.id} className={`hover:bg-slate-50 transition-colors group ${isSelected ? 'bg-red-50' : ''}`}>
+                        {isAdmin && (
+                          <td className="p-4">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleMachineSelection(machineId)}
+                              className="w-4 h-4 rounded border-slate-300 text-red-600 focus:ring-red-500 cursor-pointer"
+                            />
+                          </td>
+                        )}
                         <td className="p-4 font-bold text-slate-800">{machine.machineName}</td>
                         <td className="p-4">
                           <span className={`px-2 py-1 rounded-full text-xs font-medium ${
@@ -596,6 +700,73 @@ export const MachinesPage: React.FC<MachinesPageProps> = ({ machines, userRole }
                   <p className="text-sm mt-1">Go to the Fabrics page to map Work Centers to this machine.</p>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal (Admin Only) */}
+      {showDeleteConfirm && isAdmin && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="p-6 bg-red-50 border-b border-red-100">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-red-100 rounded-full">
+                  <AlertTriangle className="text-red-600" size={24} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-lg text-red-800">Delete Machines</h3>
+                  <p className="text-sm text-red-600">This action cannot be undone</p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="p-6">
+              <p className="text-slate-700 mb-4">
+                Are you sure you want to permanently delete <strong className="text-red-600">{selectedMachineIds.size}</strong> machine(s)?
+              </p>
+              
+              <div className="bg-slate-50 rounded-lg p-3 max-h-40 overflow-y-auto mb-4 border border-slate-200">
+                <div className="text-xs font-bold text-slate-500 uppercase mb-2">Selected Machines:</div>
+                <div className="space-y-1">
+                  {filteredMachines
+                    .filter(m => selectedMachineIds.has(m.firestoreId || m.id.toString()))
+                    .map(m => (
+                      <div key={m.id} className="text-sm text-slate-700 flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 bg-red-400 rounded-full"></span>
+                        {m.machineName || `Machine ${m.id}`}
+                      </div>
+                    ))
+                  }
+                </div>
+              </div>
+              
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  disabled={isDeleting}
+                  className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-medium hover:bg-slate-50 transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDeleteSelectedMachines}
+                  disabled={isDeleting}
+                  className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {isDeleting ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                      Deleting...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 size={16} />
+                      Delete Forever
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>

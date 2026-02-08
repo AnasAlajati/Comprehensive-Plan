@@ -40,6 +40,7 @@ import {
   ChevronRight,
   Repeat,
   AlertTriangle,
+  AlertCircle,
   ArrowUp,
   ArrowDown,
   Loader,
@@ -48,7 +49,8 @@ import {
   Activity,
   Camera,
   Image as ImageIcon,
-  User
+  User,
+  Calculator
 } from 'lucide-react';
 import { MachineSS, FuturePlanEntry } from '../types';
 
@@ -90,6 +92,10 @@ interface Sample {
   finishingCarbon?: boolean; // كربون
   finishingRam?: boolean; // رام
   finishingCompacter?: boolean; // كومباكتر
+  // Yarn Composition
+  yarnComposition?: YarnComposition[];
+  // Target Specs
+  targetGSM?: number; // الوزن المستهدف
   createdAt: any;
   createdBy: string;
   updatedAt?: any;
@@ -102,6 +108,18 @@ interface Machine {
   type?: string;
   futurePlans?: FuturePlanEntry[];
   dailyLogs?: any[];
+  // Technical Specs from MachineSS
+  needles?: number;
+  gauge?: number;
+  dia?: number;
+  feeders?: number;
+}
+
+// Yarn Composition Entry
+interface YarnComposition {
+  name: string; // e.g., "Cotton 30/1", "Polyester 70/36"
+  type: 'cotton' | 'polyester' | 'blended' | 'lycra' | 'other';
+  percentage: number;
 }
 
 // Machine Schedule Info (calculated from MachineSS)
@@ -258,7 +276,22 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
   
   // Sample Data Modal State
   const [showSampleDataModal, setShowSampleDataModal] = useState<Sample | null>(null);
-  const [sampleDataForm, setSampleDataForm] = useState({
+  const [sampleDataForm, setSampleDataForm] = useState<{
+    rawWeight: string;
+    zeroWeight: string;
+    rawWidth: string;
+    zeroWidth: string;
+    requiredFinishedWeight: string;
+    requiredFinishedWidth: string;
+    finishingNazeem: boolean;
+    finishingTathbeet: boolean;
+    finishingKasra: boolean;
+    finishingCarbon: boolean;
+    finishingRam: boolean;
+    finishingCompacter: boolean;
+    yarnComposition: YarnComposition[];
+    targetGSM: string;
+  }>({
     rawWeight: '',
     zeroWeight: '',
     rawWidth: '',
@@ -271,7 +304,10 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
     finishingKasra: false,
     finishingCarbon: false,
     finishingRam: false,
-    finishingCompacter: false
+    finishingCompacter: false,
+    // Yarn Composition
+    yarnComposition: [],
+    targetGSM: ''
   });
   
   // Form State
@@ -299,7 +335,12 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
           id: machineId,
           name: data.name || machineId,
           futurePlans: data.futurePlans || [],
-          dailyLogs: data.dailyLogs || []
+          dailyLogs: data.dailyLogs || [],
+          // Technical Specs
+          needles: data.needles,
+          gauge: data.gauge,
+          dia: data.dia,
+          feeders: data.feeders
         });
         
         // Calculate schedule info
@@ -784,11 +825,14 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
         finishingCarbon: sampleDataForm.finishingCarbon,
         finishingRam: sampleDataForm.finishingRam,
         finishingCompacter: sampleDataForm.finishingCompacter,
+        // Yarn Composition & Target
+        yarnComposition: sampleDataForm.yarnComposition,
+        targetGSM: sampleDataForm.targetGSM ? parseFloat(sampleDataForm.targetGSM) : null,
         updatedAt: serverTimestamp(),
         updatedBy: auth.currentUser?.email || 'unknown'
       });
       setShowSampleDataModal(null);
-      setSampleDataForm({ rawWeight: '', zeroWeight: '', rawWidth: '', zeroWidth: '', requiredFinishedWeight: '', requiredFinishedWidth: '', finishingNazeem: false, finishingTathbeet: false, finishingKasra: false, finishingCarbon: false, finishingRam: false, finishingCompacter: false });
+      setSampleDataForm({ rawWeight: '', zeroWeight: '', rawWidth: '', zeroWidth: '', requiredFinishedWeight: '', requiredFinishedWidth: '', finishingNazeem: false, finishingTathbeet: false, finishingKasra: false, finishingCarbon: false, finishingRam: false, finishingCompacter: false, yarnComposition: [], targetGSM: '' });
     } catch (error) {
       console.error('Error saving sample data:', error);
       alert('فشل حفظ البيانات. حاول مرة أخرى.');
@@ -1250,7 +1294,9 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                         finishingKasra: sample.finishingKasra || false,
                         finishingCarbon: sample.finishingCarbon || false,
                         finishingRam: sample.finishingRam || false,
-                        finishingCompacter: sample.finishingCompacter || false
+                        finishingCompacter: sample.finishingCompacter || false,
+                        yarnComposition: sample.yarnComposition || [],
+                        targetGSM: sample.targetGSM?.toString() || ''
                       });
                     }}
                     className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
@@ -2300,10 +2346,35 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
       )}
 
       {/* Sample Data Modal */}
-      {showSampleDataModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full">
-            <div className="p-6 border-b border-slate-100">
+      {showSampleDataModal && (() => {
+        const currentSample = samples.find(s => s.id === showSampleDataModal);
+        const sampleMachine = machines.find(m => m.id === currentSample?.machineId);
+        
+        // Calculations
+        const rawWeight = parseFloat(sampleDataForm.rawWeight) || 0;
+        const zeroWeight = parseFloat(sampleDataForm.zeroWeight) || 0;
+        const rawWidth = parseFloat(sampleDataForm.rawWidth) || 0;
+        const zeroWidth = parseFloat(sampleDataForm.zeroWidth) || 0;
+        const targetGSM = parseFloat(sampleDataForm.targetGSM) || 0;
+        
+        const widthShrinkage = rawWidth > 0 ? ((rawWidth - zeroWidth) / rawWidth * 100) : 0;
+        const gsmChange = rawWeight > 0 ? ((zeroWeight - rawWeight) / rawWeight * 100) : 0;
+        const targetDiff = targetGSM > 0 && zeroWeight > 0 ? (zeroWeight - targetGSM) : 0;
+        
+        // Get synthetic content percentage for recommendations
+        const syntheticPercentage = sampleDataForm.yarnComposition.reduce((acc, yarn) => {
+          if (yarn.type === 'polyester' || yarn.type === 'lycra') {
+            return acc + (yarn.percentage || 0);
+          }
+          return acc;
+        }, 0);
+        
+        const needsTathbeet = syntheticPercentage > 10;
+        
+        return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full my-4 max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-slate-100 sticky top-0 bg-white z-10">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                   <Activity className="text-blue-600" size={24} />
@@ -2317,16 +2388,139 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                 </button>
               </div>
               <p className="text-sm text-slate-500 mt-1">
-                {samples.find(s => s.id === showSampleDataModal)?.name}
+                {currentSample?.name}
               </p>
             </div>
             
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-6">
+              
+              {/* Machine Specs - Auto-fetched */}
+              {sampleMachine && (sampleMachine.gauge || sampleMachine.dia || sampleMachine.needles || sampleMachine.feeders) && (
+                <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4">
+                  <h3 className="text-sm font-bold text-indigo-800 mb-3 flex items-center gap-2">
+                    <Settings size={16} />
+                    مواصفات الماكينة - {sampleMachine.name}
+                  </h3>
+                  <div className="grid grid-cols-4 gap-3">
+                    {sampleMachine.dia && (
+                      <div className="text-center">
+                        <div className="text-lg font-bold text-indigo-700">{sampleMachine.dia}"</div>
+                        <div className="text-xs text-indigo-600">القطر (Dia)</div>
+                      </div>
+                    )}
+                    {sampleMachine.gauge && (
+                      <div className="text-center">
+                        <div className="text-lg font-bold text-indigo-700">{sampleMachine.gauge}GG</div>
+                        <div className="text-xs text-indigo-600">الجيج (Gauge)</div>
+                      </div>
+                    )}
+                    {sampleMachine.needles && (
+                      <div className="text-center">
+                        <div className="text-lg font-bold text-indigo-700">{sampleMachine.needles}</div>
+                        <div className="text-xs text-indigo-600">الإبر (Needles)</div>
+                      </div>
+                    )}
+                    {sampleMachine.feeders && (
+                      <div className="text-center">
+                        <div className="text-lg font-bold text-indigo-700">{sampleMachine.feeders}</div>
+                        <div className="text-xs text-indigo-600">الفيدرز (Feeders)</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              
+              {/* Yarn Composition Section */}
+              <div className="border border-slate-200 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                    <Settings size={16} />
+                    تركيب الخيوط
+                  </h3>
+                  <button
+                    onClick={() => setSampleDataForm(prev => ({
+                      ...prev,
+                      yarnComposition: [...prev.yarnComposition, { name: '', type: 'cotton', percentage: 0 }]
+                    }))}
+                    className="text-xs px-2 py-1 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 flex items-center gap-1"
+                  >
+                    <Plus size={12} />
+                    إضافة خيط
+                  </button>
+                </div>
+                
+                {sampleDataForm.yarnComposition.length === 0 ? (
+                  <p className="text-sm text-slate-400 text-center py-4">لم يتم إضافة خيوط بعد</p>
+                ) : (
+                  <div className="space-y-2">
+                    {sampleDataForm.yarnComposition.map((yarn, index) => (
+                      <div key={index} className="flex items-center gap-2 bg-slate-50 p-2 rounded-lg">
+                        <input
+                          type="text"
+                          value={yarn.name}
+                          onChange={(e) => {
+                            const updated = [...sampleDataForm.yarnComposition];
+                            updated[index] = { ...updated[index], name: e.target.value };
+                            setSampleDataForm(prev => ({ ...prev, yarnComposition: updated }));
+                          }}
+                          placeholder="مثال: Cotton 30/1"
+                          className="flex-1 px-2 py-1 text-sm border border-slate-200 rounded focus:ring-1 focus:ring-blue-500"
+                        />
+                        <select
+                          value={yarn.type}
+                          onChange={(e) => {
+                            const updated = [...sampleDataForm.yarnComposition];
+                            updated[index] = { ...updated[index], type: e.target.value as YarnComposition['type'] };
+                            setSampleDataForm(prev => ({ ...prev, yarnComposition: updated }));
+                          }}
+                          className="px-2 py-1 text-sm border border-slate-200 rounded focus:ring-1 focus:ring-blue-500"
+                        >
+                          <option value="cotton">قطن</option>
+                          <option value="polyester">بوليستر</option>
+                          <option value="blended">مخلوط</option>
+                          <option value="lycra">ليكرا</option>
+                          <option value="other">أخرى</option>
+                        </select>
+                        <input
+                          type="number"
+                          value={yarn.percentage || ''}
+                          onChange={(e) => {
+                            const updated = [...sampleDataForm.yarnComposition];
+                            updated[index] = { ...updated[index], percentage: parseFloat(e.target.value) || 0 };
+                            setSampleDataForm(prev => ({ ...prev, yarnComposition: updated }));
+                          }}
+                          placeholder="%"
+                          className="w-16 px-2 py-1 text-sm border border-slate-200 rounded focus:ring-1 focus:ring-blue-500 text-center"
+                        />
+                        <button
+                          onClick={() => {
+                            const updated = sampleDataForm.yarnComposition.filter((_, i) => i !== index);
+                            setSampleDataForm(prev => ({ ...prev, yarnComposition: updated }));
+                          }}
+                          className="p-1 text-red-500 hover:bg-red-50 rounded"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                    {sampleDataForm.yarnComposition.length > 0 && (
+                      <div className="text-xs text-slate-500 text-left mt-2">
+                        إجمالي: {sampleDataForm.yarnComposition.reduce((acc, y) => acc + (y.percentage || 0), 0)}%
+                        {syntheticPercentage > 0 && (
+                          <span className="mr-2 text-amber-600">(مواد صناعية: {syntheticPercentage}%)</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              
+              {/* Measurements Input */}
               <div className="grid grid-cols-2 gap-4">
                 {/* Raw Weight */}
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
-                    وزن خام
+                    وزن خام (GSM)
                   </label>
                   <input
                     type="number"
@@ -2341,7 +2535,7 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                 {/* Zero Weight */}
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
-                    وزن زيرو
+                    وزن زيرو (GSM)
                   </label>
                   <input
                     type="number"
@@ -2356,7 +2550,7 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                 {/* Raw Width */}
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
-                    عرض خام
+                    عرض خام (سم)
                   </label>
                   <input
                     type="number"
@@ -2371,7 +2565,7 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                 {/* Zero Width */}
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
-                    عرض زيرو
+                    عرض زيرو (سم)
                   </label>
                   <input
                     type="number"
@@ -2384,8 +2578,101 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                 </div>
               </div>
               
+              {/* Target GSM */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  الوزن المستهدف (Target GSM)
+                </label>
+                <input
+                  type="number"
+                  step="1"
+                  value={sampleDataForm.targetGSM}
+                  onChange={(e) => setSampleDataForm(prev => ({ ...prev, targetGSM: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="مثال: 320"
+                />
+              </div>
+              
+              {/* Calculations Section */}
+              {(rawWeight > 0 || rawWidth > 0) && (
+                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-xl p-4">
+                  <h3 className="text-sm font-bold text-blue-800 mb-3 flex items-center gap-2">
+                    <Calculator size={16} />
+                    الحسابات والمعادلات
+                  </h3>
+                  <div className="space-y-3">
+                    
+                    {/* Width Shrinkage */}
+                    {rawWidth > 0 && zeroWidth > 0 && (
+                      <div className="bg-white rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm font-medium text-slate-700">انكماش العرض</span>
+                          <span className={`text-sm font-bold ${widthShrinkage > 25 ? 'text-red-600' : widthShrinkage > 15 ? 'text-amber-600' : 'text-green-600'}`}>
+                            {widthShrinkage.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-500 font-mono bg-slate-50 p-2 rounded">
+                          ({rawWidth} - {zeroWidth}) / {rawWidth} × 100 = {widthShrinkage.toFixed(1)}%
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* GSM Change */}
+                    {rawWeight > 0 && zeroWeight > 0 && (
+                      <div className="bg-white rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm font-medium text-slate-700">تغير الوزن (GSM)</span>
+                          <span className={`text-sm font-bold ${gsmChange > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {gsmChange > 0 ? '+' : ''}{gsmChange.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-500 font-mono bg-slate-50 p-2 rounded">
+                          ({zeroWeight} - {rawWeight}) / {rawWeight} × 100 = {gsmChange.toFixed(1)}%
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Target Difference */}
+                    {targetGSM > 0 && zeroWeight > 0 && (
+                      <div className="bg-white rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm font-medium text-slate-700">الفرق عن المستهدف</span>
+                          <span className={`text-sm font-bold ${Math.abs(targetDiff) <= 20 ? 'text-green-600' : 'text-red-600'}`}>
+                            {targetDiff > 0 ? '+' : ''}{targetDiff.toFixed(0)} GSM
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-500 font-mono bg-slate-50 p-2 rounded">
+                          وزن زيرو ({zeroWeight}) - المستهدف ({targetGSM}) = {targetDiff.toFixed(0)} GSM
+                        </div>
+                        {Math.abs(targetDiff) > 20 && (
+                          <div className="text-xs text-amber-600 mt-2">
+                            💡 {targetDiff > 0 ? 'الوزن أعلى من المستهدف - قد تحتاج تعديل الماكينة (زيادة السرعة أو تقليل الكثافة)' : 'الوزن أقل من المستهدف - قد تحتاج تقليل السرعة أو زيادة الكثافة'}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              
+              {/* Finishing Recommendations based on fiber */}
+              {syntheticPercentage > 0 && (
+                <div className={`${needsTathbeet ? 'bg-amber-50 border-amber-200' : 'bg-green-50 border-green-200'} border rounded-xl p-4`}>
+                  <h3 className={`text-sm font-bold ${needsTathbeet ? 'text-amber-800' : 'text-green-800'} mb-2 flex items-center gap-2`}>
+                    <AlertCircle size={16} />
+                    توصيات التجهيز
+                  </h3>
+                  <p className={`text-sm ${needsTathbeet ? 'text-amber-700' : 'text-green-700'}`}>
+                    {needsTathbeet 
+                      ? `⚠️ المادة تحتوي على ${syntheticPercentage}% مواد صناعية (بوليستر/ليكرا) - يُنصح بعملية التثبيت الحراري`
+                      : `✓ نسبة المواد الصناعية منخفضة (${syntheticPercentage}%) - التثبيت اختياري`
+                    }
+                  </p>
+                </div>
+              )}
+              
               {/* Finishing Plan Section */}
-              <div className="border-t border-slate-200 pt-4 mt-4">
+              <div className="border-t border-slate-200 pt-4">
                 <h3 className="text-sm font-bold text-slate-700 mb-3">خطة الجهيز</h3>
                 
                 {/* Required Finished Weight & Width */}
@@ -2430,7 +2717,7 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                       />
                       <span className="text-sm text-slate-700">نزيم</span>
                     </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
+                    <label className={`flex items-center gap-2 cursor-pointer ${needsTathbeet && !sampleDataForm.finishingTathbeet ? 'bg-amber-50 px-2 py-1 rounded-lg border border-amber-200' : ''}`}>
                       <input
                         type="checkbox"
                         checked={sampleDataForm.finishingTathbeet}
@@ -2438,6 +2725,9 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                         className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
                       />
                       <span className="text-sm text-slate-700">تثبيت</span>
+                      {needsTathbeet && !sampleDataForm.finishingTathbeet && (
+                        <span className="text-xs text-amber-600">⚠️ موصى به</span>
+                      )}
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
@@ -2483,7 +2773,7 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
               </div>
             </div>
             
-            <div className="p-6 border-t border-slate-100 flex gap-3">
+            <div className="p-6 border-t border-slate-100 flex gap-3 sticky bottom-0 bg-white">
               <button
                 onClick={() => setShowSampleDataModal(null)}
                 className="flex-1 px-4 py-2.5 bg-slate-100 text-slate-700 rounded-lg font-medium hover:bg-slate-200 transition-colors"
@@ -2500,7 +2790,8 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Image Viewer Modal */}
       {viewingImage && (

@@ -141,6 +141,9 @@ const App: React.FC = () => {
       if (currentUser) {
         try {
           const email = currentUser.email?.toLowerCase();
+          console.log('[DEBUG] Auth email:', currentUser.email);
+          console.log('[DEBUG] Lowercase email:', email);
+          console.log('[DEBUG] Auth UID:', currentUser.uid);
           if (!email) {
              setIsAuthorized(false);
              setAuthLoading(false);

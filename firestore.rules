@@ -2,15 +2,234 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Helper function to check if user is authenticated
+    // ========================================
+    // HELPER FUNCTIONS
+    // ========================================
+    
+    // Check if user is authenticated
     function isAuthenticated() {
       return request.auth != null;
     }
-
-    // Match all documents
+    
+    // Get user's email (lowercase)
+    function getUserEmail() {
+      return request.auth.token.email.lower();
+    }
+    
+    // Get user document from users collection
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(getUserEmail())).data;
+    }
+    
+    // Check if user document exists
+    function userExists() {
+      return exists(/databases/$(database)/documents/users/$(getUserEmail()));
+    }
+    
+    // Check user roles
+    function isAdmin() {
+      return isAuthenticated() && userExists() && getUserData().role == 'admin';
+    }
+    
+    function isEditor() {
+      return isAuthenticated() && userExists() && getUserData().role == 'editor';
+    }
+    
+    function isViewer() {
+      return isAuthenticated() && userExists() && getUserData().role == 'viewer';
+    }
+    
+    function isDyehouseManager() {
+      return isAuthenticated() && userExists() && getUserData().role == 'dyehouse_manager';
+    }
+    
+    function isFactoryManager() {
+      return isAuthenticated() && userExists() && getUserData().role == 'factory_manager';
+    }
+    
+    // Check if user is approved (not pending)
+    function isApproved() {
+      return isAuthenticated() && userExists() && getUserData().role != 'pending';
+    }
+    
+    // Can write data (admin or editor)
+    // TEMP: Allow any authenticated user while debugging
+    function canWrite() {
+      return isAuthenticated();
+      // return isAdmin() || isEditor() || isFactoryManager();
+    }
+    
+    // Can read data (any approved user)
+    // TEMP: Allow any authenticated user while debugging
+    function canRead() {
+      return isAuthenticated();
+      // return isApproved();
+    }
+    
+    // ========================================
+    // USERS COLLECTION - HIGHLY PROTECTED
+    // ========================================
+    match /users/{userEmail} {
+      // Anyone authenticated can read their own user doc (needed for login check)
+      // Approved users can read all users (for user list display)
+      allow read: if isAuthenticated() && (
+        getUserEmail() == userEmail || isApproved()
+      );
+      
+      // Users can update their own presence fields only
+      allow update: if isAuthenticated() && 
+        getUserEmail() == userEmail &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isOnline', 'lastSeen', 'lastActivePage', 'lastActivePageAt']);
+      
+      // Only ADMINS can create new users or change roles
+      allow create: if isAdmin() || (
+        // Allow first user bootstrap OR self-registration as pending
+        isAuthenticated() && 
+        getUserEmail() == userEmail &&
+        request.resource.data.role == 'pending'
+      );
+      
+      // Only ADMINS can update role or delete users
+      // But admin cannot demote themselves (handled in app, extra safety here)
+      allow update: if isAdmin() && (
+        // Prevent admin from changing their own role to non-admin
+        !(getUserEmail() == userEmail && request.resource.data.role != 'admin')
+      );
+      
+      allow delete: if isAdmin();
+    }
+    
+    // ========================================
+    // MACHINES - Protected from random creation
+    // ========================================
+    match /MachineSS/{machineId} {
+      allow read: if canRead();
+      allow update: if canWrite(); // Admin, Editor, Factory Manager can update
+      allow create, delete: if isAdmin(); // Only admins can add or delete machines
+      
+      // Subcollection: Daily Logs
+      match /dailyLogs/{logDate} {
+        allow read: if canRead();
+        allow write: if canWrite();
+      }
+    }
+    
+    // Legacy machines collection
+    match /machines/{machineId} {
+      allow read: if canRead();
+      allow update: if canWrite();
+      allow create, delete: if isAdmin(); // Only admins can add or delete
+      
+      match /daily_logs/{logDate} {
+        allow read: if canRead();
+        allow write: if canWrite();
+      }
+    }
+    
+    // ========================================
+    // BUSINESS DATA - Standard Protection
+    // ========================================
+    
+    // Customers
+    match /CustomerSheets/{customerId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+      
+      // Orders subcollection
+      match /orders/{orderId} {
+        allow read: if canRead();
+        allow write: if canWrite();
+      }
+    }
+    
+    // Fabrics
+    match /FabricSS/{fabricId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    
+    // Yarns
+    match /yarns/{yarnId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    
+    // Yarn Inventory
+    match /yarn_inventory/{itemId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    
+    // Orders
+    match /orders/{orderId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    
+    // Dyehouses
+    match /dyehouses/{dyehouseId} {
+      allow read: if canRead();
+      allow write: if canWrite() || isDyehouseManager();
+    }
+    
+    // Dyehouse Inventory
+    match /dyehouse_inventory/{itemId} {
+      allow read: if canRead();
+      allow write: if canWrite() || isDyehouseManager();
+    }
+    
+    // External Plans (External Factories)
+    match /ExternalPlans/{planId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    
+    // Samples
+    match /samples/{sampleId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    
+    // Scrap Reasons
+    match /scrap_reasons/{reasonId} {
+      allow read: if canRead();
+      allow write: if isAdmin();
+    }
+    
+    // ========================================
+    // SYSTEM/ANALYTICS DATA
+    // ========================================
+    
+    // Daily Production Index
+    match /daily_production_index/{dateStr} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    
+    // Factory Stats
+    match /factory_stats/{statId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    
+    // Activity Logs - Anyone approved can create, only admins can delete
+    match /activityLogs/{logId} {
+      allow read: if canRead();
+      allow create: if isApproved();
+      allow update, delete: if isAdmin();
+    }
+    
+    // Settings (global app settings like activeDay)
+    match /settings/{settingId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    
+    // ========================================
+    // CATCH-ALL: Deny everything else
+    // ========================================
     match /{document=**} {
-      // Phase 1: Allow access only to authenticated users
-      allow read, write: if isAuthenticated();
+      allow read, write: if false;
     }
   }
 }

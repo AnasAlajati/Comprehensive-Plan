@@ -15,7 +15,7 @@ import {
 } from 'firebase/firestore';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
-import { db, firebaseConfig } from '../services/firebase';
+import { db, firebaseConfig, auth } from '../services/firebase';
 import { ActivityService, ActivityLog } from '../services/activityService';
 import { Trash2, UserPlus, Shield, ShieldAlert, Mail, User as UserIcon, Copy, Check, Key, Circle, Clock, Activity, MapPin, Edit3, Plus, X, ChevronDown, ChevronUp } from 'lucide-react';
 
@@ -116,6 +116,13 @@ export const UserManagementPage: React.FC = () => {
   };
 
   const handleUpdateRole = async (userId: string, newRole: string) => {
+    // Prevent admin from demoting themselves
+    const currentUserEmail = auth.currentUser?.email?.toLowerCase();
+    if (userId.toLowerCase() === currentUserEmail && newRole !== 'admin') {
+      setError("You cannot demote yourself. Ask another admin to change your role.");
+      return;
+    }
+    
     try {
       await setDoc(doc(db, 'users', userId), { role: newRole }, { merge: true });
       setUsers(users.map(u => u.id === userId ? { ...u, role: newRole as any } : u));

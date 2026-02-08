@@ -128,6 +128,18 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
     allMachines.push(order.machine);
   }
 
+  // DEBUG: Log machine data to help diagnose issues
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[FabricProductionOrderModal] Debug Info:', {
+      activeMachines,
+      plannedMachines,
+      allMachines,
+      orderMachine: order.machine,
+      yarnAllocations: order.yarnAllocations,
+      yarnAllocationKeys: Object.keys(order.yarnAllocations || {}),
+    });
+  }
+
   const handleDownloadPDF = async () => {
     if (!printRef.current) return;
     setIsDownloading(true);
@@ -403,7 +415,7 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
                          const lot = (allocations as any[]).map(a => a.lotNumber).join(', ');
                          
                          return (
-                             <div className="flex border-b border-slate-300 text-sm last:border-0 min-h-[30px]" key={yarnId}>
+                             <div className="flex border-b border-slate-300 text-sm last:border-0 min-h-[30px]" key={`yarn-${yarnId}-${idx}`}>
                                   <div className="w-1/2 p-1 border-l border-slate-800 pr-2 flex items-center">
                                       <span className="font-bold ml-2 w-6">({idx + 1})</span>
                                       <span className="font-bold">{yarnName}</span>
@@ -654,9 +666,9 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
                Select Machine for Order Sheet:
              </label>
              <div className="flex flex-wrap gap-2">
-               {allMachines.map(m => (
+               {allMachines.map((m, idx) => (
                  <button
-                   key={m}
+                   key={`machine-${m || 'unknown'}-${idx}`}
                    onClick={() => setSelectedMachine(m)}
                    className={`px-3 py-1 rounded border text-sm font-medium transition-colors ${
                      selectedMachine === m 
@@ -664,7 +676,7 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
                    }`}
                  >
-                   {m}
+                   {m || '(No Name)'}
                  </button>
                ))}
              </div>
