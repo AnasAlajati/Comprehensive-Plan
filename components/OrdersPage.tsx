@@ -35,7 +35,11 @@ const NAVIGABLE_FIELDS: (keyof OrderRow)[] = [
   'notes', 'batchDeliveries', 'accessoryDeliveries'
 ];
 
-export const OrdersPage: React.FC = () => {
+interface OrdersPageProps {
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager' | null;
+}
+
+export const OrdersPage: React.FC<OrdersPageProps> = ({ userRole }) => {
   const [customers, setCustomers] = useState<CustomerSheet[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -137,8 +141,21 @@ export const OrdersPage: React.FC = () => {
     }
   };
 
-  const handleDeleteCustomer = async (id: string) => {
-    if (!window.confirm("Are you sure you want to delete this customer and all their orders?")) return;
+  const handleDeleteCustomer = async (id: string, customerName: string) => {
+    // 1. Role Check
+    if (userRole !== 'admin') {
+      alert("Only Administrators can delete clients. Please contact an admin if this is necessary.");
+      return;
+    }
+
+    // 2. Typing Verification
+    const confirmation = window.prompt(`To delete client "${customerName}" and ALL their orders/history, please type "DELETE" in the box below:`);
+    
+    if (confirmation !== 'DELETE') {
+      if (confirmation !== null) alert("Incorrect text entered. Deletion cancelled.");
+      return;
+    }
+
     try {
       await deleteDoc(doc(db, 'CustomerSheets', id));
       if (selectedCustomerId === id) setSelectedCustomerId(null);
@@ -321,7 +338,7 @@ export const OrdersPage: React.FC = () => {
                     {customer.name}
                   </span>
                   <button 
-                    onClick={(e) => { e.stopPropagation(); handleDeleteCustomer(customer.id); }}
+                    onClick={(e) => { e.stopPropagation(); handleDeleteCustomer(customer.id, customer.name); }}
                     className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-red-500 transition-opacity"
                   >
                     <Trash2 className="w-4 h-4" />

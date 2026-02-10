@@ -188,8 +188,18 @@ export const FabricsPage: React.FC<FabricsPageProps> = ({ userRole }) => {
     }
   };
 
-  const handleDeleteFabric = async (fabricId: string) => {
-    if (!window.confirm('Are you sure you want to delete this fabric? This action cannot be undone.')) {
+  const handleDeleteFabric = async (fabricId: string, fabricName: string) => {
+    // 1. Role Check
+    if (userRole !== 'admin') {
+      alert("You do not have permission to delete fabrics. Only Administrators can perform this action.");
+      return;
+    }
+
+    // 2. Typing Verification
+    const confirmation = window.prompt(`To delete "${fabricName}", please type "DELETE" in the box below:`);
+    
+    if (confirmation !== 'DELETE') {
+      if (confirmation !== null) alert("Incorrect text entered. Deletion cancelled.");
       return;
     }
 
@@ -857,7 +867,7 @@ export const FabricsPage: React.FC<FabricsPageProps> = ({ userRole }) => {
                                   <Edit size={16} />
                                 </button>
                                 <button 
-                                  onClick={() => handleDeleteFabric(fabric.id!)}
+                                  onClick={() => handleDeleteFabric(fabric.id!, fabric.name)}
                                   className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100 ml-1"
                                   title="Delete Fabric"
                                 >

@@ -4272,8 +4272,21 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     }
   };
 
-  const handleDeleteCustomer = async (id: string) => {
-    if (!window.confirm("Delete customer and all orders?")) return;
+  const handleDeleteCustomer = async (id: string, customerName: string) => {
+    // 1. Role Check
+    if (userRole !== 'admin') {
+      alert("Only Administrators can delete clients. Please contact an admin if this is necessary.");
+      return;
+    }
+
+    // 2. Typing Verification
+    const confirmation = window.prompt(`To delete client "${customerName}" and ALL their orders/history, please type "DELETE" in the box below:`);
+    
+    if (confirmation !== 'DELETE') {
+      if (confirmation !== null) alert("Incorrect text entered. Deletion cancelled.");
+      return;
+    }
+
     try {
       // Delete sub-collection orders first to prevent orphans in collectionGroup queries
       const ordersSnapshot = await getDocs(collection(db, 'CustomerSheets', id, 'orders'));
@@ -4577,7 +4590,20 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
   const handleDeleteRow = async (rowId: string) => {
     if (!selectedCustomerId || !selectedCustomer) return;
-    if (!window.confirm("Delete this order row?")) return;
+    
+    // 1. Role Check
+    if (userRole !== 'admin') {
+      alert("Only Administrators can delete order rows. Please contact an admin if this is necessary.");
+      return;
+    }
+
+    // 2. Typing Verification
+    const confirmation = window.prompt(`To delete this order row, please type "DELETE" in the box below:`);
+    
+    if (confirmation !== 'DELETE') {
+      if (confirmation !== null) alert("Incorrect text entered. Deletion cancelled.");
+      return;
+    }
     
     const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
 
@@ -5808,7 +5834,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                     })()}
 
                     <button 
-                        onClick={() => handleDeleteCustomer(selectedCustomer.id)}
+                        onClick={() => handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)}
                         className="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 rounded-md transition-colors text-xs font-medium"
                     >
                         <Trash2 className="w-3.5 h-3.5" />
