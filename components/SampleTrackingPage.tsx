@@ -283,6 +283,7 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
     zeroWidth: string;
     requiredFinishedWeight: string;
     requiredFinishedWidth: string;
+    requiredWidthMode: 'tubular' | 'open';
     finishingNazeem: boolean;
     finishingTathbeet: boolean;
     finishingKasra: boolean;
@@ -299,6 +300,7 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
     // Finishing Plan
     requiredFinishedWeight: '',
     requiredFinishedWidth: '',
+    requiredWidthMode: 'open',
     finishingNazeem: false,
     finishingTathbeet: false,
     finishingKasra: false,
@@ -2358,18 +2360,80 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
         const targetGSM = parseFloat(sampleDataForm.targetGSM) || 0;
         
         const widthShrinkage = rawWidth > 0 ? ((rawWidth - zeroWidth) / rawWidth * 100) : 0;
-        const gsmChange = rawWeight > 0 ? ((zeroWeight - rawWeight) / rawWeight * 100) : 0;
+        const gsmChange = rawWeight > 0 ? ((zeroWeight - rawWeight) / rawWidth * 100) : 0;
         const targetDiff = targetGSM > 0 && zeroWeight > 0 ? (zeroWeight - targetGSM) : 0;
         
-        // Get synthetic content percentage for recommendations
-        const syntheticPercentage = sampleDataForm.yarnComposition.reduce((acc, yarn) => {
-          if (yarn.type === 'polyester' || yarn.type === 'lycra') {
+        // Get required finished width/weight
+        // Convert to tubular if user entered open width
+        const rawRequiredWidth = parseFloat(sampleDataForm.requiredFinishedWidth) || 0;
+        const requiredWidth = sampleDataForm.requiredWidthMode === 'open' ? rawRequiredWidth / 2 : rawRequiredWidth;
+        const requiredWeight = parseFloat(sampleDataForm.requiredFinishedWeight) || 0;
+        
+        // Get spandex/lycra percentage separately from polyester
+        const spandexPercentage = sampleDataForm.yarnComposition.reduce((acc, yarn) => {
+          if (yarn.type === 'lycra') {
             return acc + (yarn.percentage || 0);
           }
           return acc;
         }, 0);
         
-        const needsTathbeet = syntheticPercentage > 10;
+        const polyesterPercentage = sampleDataForm.yarnComposition.reduce((acc, yarn) => {
+          if (yarn.type === 'polyester') {
+            return acc + (yarn.percentage || 0);
+          }
+          return acc;
+        }, 0);
+        
+        // Get synthetic content percentage for recommendations
+        const syntheticPercentage = spandexPercentage + polyesterPercentage;
+        
+        // Calculate safe stretch limits based on spandex %
+        // Higher spandex = can stretch more safely
+        const maxSafeStretchPercent = spandexPercentage === 0 ? 8 
+          : spandexPercentage <= 5 ? 15 
+          : spandexPercentage <= 10 ? 20 
+          : 25;
+        
+        // Length stretch estimation based on spandex %
+        // During تثبيت, fabric also stretches in LENGTH on the stenter machine
+        const lengthStretchPercent = spandexPercentage === 0 ? 6 
+          : spandexPercentage <= 5 ? 12 
+          : spandexPercentage <= 10 ? 17 
+          : 22;
+        
+        // Maximum safe width after تثبيت
+        const maxSafeWidth = zeroWidth > 0 ? zeroWidth * (1 + maxSafeStretchPercent / 100) : 0;
+        
+        // Calculate expected GSM WITHOUT تثبيت (just zero state)
+        // Zero GSM is the fabric's natural resting state after washing
+        const expectedGSMWithoutTathbeet = zeroWeight; // This IS the GSM without any stretching
+        
+        // Calculate expected GSM WITH تثبيت at required width
+        // Formula: GSM = Zero GSM × (Zero Width / Target Width) × (1 / (1 + Length Stretch %))
+        // Width stretch makes fabric lighter, length stretch also makes it lighter
+        const widthFactor = (zeroWidth > 0 && requiredWidth > 0) ? (zeroWidth / requiredWidth) : 1;
+        const lengthFactor = 1 / (1 + lengthStretchPercent / 100);
+        const expectedGSMWithTathbeet = (zeroWeight > 0 && zeroWidth > 0 && requiredWidth > 0) 
+          ? zeroWeight * widthFactor * lengthFactor 
+          : 0;
+        
+        // Calculate stretch percentage needed
+        const stretchNeeded = (zeroWidth > 0 && requiredWidth > 0) 
+          ? ((requiredWidth - zeroWidth) / zeroWidth * 100) 
+          : 0;
+        
+        // Is the stretch within safe limits?
+        const isStretchSafe = stretchNeeded <= maxSafeStretchPercent;
+        
+        // Does the fabric need تثبيت?
+        const needsTathbeet = syntheticPercentage > 10 || (requiredWidth > 0 && requiredWidth > zeroWidth);
+        
+        // Can we meet the required specs?
+        const canMeetWidthSpec = requiredWidth === 0 || requiredWidth <= maxSafeWidth;
+        const canMeetWeightSpec = requiredWeight === 0 || (expectedGSMWithTathbeet > 0 && Math.abs(expectedGSMWithTathbeet - requiredWeight) <= 30);
+        
+        // Check if we have enough data for finishing predictions
+        const hasEnoughDataForPredictions = zeroWeight > 0 && zeroWidth > 0 && sampleDataForm.yarnComposition.length > 0;
         
         return (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
@@ -2550,7 +2614,7 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                 {/* Raw Width */}
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
-                    عرض خام (سم)
+                    عرض خام - مطوي (سم)
                   </label>
                   <input
                     type="number"
@@ -2560,12 +2624,17 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="أدخل العرض"
                   />
+                  {rawWidth > 0 && (
+                    <div className="mt-1 text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded">
+                      مفتوح: <span className="font-bold">{(rawWidth * 2).toFixed(0)} سم</span>
+                    </div>
+                  )}
                 </div>
                 
                 {/* Zero Width */}
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
-                    عرض زيرو (سم)
+                    عرض زيرو - مطوي (سم)
                   </label>
                   <input
                     type="number"
@@ -2575,6 +2644,11 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="أدخل العرض"
                   />
+                  {zeroWidth > 0 && (
+                    <div className="mt-1 text-xs text-purple-600 bg-purple-50 px-2 py-1 rounded">
+                      مفتوح: <span className="font-bold">{(zeroWidth * 2).toFixed(0)} سم</span>
+                    </div>
+                  )}
                 </div>
               </div>
               
@@ -2655,6 +2729,315 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                 </div>
               )}
               
+              {/* ============ FINISHING PREDICTIONS SECTION - SHOW YOUR WORK ============ */}
+              {hasEnoughDataForPredictions && (
+                <div className="bg-gradient-to-r from-slate-50 to-blue-50 border border-slate-300 rounded-xl p-4 space-y-4">
+                  <h3 className="text-base font-bold text-slate-800 mb-3 flex items-center gap-2 border-b border-slate-200 pb-2">
+                    <Calculator size={18} />
+                    📝 حسابات التجهيز - خطوة بخطوة
+                  </h3>
+                  
+                  {/* STEP 1: Variables Definition */}
+                  <div className="bg-white rounded-lg p-4 border border-slate-200">
+                    <h4 className="text-sm font-bold text-blue-800 mb-3">الخطوة 1: المتغيرات (Variables)</h4>
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="bg-blue-50 p-2 rounded border border-blue-100">
+                        <div className="font-mono text-blue-700">W₀ = {zeroWeight}</div>
+                        <div className="text-xs text-slate-500">وزن الزيرو (GSM)</div>
+                      </div>
+                      <div className="bg-blue-50 p-2 rounded border border-blue-100">
+                        <div className="font-mono text-blue-700">L₀ = {zeroWidth} <span className="text-slate-400">({zeroWidth * 2} مفتوح)</span></div>
+                        <div className="text-xs text-slate-500">عرض الزيرو - مطوي (cm)</div>
+                      </div>
+                      <div className="bg-purple-50 p-2 rounded border border-purple-100">
+                        <div className="font-mono text-purple-700">S = {spandexPercentage}%</div>
+                        <div className="text-xs text-slate-500">نسبة السباندكس</div>
+                      </div>
+                      <div className="bg-orange-50 p-2 rounded border border-orange-100">
+                        <div className="font-mono text-orange-700">Length% = {lengthStretchPercent}%</div>
+                        <div className="text-xs text-slate-500">تمدد طولي متوقع</div>
+                      </div>
+                      {requiredWidth > 0 && (
+                        <div className="bg-green-50 p-2 rounded border border-green-100">
+                          <div className="font-mono text-green-700">L₁ = {requiredWidth} <span className="text-slate-400">({requiredWidth * 2} مفتوح)</span></div>
+                          <div className="text-xs text-slate-500">العرض المطلوب - مطوي (cm)</div>
+                        </div>
+                      )}
+                      {requiredWeight > 0 && (
+                        <div className="bg-green-50 p-2 rounded border border-green-100">
+                          <div className="font-mono text-green-700">W₁ = {requiredWeight}</div>
+                          <div className="text-xs text-slate-500">الوزن المطلوب (GSM)</div>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Tubular vs Open Width Note */}
+                    <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+                      💡 <strong>ملاحظة:</strong> العرض المدخل هو العرض المطوي (من الماكينة). 
+                      في المصبغة يُفتح القماش فيصبح العرض ضعف.
+                    </div>
+                  </div>
+                  
+                  {/* STEP 2: Safe Stretch Calculation */}
+                  <div className="bg-white rounded-lg p-4 border border-slate-200">
+                    <h4 className="text-sm font-bold text-blue-800 mb-3">الخطوة 2: حساب التمدد (عرضي + طولي)</h4>
+                    <div className="space-y-2">
+                      <div className="bg-slate-50 p-3 rounded font-mono text-sm">
+                        <div className="text-slate-600 mb-1">// القاعدة: كلما زاد السباندكس، زاد التمدد</div>
+                        <div className="grid grid-cols-2 gap-4 text-slate-800">
+                          <div>
+                            <div className="text-xs text-slate-500 mb-1">أقصى تمدد عرضي آمن:</div>
+                            S = 0% → 8%<br/>
+                            S ≤ 5% → 15%<br/>
+                            S ≤ 10% → 20%<br/>
+                            S {'>'} 10% → 25%
+                          </div>
+                          <div>
+                            <div className="text-xs text-slate-500 mb-1">تمدد طولي متوقع (Stenter):</div>
+                            S = 0% → 6%<br/>
+                            S ≤ 5% → 12%<br/>
+                            S ≤ 10% → 17%<br/>
+                            S {'>'} 10% → 22%
+                          </div>
+                        </div>
+                      </div>
+                      <div className="bg-purple-50 p-3 rounded border border-purple-200">
+                        <div className="font-mono text-purple-800">
+                          S = {spandexPercentage}% → <span className="font-bold">أقصى تمدد عرضي آمن = {maxSafeStretchPercent}%</span>
+                        </div>
+                        <div className="font-mono text-purple-700 mt-1">
+                          S = {spandexPercentage}% → <span className="font-bold">تمدد طولي متوقع = {lengthStretchPercent}%</span>
+                        </div>
+                      </div>
+                      <div className="bg-green-50 p-3 rounded border border-green-200">
+                        <div className="text-sm text-slate-600 mb-1">حساب أقصى عرض آمن:</div>
+                        <div className="font-mono text-green-800">
+                          L_max = L₀ × (1 + {maxSafeStretchPercent}/100)<br/>
+                          L_max = {zeroWidth} × {(1 + maxSafeStretchPercent/100).toFixed(2)}<br/>
+                          <span className="font-bold">L_max = {maxSafeWidth.toFixed(0)} cm مطوي ({(maxSafeWidth * 2).toFixed(0)} مفتوح)</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* STEP 3: Without Heat Setting */}
+                  <div className="bg-white rounded-lg p-4 border border-slate-200">
+                    <h4 className="text-sm font-bold text-blue-800 mb-3">الخطوة 3: بدون تثبيت (الحالة الطبيعية)</h4>
+                    <div className="bg-amber-50 p-3 rounded border border-amber-200">
+                      <div className="text-sm text-slate-600 mb-2">إذا لم نعمل تثبيت، القماش سيبقى على حالة الزيرو:</div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="text-center p-3 bg-white rounded-lg border border-amber-200">
+                          <div className="text-2xl font-bold text-amber-700">{zeroWeight} GSM</div>
+                          <div className="text-xs text-slate-500">الوزن بدون تثبيت</div>
+                        </div>
+                        <div className="text-center p-3 bg-white rounded-lg border border-amber-200">
+                          <div className="text-2xl font-bold text-amber-700">{zeroWidth} cm</div>
+                          <div className="text-xs text-slate-400">({zeroWidth * 2} مفتوح)</div>
+                          <div className="text-xs text-slate-500">العرض بدون تثبيت</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* STEP 4: With Heat Setting (if required width is specified) */}
+                  {requiredWidth > 0 && (
+                    <div className="bg-white rounded-lg p-4 border border-slate-200">
+                      <h4 className="text-sm font-bold text-blue-800 mb-3">الخطوة 4: مع تثبيت على العرض المطلوب</h4>
+                      
+                      {/* Stretch Calculation */}
+                      <div className="bg-slate-50 p-3 rounded mb-3">
+                        <div className="text-sm text-slate-600 mb-1">حساب نسبة التمدد المطلوبة:</div>
+                        <div className="font-mono text-slate-800">
+                          Stretch% = (L₁ - L₀) / L₀ × 100<br/>
+                          Stretch% = ({requiredWidth} - {zeroWidth}) / {zeroWidth} × 100<br/>
+                          <span className={`font-bold ${isStretchSafe ? 'text-green-700' : 'text-red-700'}`}>
+                            Stretch% = {stretchNeeded.toFixed(1)}%
+                          </span>
+                          {' '}
+                          {isStretchSafe ? '✅ آمن' : `❌ يتجاوز الحد (${maxSafeStretchPercent}%)`}
+                        </div>
+                      </div>
+                      
+                      {/* GSM Calculation */}
+                      <div className="bg-blue-50 p-3 rounded mb-3 border border-blue-200">
+                        <div className="text-sm text-slate-600 mb-1">حساب الوزن المتوقع بعد التثبيت:</div>
+                        <div className="font-mono text-blue-800 space-y-2">
+                          <div className="text-xs text-slate-500">// المعادلة الكاملة تشمل التمدد العرضي والطولي</div>
+                          <div>
+                            W_new = W₀ × (L₀ / L₁) × (1 / (1 + Length%))<br/>
+                          </div>
+                          <div className="bg-white p-2 rounded border border-blue-100">
+                            <div className="text-xs text-slate-500 mb-1">تأثير العرض (Width Factor):</div>
+                            L₀ / L₁ = {zeroWidth} / {requiredWidth} = <span className="font-bold">{widthFactor.toFixed(3)}</span>
+                          </div>
+                          <div className="bg-white p-2 rounded border border-blue-100">
+                            <div className="text-xs text-slate-500 mb-1">تأثير الطول (Length Factor):</div>
+                            1 / (1 + {lengthStretchPercent}%) = 1 / {(1 + lengthStretchPercent/100).toFixed(2)} = <span className="font-bold">{lengthFactor.toFixed(3)}</span>
+                          </div>
+                          <div className="bg-white p-2 rounded border border-blue-100">
+                            <div className="text-xs text-slate-500 mb-1">النتيجة:</div>
+                            W_new = {zeroWeight} × {widthFactor.toFixed(3)} × {lengthFactor.toFixed(3)}<br/>
+                            <span className="font-bold text-lg text-blue-700">W_new = {expectedGSMWithTathbeet.toFixed(0)} GSM</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Result Summary */}
+                      <div className={`p-3 rounded border-2 ${isStretchSafe ? 'bg-green-50 border-green-300' : 'bg-red-50 border-red-300'}`}>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="text-center p-2 bg-white rounded">
+                            <div className={`text-2xl font-bold ${expectedGSMWithTathbeet < zeroWeight ? 'text-blue-600' : 'text-orange-600'}`}>
+                              {expectedGSMWithTathbeet.toFixed(0)} GSM
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              {expectedGSMWithTathbeet < zeroWeight ? '⬇️ أخف من الزيرو' : '⬆️ أثقل من الزيرو'}
+                            </div>
+                          </div>
+                          <div className="text-center p-2 bg-white rounded">
+                            <div className="text-2xl font-bold text-slate-800">{requiredWidth} cm</div>
+                            <div className="text-xs text-slate-400">({requiredWidth * 2} مفتوح)</div>
+                            <div className="text-xs text-slate-500">العرض بعد التثبيت</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* STEP 5: Comparison with Required Specs */}
+                  {requiredWeight > 0 && requiredWidth > 0 && (
+                    <div className="bg-white rounded-lg p-4 border border-slate-200">
+                      <h4 className="text-sm font-bold text-blue-800 mb-3">الخطوة 5: مقارنة مع المطلوب</h4>
+                      <div className="space-y-3">
+                        <div className="bg-slate-50 p-3 rounded">
+                          <div className="grid grid-cols-3 gap-2 text-center text-sm">
+                            <div className="font-medium text-slate-600">المقياس</div>
+                            <div className="font-medium text-slate-600">المتوقع</div>
+                            <div className="font-medium text-slate-600">المطلوب</div>
+                          </div>
+                        </div>
+                        <div className="bg-white p-3 rounded border">
+                          <div className="grid grid-cols-3 gap-2 text-center">
+                            <div className="text-sm text-slate-600">الوزن</div>
+                            <div className="font-bold">{expectedGSMWithTathbeet.toFixed(0)} GSM</div>
+                            <div className="font-bold text-green-700">{requiredWeight} GSM</div>
+                          </div>
+                          <div className="mt-2 text-center">
+                            <span className={`text-sm px-2 py-1 rounded ${Math.abs(expectedGSMWithTathbeet - requiredWeight) <= 30 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                              الفرق: {(expectedGSMWithTathbeet - requiredWeight).toFixed(0)} GSM
+                              {Math.abs(expectedGSMWithTathbeet - requiredWeight) <= 30 ? ' ✅' : ' ❌'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* FINAL RESULT - Instructions for Technician */}
+                  <div className={`rounded-xl p-4 border-2 ${needsTathbeet ? 'bg-amber-50 border-amber-400' : 'bg-green-50 border-green-400'}`}>
+                    <h4 className="text-base font-bold text-slate-800 mb-3 flex items-center gap-2">
+                      🎯 تعليمات للفني
+                    </h4>
+                    
+                    {/* Current State */}
+                    <div className="bg-white rounded-lg p-3 mb-3">
+                      <div className="text-sm text-slate-600 mb-2">الحالة الحالية (زيرو):</div>
+                      <div className="flex items-center gap-4">
+                        <span className="font-bold text-lg">{zeroWeight} GSM</span>
+                        <span className="text-slate-400">×</span>
+                        <span className="font-bold text-lg">{zeroWidth} cm</span>
+                      </div>
+                    </div>
+                    
+                    {/* Direction Arrow */}
+                    {requiredWidth > 0 && (
+                      <div className="flex items-center justify-center my-3">
+                        <div className={`text-3xl ${expectedGSMWithTathbeet < zeroWeight ? 'text-blue-500' : 'text-orange-500'}`}>
+                          {expectedGSMWithTathbeet < zeroWeight ? '⬇️' : '⬆️'}
+                        </div>
+                        <div className="mx-3 text-sm text-slate-500">
+                          {expectedGSMWithTathbeet < zeroWeight ? 'الوزن سينخفض (أخف)' : 'الوزن سيزيد (أثقل)'}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Expected After */}
+                    {requiredWidth > 0 && (
+                      <div className="bg-white rounded-lg p-3 mb-3">
+                        <div className="text-sm text-slate-600 mb-2">المتوقع بعد التثبيت:</div>
+                        <div className="flex items-center gap-4">
+                          <span className="font-bold text-lg text-blue-600">{expectedGSMWithTathbeet.toFixed(0)} GSM</span>
+                          <span className="text-slate-400">×</span>
+                          <span className="font-bold text-lg text-blue-600">{requiredWidth} cm مطوي ({requiredWidth * 2} مفتوح)</span>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Instruction Box */}
+                    <div className="bg-slate-900 text-white rounded-lg p-4 mt-3">
+                      <div className="text-xs text-slate-400 mb-2">📋 قل للفني:</div>
+                      <div className="text-lg font-bold">
+                        {needsTathbeet ? (
+                          requiredWidth > 0 ? (
+                            <>
+                              "اعمل تثبيت على عرض {requiredWidth * 2} سم مفتوح"
+                              <div className="text-sm font-normal text-slate-300 mt-1">
+                                ({requiredWidth} مطوي × 2)
+                              </div>
+                              <div className="text-sm font-normal text-slate-300 mt-1">
+                                الوزن المتوقع: {expectedGSMWithTathbeet.toFixed(0)} GSM
+                                {requiredWeight > 0 && ` (المطلوب: ${requiredWeight})`}
+                              </div>
+                            </>
+                          ) : (
+                            "القماش يحتاج تثبيت - حدد العرض المطلوب"
+                          )
+                        ) : (
+                          "القماش لا يحتاج تثبيت - استخدم حالة الزيرو"
+                        )}
+                      </div>
+                      
+                      {/* Warning if stretch is unsafe */}
+                      {requiredWidth > 0 && !isStretchSafe && (
+                        <div className="mt-3 p-2 bg-red-600 rounded text-sm">
+                          ⚠️ تحذير: التمدد المطلوب ({stretchNeeded.toFixed(1)}%) أكبر من الآمن ({maxSafeStretchPercent}%)
+                          <br/>
+                          تحدث مع العميل لتعديل المواصفات!
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Auto-select finishing processes */}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {needsTathbeet && (
+                        <span className="px-3 py-1 bg-amber-200 text-amber-800 rounded-full text-sm font-medium">
+                          ☑️ تثبيت
+                        </span>
+                      )}
+                      {spandexPercentage > 5 && (
+                        <span className="px-3 py-1 bg-purple-200 text-purple-800 rounded-full text-sm font-medium">
+                          ☑️ كومباكتر (للسباندكس)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {/* Message when not enough data */}
+              {!hasEnoughDataForPredictions && (zeroWeight > 0 || zeroWidth > 0 || sampleDataForm.yarnComposition.length > 0) && (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                  <h3 className="text-sm font-bold text-slate-600 mb-2 flex items-center gap-2">
+                    <AlertCircle size={16} />
+                    بيانات ناقصة لتوقعات التجهيز
+                  </h3>
+                  <ul className="text-sm text-slate-500 space-y-1">
+                    {zeroWeight <= 0 && <li>• أضف وزن زيرو</li>}
+                    {zeroWidth <= 0 && <li>• أضف عرض زيرو</li>}
+                    {sampleDataForm.yarnComposition.length === 0 && <li>• أضف تركيب الخيوط (خاصة نسبة السباندكس)</li>}
+                  </ul>
+                </div>
+              )}
+              
               {/* Finishing Recommendations based on fiber */}
               {syntheticPercentage > 0 && (
                 <div className={`${needsTathbeet ? 'bg-amber-50 border-amber-200' : 'bg-green-50 border-green-200'} border rounded-xl p-4`}>
@@ -2664,7 +3047,7 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                   </h3>
                   <p className={`text-sm ${needsTathbeet ? 'text-amber-700' : 'text-green-700'}`}>
                     {needsTathbeet 
-                      ? `⚠️ المادة تحتوي على ${syntheticPercentage}% مواد صناعية (بوليستر/ليكرا) - يُنصح بعملية التثبيت الحراري`
+                      ? `⚠️ ${requiredWidth > zeroWidth ? 'العرض المطلوب أكبر من الزيرو + ' : ''}المادة تحتوي على ${syntheticPercentage}% مواد صناعية - يُنصح بعملية التثبيت الحراري`
                       : `✓ نسبة المواد الصناعية منخفضة (${syntheticPercentage}%) - التثبيت اختياري`
                     }
                   </p>
@@ -2692,16 +3075,50 @@ export const SampleTrackingPage: React.FC<SampleTrackingPageProps> = ({ userRole
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-2">
-                      عرض مطلوب مجهز
+                      عرض مطلوب مجهز (سم)
                     </label>
+                    {/* Toggle for open vs tubular width input */}
+                    <div className="flex mb-2 rounded-lg overflow-hidden border border-slate-200">
+                      <button
+                        type="button"
+                        onClick={() => setSampleDataForm(prev => ({ ...prev, requiredWidthMode: 'open' }))}
+                        className={`flex-1 px-3 py-1.5 text-sm font-medium transition-colors ${
+                          sampleDataForm.requiredWidthMode === 'open'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-white text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        مفتوح
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSampleDataForm(prev => ({ ...prev, requiredWidthMode: 'tubular' }))}
+                        className={`flex-1 px-3 py-1.5 text-sm font-medium transition-colors ${
+                          sampleDataForm.requiredWidthMode === 'tubular'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-white text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        مطوي
+                      </button>
+                    </div>
                     <input
                       type="number"
                       step="0.01"
                       value={sampleDataForm.requiredFinishedWidth}
                       onChange={(e) => setSampleDataForm(prev => ({ ...prev, requiredFinishedWidth: e.target.value }))}
                       className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="أدخل العرض"
+                      placeholder={sampleDataForm.requiredWidthMode === 'open' ? 'أدخل العرض المفتوح' : 'أدخل العرض المطوي'}
                     />
+                    {requiredWidth > 0 && (
+                      <div className="mt-1 text-xs text-slate-500 bg-slate-50 px-2 py-1 rounded">
+                        {sampleDataForm.requiredWidthMode === 'open' ? (
+                          <>مطوي: <span className="font-bold">{requiredWidth.toFixed(0)} سم</span></>
+                        ) : (
+                          <>مفتوح: <span className="font-bold">{(requiredWidth * 2).toFixed(0)} سم</span></>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
                 

@@ -7,8 +7,7 @@ import { PlanItem, MachineStatus, CustomerOrder, MachineRow, FabricDefinition } 
 import { LinkOrderModal } from './LinkOrderModal';
 import { toJpeg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
-import * as XLSX from 'xlsx';
-import { CheckCircle, Send, Link, Truck, Layout, Factory, FileSpreadsheet, Upload, X, Check, Sparkles, Edit, ArrowRight, History, CheckCircle2, XCircle, AlertTriangle, Download, Plus, Search, Calendar, FileText, Book, Trash2 } from 'lucide-react';
+import { CheckCircle, Send, Link, Truck, Layout, Factory, X, Check, Sparkles, Edit, ArrowRight, History, Plus, Search, Calendar, FileText, Book, Trash2 } from 'lucide-react';
 import { ExternalProductionSheet } from './ExternalProductionSheet'; // New Component - Force Refresh
 import { StandaloneFabricEditor } from './FabricEditor';
 import { FabricDirectoryModal } from './FabricDirectoryModal';
@@ -57,6 +56,7 @@ const STATUS_LABELS: Record<MachineStatus, string> = {
   [MachineStatus.NO_ORDER]: 'متوقفة',
   [MachineStatus.OUT_OF_SERVICE]: 'خارج الخدمة',
   [MachineStatus.QALB]: 'قلب',
+  [MachineStatus.SAMPLES]: 'عينات',
   [MachineStatus.OTHER]: 'Other'
 };
 
@@ -66,6 +66,7 @@ const STATUS_COLOR_MAP: Record<MachineStatus, string> = {
   [MachineStatus.NO_ORDER]: 'bg-slate-100 text-slate-500',
   [MachineStatus.OUT_OF_SERVICE]: 'bg-red-50 text-red-900',
   [MachineStatus.QALB]: 'bg-purple-100 text-purple-900',
+  [MachineStatus.SAMPLES]: 'bg-cyan-100 text-cyan-900',
   [MachineStatus.OTHER]: 'bg-pink-50 text-pink-900'
 };
 
@@ -77,6 +78,7 @@ const ARABIC_STATUS_MAP: Record<string, MachineStatus> = {
   'خارج الخدمة': MachineStatus.OUT_OF_SERVICE,
   'صيانة': MachineStatus.OUT_OF_SERVICE,
   'قلب': MachineStatus.QALB,
+  'عينات': MachineStatus.SAMPLES,
   'other': MachineStatus.OTHER,
   'اخرى': MachineStatus.OTHER
 };
@@ -122,47 +124,6 @@ interface SearchDropdownProps {
   strict?: boolean;
   disabled?: boolean;
 }
-
-interface StagedLog {
-  id: string; // Unique ID for the staging row (machineId)
-  machineId: string;
-  machineName: string;
-  
-  // Context (Yesterday/Previous)
-  previousDate: string;
-  previousClient: string;
-  previousFabric: string;
-  previousRemaining: number;
-  previousStatus: string;
-  isStale: boolean; // If previous log is older than 1 day
-
-  // Imported Data (The Change)
-  hasImportData: boolean; // True if found in Excel
-  importDate: string;
-  importProduction: number;
-  importScrap: number;
-  importClient: string;
-  importFabric: string;
-  sourceWorkCenters: string[]; // List of Excel WorkCenters mapped to this machine
-  
-  // Split Run Handling
-  isSplit: boolean; // If multiple rows for this machine in Excel
-  splitDetails?: { client: string; fabric: string; production: number }[]; // Details of the split
-
-  // Resulting State (Calculated/User Edited)
-  newRemaining: number;
-  newStatus: string;
-  note: string;
-
-  // Validation
-  validationStatus: 'SAFE' | 'WARNING' | 'ERROR';
-  validationMessage: string;
-  
-  // User Control
-  selected: boolean; // If checked, will be imported
-}
-
-type FilterType = 'ALL' | 'WARNINGS' | 'ERRORS' | 'SAFE' | 'MISSING';
 
 const SearchDropdown: React.FC<SearchDropdownProps> = ({
   id,
@@ -351,7 +312,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const isReadOnly = userRole === 'viewer';
   
   const [selectedDate, setSelectedDate] = useState<string>(propSelectedDate || new Date().toISOString().split('T')[0]);
-  const [importDate, setImportDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [activeDay, setActiveDay] = useState<string>('');
   const [isDownloading, setIsDownloading] = useState(false);
   const [isSendingReport, setIsSendingReport] = useState(false);
@@ -393,155 +353,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     logId: ''
   });
   const printRef = useRef<HTMLDivElement>(null);
-
-  const handleExportBackup = () => {
-    try {
-      const backupData = {
-        metadata: {
-          date: selectedDate,
-          timestamp: new Date().toISOString(),
-          version: '1.0'
-        },
-        logs: filteredLogs.map(log => ({
-          machineId: log.machineId,
-          status: log.status,
-          customStatusNote: log.customStatusNote || '',
-          client: log.client,
-          fabric: log.fabric,
-          dayProduction: Number(log.dayProduction) || 0,
-          avgProduction: Number(log.avgProduction) || 0,
-          scrap: Number(log.scrap) || 0,
-          reason: log.reason || '',
-          remainingMfg: Number(log.remainingMfg) || 0, // CRITICAL: Save exact value
-          orderReference: log.orderReference || '',
-          orderId: log.orderId || ''
-        }))
-      };
-
-      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `DailyLog_${selectedDate}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      
-      showMessage('✅ Backup exported successfully');
-    } catch (error) {
-      console.error('Export failed:', error);
-      showMessage('❌ Export failed', true);
-    }
-  };
-
-  const handleImportBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Reset input so same file can be selected again
-    e.target.value = '';
-
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      try {
-        const content = evt.target?.result as string;
-        const backup = JSON.parse(content);
-        
-        // Validation
-        if (!backup.metadata || !backup.logs || !Array.isArray(backup.logs)) {
-          throw new Error('Invalid backup file format');
-        }
-
-        if (backup.metadata.date !== selectedDate) {
-          if (!window.confirm(`⚠️ Date Mismatch!\n\nFile Date: ${backup.metadata.date}\nCurrent View: ${selectedDate}\n\nDo you want to proceed and OVERWRITE data for ${selectedDate}?`)) {
-            return;
-          }
-        } else {
-           if (!window.confirm(`⚠️ This will OVERWRITE all data for ${selectedDate} with the backup file.\n\nAre you sure?`)) {
-             return;
-           }
-        }
-
-        setLoading(true);
-        
-        // Process Import
-        const machines = await DataService.getMachinesFromMachineSS();
-        const updatePromises: Promise<void>[] = [];
-        let updatedCount = 0;
-
-        for (const log of backup.logs) {
-           const machineId = String(log.machineId);
-           const machine = machines.find(m => String(m.id) === machineId);
-           
-           if (machine) {
-              // Construct Log Entry
-              const newLogEntry = {
-                id: selectedDate,
-                date: selectedDate,
-                dayProduction: log.dayProduction,
-                scrap: log.scrap,
-                reason: log.reason,
-                status: log.status,
-                fabric: log.fabric,
-                client: log.client,
-                avgProduction: log.avgProduction,
-                remainingMfg: log.remainingMfg, // CRITICAL: Force value from file
-                customStatusNote: log.customStatusNote,
-                orderReference: log.orderReference,
-                orderId: log.orderId,
-                timestamp: new Date().toISOString()
-              };
-
-              const currentLogs = machine.dailyLogs || [];
-              const existingLogIndex = currentLogs.findIndex((l: any) => l.date === selectedDate);
-              
-              let updatedLogs = [...currentLogs];
-              if (existingLogIndex >= 0) {
-                updatedLogs[existingLogIndex] = { ...updatedLogs[existingLogIndex], ...newLogEntry };
-              } else {
-                updatedLogs.push(newLogEntry);
-              }
-
-              // 1. Update Array (Legacy)
-              const updatePromise = DataService.updateMachineInMachineSS(machineId, {
-                dailyLogs: updatedLogs,
-                lastLogDate: selectedDate,
-                lastLogData: {
-                   date: selectedDate,
-                   dayProduction: newLogEntry.dayProduction,
-                   scrap: newLogEntry.scrap,
-                   status: newLogEntry.status,
-                   fabric: newLogEntry.fabric,
-                   client: newLogEntry.client,
-                   remainingMfg: newLogEntry.remainingMfg,
-                   reason: newLogEntry.reason,
-                   customStatusNote: newLogEntry.customStatusNote
-                },
-                lastUpdated: new Date().toISOString()
-              });
-
-              // 2. Update Sub-collection
-              const subCollectionPromise = DataService.updateDailyLog(machineId, selectedDate, newLogEntry);
-
-              updatePromises.push(Promise.all([updatePromise, subCollectionPromise]).then(() => {}));
-              updatedCount++;
-           }
-        }
-
-        await Promise.all(updatePromises);
-        await handleFetchLogs(selectedDate);
-        showMessage(`✅ Successfully restored ${updatedCount} logs from backup`);
-
-      } catch (error: any) {
-        console.error('Import failed:', error);
-        showMessage('❌ Import failed: ' + error.message, true);
-      } finally {
-        setLoading(false);
-      }
-    };
-    reader.readAsText(file);
-  };
 
   // Filter State
   const [searchTerm, setSearchTerm] = useState('');
@@ -610,23 +421,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     setEditingFabric(null);
     showMessage(editingFabric ? '✅ Fabric updated successfully' : '✅ Fabric added successfully');
   };
-
-  // Import ODOO State
-  const [showImportModal, setShowImportModal] = useState(false);
-  const [importPreview, setImportPreview] = useState<StagedLog[]>([]);
-  const [filter, setFilter] = useState<FilterType>('ALL');
-  
-  // Mapping State
-  const [showMappingModal, setShowMappingModal] = useState(false);
-  const [unknownWorkCenters, setUnknownWorkCenters] = useState<{ name: string; fabrics: string[] }[]>([]);
-  const [workCenterMappings, setWorkCenterMappings] = useState<Record<string, string>>({});
-  const [pendingImportRows, setPendingImportRows] = useState<any[]>([]);
-  const [mappingMachines, setMappingMachines] = useState<any[]>([]); // Machines list for mapping modal
-
-  // Fabric Import State
-  const [showFabricImportModal, setShowFabricImportModal] = useState(false);
-  const [unknownFabrics, setUnknownFabrics] = useState<string[]>([]);
-  const [fabricsToCreate, setFabricsToCreate] = useState<Record<string, boolean>>({});
 
   // Sync with propSelectedDate if it changes (e.g. from global app state)
   useEffect(() => {
@@ -796,428 +590,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     }
     setLoading(false);
   };
-
-  // ODOO Import Logic
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      const bstr = evt.target?.result;
-      const wb = XLSX.read(bstr, { type: 'binary' });
-      const wsname = wb.SheetNames[0];
-      const ws = wb.Sheets[wsname];
-      const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
-      
-      // Skip header (row 0), start from row 2 (index 1)
-      const rows = data.slice(1);
-      setPendingImportRows(rows);
-      
-      // Fetch current machines and saved mappings
-      const [currentMachines, savedMappings] = await Promise.all([
-        DataService.getMachinesFromMachineSS(),
-        DataService.getWorkCenterMappings()
-      ]);
-      
-      setMappingMachines(currentMachines);
-      
-      // First Pass: Identify ALL WorkCenters
-      const allWorkCenters = new Set<string>();
-      rows.forEach((row: any) => {
-        const workCenter = row[4]; // Column E (Index 4) is Work Center
-        if (workCenter) {
-          allWorkCenters.add(String(workCenter).trim());
-        }
-      });
-
-      // Prepare Mapping List for Review
-      const mappingList: { name: string; fabrics: string[]; currentMachineId?: string }[] = [];
-      const autoMappings: Record<string, string> = { ...savedMappings };
-      
-      allWorkCenters.forEach(wcStr => {
-         // Find fabrics for context
-         const wcFabrics = new Set<string>();
-         rows.forEach((r: any) => {
-            if (String(r[4]).trim() === wcStr && r[0]) wcFabrics.add(r[0]);
-         });
-
-         let machineId = savedMappings[wcStr];
-         
-         if (!machineId) {
-            // Try Direct Match
-            const machine = currentMachines.find((m: any) => 
-              (m.name && m.name.toLowerCase() === wcStr.toLowerCase()) || 
-              (m.machineid && m.machineid.toString() === wcStr) ||
-              (m.id && m.id.toString() === wcStr)
-            );
-            if (machine) machineId = String(machine.id);
-         }
-
-         if (!machineId) {
-            // Try Auto-Map via Fabric
-            // (Simplified: just check if any fabric is unique to a machine)
-            // ... logic omitted for brevity, can be added if needed
-         }
-
-         if (machineId) {
-            autoMappings[wcStr] = machineId;
-         }
-
-         mappingList.push({
-            name: wcStr,
-            fabrics: Array.from(wcFabrics),
-            currentMachineId: machineId
-         });
-      });
-
-      // ALWAYS Show Mapping Modal to let user review/fix "wrong" mappings
-      setUnknownWorkCenters(mappingList);
-      setWorkCenterMappings(autoMappings);
-      setShowMappingModal(true);
-    };
-    reader.readAsBinaryString(file);
-  };
-
-  const checkFabricsAndProceed = async (rows: any[], machines: any[], mappings: Record<string, string>) => {
-    // Ensure mappings state is synced for any future steps (like Fabric Modal)
-    setWorkCenterMappings(mappings);
-    
-    const unknownFabricsSet = new Set<string>();
-    
-    // Refresh fabrics list to be sure
-    const currentFabrics = await DataService.getFabrics();
-    setFabrics(currentFabrics);
-
-    rows.forEach((row: any) => {
-      const fabricName = row[0];
-      if (fabricName && !currentFabrics.find(f => f.name === fabricName)) {
-        unknownFabricsSet.add(fabricName);
-      }
-    });
-
-    if (unknownFabricsSet.size > 0) {
-      const unknowns = Array.from(unknownFabricsSet);
-      setUnknownFabrics(unknowns);
-      // Default all to true
-      const initialCreateState: Record<string, boolean> = {};
-      unknowns.forEach(f => initialCreateState[f] = true);
-      setFabricsToCreate(initialCreateState);
-      
-      // We need to persist machines/mappings for the next step
-      // Since we can't easily pass them through the modal state without prop drilling or complex state,
-      // we'll just rely on refetching machines or using the 'machines' prop if needed, 
-      // but 'mappings' is already in state 'workCenterMappings'.
-      // 'pendingImportRows' is already set.
-      
-      setShowFabricImportModal(true);
-    } else {
-      processImportRows(rows, machines, mappings);
-    }
-  };
-
-  const handleRemap = (wcName: string, currentMachineId: string) => {
-      // Find fabrics for this WC from pending rows to show context
-      const fabrics = new Set<string>();
-      pendingImportRows.forEach((row: any) => {
-          if (String(row[3]).trim() === wcName) {
-              fabrics.add(row[0]);
-          }
-      });
-      
-      setUnknownWorkCenters([{ name: wcName, fabrics: Array.from(fabrics) }]);
-      setWorkCenterMappings(prev => ({ ...prev, [wcName]: currentMachineId }));
-      setShowMappingModal(true);
-  };
-
-  const processImportRows = async (rows: any[], machines: any[], mappings: Record<string, string>) => {
-      const previewData: StagedLog[] = [];
-      const targetDate = importDate; // Use the selected import date
-      const yesterdayDate = new Date(targetDate);
-      yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-      const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
-
-      // Refresh fabrics to get latest shortNames (especially if we just added some)
-      const currentFabrics = await DataService.getFabrics();
-
-      // 1. Group Excel rows by Machine ID (using mappings)
-      const excelMap = new Map<string, any[]>();
-
-      rows.forEach((row: any) => {
-        const workCenter = row[4]; // Column E (Index 4) is Work Center
-        if (!workCenter) return;
-        const wcStr = String(workCenter).trim();
-
-        let machineId = '';
-        
-        // Check mappings
-        if (mappings[wcStr]) {
-           machineId = mappings[wcStr];
-        } else {
-           // Direct Match
-           const machine = machines.find((m: any) => 
-             (m.name && m.name.toLowerCase() === wcStr.toLowerCase()) || 
-             (m.machineid && m.machineid.toString() === wcStr) ||
-             (m.id && m.id.toString() === wcStr)
-           );
-           if (machine) {
-             machineId = String(machine.id);
-           } else {
-             // Fallback to name if not found (should be handled by mapping modal though)
-             machineId = wcStr;
-           }
-        }
-
-        if (!excelMap.has(machineId)) {
-          excelMap.set(machineId, []);
-        }
-        excelMap.get(machineId)?.push(row);
-      });
-
-      // 2. Iterate through ALL Machines (Machine-First Approach)
-      machines.forEach((machine: any) => {
-        const machineId = String(machine.id);
-        const groupRows = excelMap.get(machineId);
-        const hasImportData = !!groupRows && groupRows.length > 0;
-
-        // --- Context (Yesterday) ---
-        const sortedLogs = [...(machine.dailyLogs || [])].sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        const previousLog = sortedLogs.find((l: any) => l.date < targetDate);
-        
-        const previousRemaining = previousLog?.remaining || previousLog?.remainingMfg || 0;
-        const previousStatus = previousLog?.status || 'Stopped';
-        const previousDate = previousLog?.date || 'No Data';
-        const previousClient = previousLog?.client || '';
-        const previousFabric = previousLog?.fabric || '';
-        const isStale = previousDate !== yesterdayStr && previousDate !== 'No Data';
-
-        // --- Import Data (Today) ---
-        let totalProduction = 0;
-        let totalScrap = 0;
-        let primaryClient = '';
-        let primaryFabric = '';
-        let note = '';
-        let isSplit = false;
-        let splitDetails: { client: string; fabric: string; production: number }[] = [];
-        let sourceWorkCenters: string[] = [];
-
-        if (hasImportData && groupRows) {
-          isSplit = groupRows.length > 1;
-          sourceWorkCenters = Array.from(new Set(groupRows.map(r => String(r[4]).trim()))); // Column E (Index 4)
-
-          if (isSplit) {
-             // CONFLICT: Do not merge. Take the first one but flag as error.
-             // Or should we take the first one?
-             // User said "delete the idea of split merging".
-             // So we treat this as a conflict.
-             // We will just take the first row for display purposes, but validation will fail.
-             const row = groupRows[0];
-             totalProduction = parseFloat(row[1]) || 0;
-             totalScrap = parseFloat(row[3]) || 0; // Column D (Index 3) is Scrap
-             
-             const rawCustomer = String(row[2] || '');
-             primaryClient = rawCustomer.split(/[\s-]/)[0].trim();
-             
-             const rawFabricName = row[0];
-             const fabricDef = currentFabrics.find(f => f.name === rawFabricName);
-             primaryFabric = fabricDef ? (fabricDef.shortName || fabricDef.name) : rawFabricName;
-             
-             // Populate details for the tooltip anyway
-             groupRows.forEach((r: any) => {
-                const p = parseFloat(r[1]) || 0;
-                const c = String(r[2] || '').split(/[\s-]/)[0].trim();
-                const f = r[0];
-                splitDetails.push({ client: c, fabric: f, production: p });
-             });
-
-          } else {
-             // Single Row - Normal Case
-             const row = groupRows[0];
-             totalProduction = parseFloat(row[1]) || 0;
-             totalScrap = parseFloat(row[3]) || 0; // Column D (Index 3) is Scrap
-             
-             const rawCustomer = String(row[2] || '');
-             primaryClient = rawCustomer.split(/[\s-]/)[0].trim();
-             
-             const rawFabricName = row[0];
-             const fabricDef = currentFabrics.find(f => f.name === rawFabricName);
-             primaryFabric = fabricDef ? (fabricDef.shortName || fabricDef.name) : rawFabricName;
-          }
-        }
-
-        // --- Result (Forecast) ---
-        const netProduction = Math.max(0, totalProduction - totalScrap);
-        let newRemaining = Math.max(0, previousRemaining - netProduction);
-        
-        let newStatus = previousStatus;
-        if (hasImportData) {
-          if (totalProduction > 0) {
-            newStatus = 'Working'; 
-          } else if (totalProduction === 0 && previousStatus === 'Working') {
-            newStatus = 'Stopped'; 
-          }
-        }
-
-        // --- Validation Logic ---
-        let validationStatus: 'SAFE' | 'WARNING' | 'ERROR' = 'SAFE';
-        let validationMessage = '';
-
-        if (!hasImportData) {
-          if (previousStatus === 'Working') {
-            validationStatus = 'WARNING';
-            validationMessage = 'Missing in Excel (Was Working).';
-          }
-        } else {
-          // Rule 0: Split Run / Conflict
-          if (isSplit) {
-             validationStatus = 'ERROR';
-             validationMessage = `Conflict: ${groupRows?.length} rows map to this machine. Check mappings.`;
-          }
-
-          // Rule 1: Unexpected Changeover
-          if (previousRemaining > 0 && previousClient && primaryClient && previousClient !== primaryClient) {
-            validationStatus = 'WARNING';
-            validationMessage = `Client changed (${previousClient} -> ${primaryClient}) but ${previousRemaining}kg remained.`;
-          }
-
-          // Rule 2: Stale History
-          if (isStale) {
-             if (validationStatus === 'SAFE') validationStatus = 'WARNING';
-             validationMessage += ` Previous data is from ${previousDate}.`;
-          }
-
-          // Rule 3: Overwrite Check
-          const exists = (machine.dailyLogs || []).some((l: any) => l.date === targetDate);
-          if (exists) {
-             validationStatus = 'WARNING';
-             validationMessage += ` Data already exists for ${targetDate}.`;
-          }
-
-          // Rule 4: Negative Remaining
-          if (netProduction > previousRemaining + 50 && previousRemaining > 0) { 
-             validationStatus = 'WARNING';
-             validationMessage += ` Production (${netProduction}) > Remaining (${previousRemaining}).`;
-          }
-          
-          // Rule 5: Split Run
-          if (isSplit) {
-             validationStatus = 'WARNING';
-             validationMessage += ` Split Run detected (${groupRows?.length} entries).`;
-          }
-        }
-
-        previewData.push({
-          id: machine.id,
-          machineId: String(machine.id),
-          machineName: machine.name,
-          previousDate,
-          previousClient,
-          previousFabric,
-          previousRemaining,
-          previousStatus,
-          isStale,
-          hasImportData,
-          importDate: targetDate,
-          importProduction: totalProduction,
-          importScrap: totalScrap,
-          importClient: primaryClient,
-          importFabric: primaryFabric,
-          sourceWorkCenters,
-          isSplit,
-          splitDetails,
-          newRemaining,
-          newStatus,
-          note,
-          validationStatus,
-          validationMessage,
-          selected: hasImportData // Only select if data exists by default
-        });
-      });
-
-      // Sort: Issues first, then by Name
-      previewData.sort((a, b) => {
-        if (a.validationStatus !== 'SAFE' && b.validationStatus === 'SAFE') return -1;
-        if (a.validationStatus === 'SAFE' && b.validationStatus !== 'SAFE') return 1;
-        return a.machineName.localeCompare(b.machineName);
-      });
-
-      setImportPreview(previewData);
-      setShowImportModal(true);
-  };
-
-  const applyImport = async () => {
-    const selectedItems = importPreview.filter(item => item.selected);
-    if (selectedItems.length === 0) {
-      showMessage('⚠️ No items selected for import.', true);
-      return;
-    }
-    
-    setLoading(true);
-    try {
-      const batch = writeBatch(db);
-      const machines = await DataService.getMachinesFromMachineSS();
-      
-      for (const item of selectedItems) {
-        const machine = machines.find((m: any) => String(m.id) === String(item.machineId));
-        if (!machine) continue;
-
-        const newLog = {
-          date: item.importDate,
-          dayProduction: item.importProduction,
-          scrap: item.importScrap || 0,
-          fabric: item.importFabric || '',
-          client: item.importClient || '',
-          status: item.newStatus,
-          remaining: item.newRemaining, // For legacy structure
-          remainingMfg: item.newRemaining, // For new structure
-          note: item.note || ''
-        };
-
-        // Update dailyLogs array (Legacy)
-        const existingLogIndex = (machine.dailyLogs || []).findIndex((l: any) => l.date === item.importDate);
-        let updatedLogs = [...(machine.dailyLogs || [])];
-
-        if (existingLogIndex >= 0) {
-          updatedLogs[existingLogIndex] = { ...updatedLogs[existingLogIndex], ...newLog };
-        } else {
-          updatedLogs.push(newLog);
-        }
-
-        const docRef = doc(db, 'MachineSS', String(machine.id));
-        
-        // Update parent doc
-        batch.update(docRef, { 
-          dailyLogs: updatedLogs,
-          // Also update top-level fields if this is the latest log
-          ...(item.importDate >= (machine.lastLogDate || '') ? {
-            status: item.newStatus,
-            lastLogDate: item.importDate,
-            lastLogData: newLog
-          } : {})
-        });
-
-        // Update sub-collection
-        const subLogRef = doc(db, 'MachineSS', String(machine.id), 'dailyLogs', item.importDate);
-        batch.set(subLogRef, {
-          ...newLog,
-          machineId: machine.id,
-          timestamp: new Date().toISOString()
-        }, { merge: true });
-      }
-
-      await batch.commit();
-      setImportPreview([]);
-      setShowImportModal(false);
-      showMessage(`✅ Successfully imported ${selectedItems.length} records!`);
-      handleFetchLogs(selectedDate); // Refresh
-    } catch (error) {
-      console.error('Error applying import:', error);
-      showMessage('❌ Error applying import', true);
-    } finally {
-      setLoading(false);
-    }
-  };
-
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
     const target = e.target as HTMLElement;
@@ -2186,10 +1558,26 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
   const bousMachines = filteredLogs.filter(m => m.machineType === 'BOUS');
   const wideMachines = filteredLogs.filter(m => m.machineType !== 'BOUS');
-  const bousProduction = bousMachines.reduce((sum, m) => sum + (Number(m.dayProduction) || 0), 0);
-  const wideProduction = wideMachines.reduce((sum, m) => sum + (Number(m.dayProduction) || 0), 0);
+  // Calculate Samples Production separately
+  const samplesProduction = filteredLogs.reduce((sum, m) => {
+    if (normalizeStatusValue(m.status) === MachineStatus.SAMPLES) {
+      return sum + (Number(m.dayProduction) || 0);
+    }
+    return sum;
+  }, 0);
+
+  const bousProduction = bousMachines.reduce((sum, m) => {
+    if (normalizeStatusValue(m.status) === MachineStatus.SAMPLES) return sum;
+    return sum + (Number(m.dayProduction) || 0);
+  }, 0);
+  
+  const wideProduction = wideMachines.reduce((sum, m) => {
+    if (normalizeStatusValue(m.status) === MachineStatus.SAMPLES) return sum;
+    return sum + (Number(m.dayProduction) || 0);
+  }, 0);
+
   const totalProduction = wideProduction + bousProduction + Number(externalProduction);
-  const totalScrap = filteredLogs.reduce((sum, m) => sum + (Number(m.scrap) || 0), 0) + Number(hallScrap) + Number(labScrap) + Number(externalScrap);
+  const totalScrap = filteredLogs.reduce((sum, m) => sum + (Number(m.scrap) || 0), 0) + Number(hallScrap) + Number(labScrap) + Number(externalScrap) + samplesProduction;
   const scrapPercentage = totalProduction > 0 ? (totalScrap / totalProduction) * 100 : 0;
   
   const statusCounts = filteredLogs.reduce((acc, m) => {
@@ -2629,33 +2017,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
             <div className="flex items-center justify-between md:justify-end gap-2 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
               
               <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setShowImportModal(true)}
-                    className="p-2 rounded-lg text-slate-600 hover:text-purple-600 hover:bg-purple-50 border border-transparent hover:border-purple-100 transition-all"
-                  >
-                    <FileSpreadsheet size={18} />
-                  </button>
-
-                  <button
-                    onClick={handleExportBackup}
-                    className="p-2 rounded-lg text-slate-600 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 transition-all data-[offline=true]:bg-amber-100 data-[offline=true]:text-amber-800 data-[offline=true]:border-amber-300 data-[offline=true]:animate-pulse data-[offline=true]:shadow-lg"
-                    data-offline={!navigator.onLine}
-                    title={!navigator.onLine ? "OFFLINE: Download backup now to save changes!" : "Export JSON Backup"}
-                  >
-                    <Download size={18} />
-                    {!navigator.onLine && <span className="ml-1 text-xs font-bold sm:inline hidden">SAVE</span>}
-                  </button>
-
-                  <label className="p-2 rounded-lg text-slate-600 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 transition-all cursor-pointer" title="Import JSON">
-                    <Upload size={18} />
-                    <input
-                      type="file"
-                      accept=".json"
-                      onChange={handleImportBackup}
-                      className="hidden"
-                    />
-                  </label>
-
                   <button
                     onClick={handleDownloadPDF}
                     disabled={isDownloading}
@@ -3237,7 +2598,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                  </div>
               </div>
 
-              <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-slate-200">
+              <div className={`flex-1 grid grid-cols-1 sm:grid-cols-2 ${samplesProduction > 0 ? 'lg:grid-cols-5' : 'lg:grid-cols-4'} divide-y sm:divide-y-0 sm:divide-x divide-slate-200`}>
                  <div className="p-4 flex flex-col justify-center items-center bg-yellow-50/30">
                    <span className="text-xs text-amber-900/60 font-bold mb-1">انتاج البوص (Bous)</span>
                    <span className="text-2xl font-bold text-amber-700">{bousProduction.toLocaleString()}</span>
@@ -3246,6 +2607,12 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                    <span className="text-xs text-slate-400 font-bold mb-1">مكن عريض (Wide)</span>
                    <span className="text-2xl font-bold text-slate-700">{wideProduction.toLocaleString()}</span>
                  </div>
+                 {samplesProduction > 0 && (
+                   <div className="p-4 flex flex-col justify-center items-center bg-cyan-50/30">
+                     <span className="text-xs text-cyan-900/60 font-bold mb-1">عينات (Samples)</span>
+                     <span className="text-2xl font-bold text-cyan-700">{samplesProduction.toLocaleString()}</span>
+                   </div>
+                 )}
                  <div className="p-4 flex flex-col justify-center items-center hover:bg-blue-50/50 transition-colors group cursor-pointer relative">
                    <span className="text-xs text-blue-900/60 font-bold mb-1 flex items-center gap-1">
                      خارجي (External)
@@ -3417,11 +2784,13 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                   )}
 
                   {/* Mobile Inline Add Form */}
-                  {showInlineAddRow && (
-                    <div className={`p-4 rounded-xl border-2 shadow-lg animate-in fade-in slide-in-from-bottom-4 ${inlineNewPlan.type === 'SETTINGS' ? 'bg-amber-50 border-amber-400' : 'bg-yellow-50 border-yellow-400'}`}>
+                  {showInlineAddRow && (() => {
+                    const isSettings = inlineNewPlan.type === 'SETTINGS';
+                    return (
+                    <div className={`p-4 rounded-xl border-2 shadow-lg animate-in fade-in slide-in-from-bottom-4 ${isSettings ? 'bg-amber-50 border-amber-400' : 'bg-yellow-50 border-yellow-400'}`}>
                        <h4 className="text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-2">
-                          <Plus size={14} className={inlineNewPlan.type === 'SETTINGS' ? 'text-amber-600' : 'text-yellow-600'} />
-                          {inlineNewPlan.type === 'SETTINGS' ? 'New Maintenance/Settings' : 'New Production Plan'}
+                          <Plus size={14} className={isSettings ? 'text-amber-600' : 'text-yellow-600'} />
+                          {isSettings ? 'New Maintenance/Settings' : 'New Production Plan'}
                        </h4>
                        
                        {/* Date Range */}
@@ -3514,7 +2883,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                           </button>
                        </div>
                     </div>
-                  )}
+                    );
+                  })()}
                 </div>
 
                 {/* Desktop Table */}
@@ -4084,507 +3454,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         />
       )}
 
-      {/* Mapping Modal */}
-      {showMappingModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[80] p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="p-6 border-b border-slate-200 flex justify-between items-center bg-purple-50">
-              <div>
-                <h2 className="text-xl font-bold text-purple-800 flex items-center gap-2">
-                  <Link className="text-purple-600" />
-                  Review Work Center Mappings
-                </h2>
-                <p className="text-sm text-purple-700 mt-1">
-                  Verify how Excel Work Centers map to your Machines before importing.
-                </p>
-              </div>
-              <button 
-                onClick={() => setShowMappingModal(false)}
-                className="text-slate-400 hover:text-slate-600 transition-colors"
-              >
-                <X size={24} />
-              </button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto flex-1">
-              <div className="space-y-4">
-                {unknownWorkCenters.map((wc, idx) => {
-                  const isMapped = !!workCenterMappings[wc.name];
-                  return (
-                  <div key={idx} className={`p-4 border rounded-lg ${isMapped ? 'bg-white border-slate-200' : 'bg-red-50 border-red-200'}`}>
-                    <div className="flex justify-between items-start mb-3">
-                      <div>
-                        <div className="flex items-center gap-2">
-                           <h3 className="font-bold text-slate-800 text-lg">{wc.name}</h3>
-                           {!isMapped && <span className="text-[10px] bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-bold">Unmapped</span>}
-                        </div>
-                        <div className="text-xs text-slate-500 mt-1">
-                          Fabrics in Excel: {wc.fabrics.join(', ') || 'None'}
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="flex items-center gap-3">
-                      <span className="text-sm font-medium text-slate-700">Maps to:</span>
-                      <div className="flex-1">
-                        <SearchDropdown
-                          id={`mapping-${idx}`}
-                          options={mappingMachines.map((m: any) => ({ 
-                            id: m.id, 
-                            name: `${m.machineName || m.name} (${m.machineType || '?'})` 
-                          }))}
-                          value={(() => {
-                            const mappedId = workCenterMappings[wc.name];
-                            if (!mappedId) return '';
-                            const m = mappingMachines.find((m: any) => String(m.id) === String(mappedId));
-                            return m ? `${m.machineName || m.name} (${m.machineType || '?'})` : '';
-                          })()}
-                          onChange={(val) => {
-                            // Reverse lookup name to ID
-                            const selected = mappingMachines.find((m: any) => `${m.machineName || m.name} (${m.machineType || '?'})` === val);
-                            if (selected) {
-                              setWorkCenterMappings(prev => ({
-                                ...prev,
-                                [wc.name]: String(selected.id)
-                              }));
-                            } else if (val === '') {
-                               // Allow clearing
-                               setWorkCenterMappings(prev => {
-                                   const next = { ...prev };
-                                   delete next[wc.name];
-                                   return next;
-                               });
-                            }
-                          }}
-                          placeholder="Select a machine..."
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )})}
-              </div>
-            </div>
-
-            <div className="p-4 border-t border-slate-200 bg-slate-50 flex justify-end gap-3">
-               <button
-                  onClick={() => setShowMappingModal(false)}
-                  className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => {
-                    // Save mappings to DB
-                    DataService.saveWorkCenterMappings(workCenterMappings);
-                    setShowMappingModal(false);
-                    checkFabricsAndProceed(pendingImportRows, mappingMachines, workCenterMappings);
-                  }}
-                  className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg shadow-sm transition-colors flex items-center gap-2"
-                >
-                  <Check size={18} />
-                  Confirm Mappings & Continue
-                </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Fabric Import Modal */}
-      {showFabricImportModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[80] p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="p-6 border-b border-slate-200 flex justify-between items-center bg-purple-50">
-              <div>
-                <h2 className="text-xl font-bold text-purple-800 flex items-center gap-2">
-                  <Sparkles className="text-purple-600" />
-                  New Fabrics Found
-                </h2>
-                <p className="text-sm text-purple-700 mt-1">
-                  The following fabrics are not in the database. Select which ones to add.
-                </p>
-              </div>
-              <button 
-                onClick={() => setShowFabricImportModal(false)}
-                className="text-slate-400 hover:text-slate-600 transition-colors"
-              >
-                <X size={24} />
-              </button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto flex-1">
-              <div className="space-y-2">
-                {unknownFabrics.map((fabricName, idx) => {
-                  const { shortName } = parseFabricName(fabricName);
-                  const isSelected = fabricsToCreate[fabricName];
-                  
-                  return (
-                    <div key={idx} className={`p-3 border rounded-lg flex items-center gap-3 transition-colors ${isSelected ? 'bg-purple-50 border-purple-200' : 'bg-slate-50 border-slate-200'}`}>
-                      <input 
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={(e) => {
-                          setFabricsToCreate(prev => ({
-                            ...prev,
-                            [fabricName]: e.target.checked
-                          }));
-                        }}
-                        className="w-5 h-5 text-purple-600 rounded focus:ring-purple-500"
-                      />
-                      <div className="flex-1">
-                        <div className="text-sm font-bold text-slate-800">{fabricName}</div>
-                        {isSelected && (
-                          <div className="text-xs text-purple-600 mt-1 flex items-center gap-1">
-                            <span className="font-medium">Will be added as:</span> {shortName}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="p-6 border-t border-slate-200 bg-slate-50 flex justify-end gap-3">
-              <button
-                onClick={() => setShowFabricImportModal(false)}
-                className="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg font-medium transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  setShowFabricImportModal(false);
-                  
-                  // Create selected fabrics
-                  const createPromises = unknownFabrics
-                    .filter(f => fabricsToCreate[f])
-                    .map(async (name) => {
-                       const { code, shortName } = parseFabricName(name);
-                       // Generate ID
-                       const docId = name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-                       await DataService.addFabric({ 
-                         name, 
-                         code, 
-                         shortName,
-                         workCenters: [], 
-                         variants: []
-                       });
-                    });
-                  
-                  if (createPromises.length > 0) {
-                    await Promise.all(createPromises);
-                    showMessage(`✅ Added ${createPromises.length} new fabrics`);
-                  }
-
-                  // Refetch machines to be safe
-                  const freshMachines = await DataService.getMachinesFromMachineSS();
-                  
-                  // Proceed
-                  processImportRows(pendingImportRows, freshMachines, workCenterMappings);
-                }}
-                className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold shadow-lg shadow-purple-200 transition-colors flex items-center gap-2"
-              >
-                <Check size={18} />
-                Continue Import
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Import Modal */}
-      {showImportModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[70] p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-[95vw] h-[90vh] flex flex-col">
-            {/* Header */}
-            <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-purple-50">
-              <div>
-                <h2 className="text-xl font-bold text-purple-800 flex items-center gap-2">
-                  <FileSpreadsheet className="text-purple-600" />
-                  Import & Validate ODOO Data
-                </h2>
-                <p className="text-sm text-purple-700 mt-1">
-                  Review incoming production data against yesterday's machine state.
-                </p>
-              </div>
-              <div className="flex items-center gap-4">
-                 <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded border border-slate-300">
-                    <span className="text-sm font-bold text-slate-600">Import Date:</span>
-                    <input 
-                      type="date" 
-                      value={importDate}
-                      onChange={(e) => setImportDate(e.target.value)}
-                      className="text-sm border-none focus:ring-0 text-slate-800 font-medium"
-                    />
-                 </div>
-                 <button 
-                  onClick={() => {
-                    setShowImportModal(false);
-                    setImportPreview([]);
-                  }}
-                  className="text-slate-400 hover:text-slate-600 transition-colors"
-                >
-                  <X size={24} />
-                </button>
-              </div>
-            </div>
-            
-            {/* Content */}
-            <div className="flex-1 overflow-hidden flex flex-col">
-              {importPreview.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center p-12 bg-slate-50">
-                  <div className="w-full max-w-xl border-2 border-dashed border-slate-300 rounded-xl bg-white p-12 flex flex-col items-center text-center hover:border-blue-400 transition-colors relative">
-                    <input 
-                      type="file" 
-                      accept=".xlsx, .xls" 
-                      onChange={handleFileUpload}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    />
-                    <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center mb-6">
-                      <Upload size={40} className="text-blue-600" />
-                    </div>
-                    <h3 className="text-xl font-bold text-slate-800 mb-2">Upload Production Sheet</h3>
-                    <p className="text-slate-500 mb-8">Drag and drop your Excel file here, or click to browse.</p>
-                    
-                    <div className="text-left text-sm text-slate-500 bg-slate-50 p-4 rounded border border-slate-200 w-full">
-                      <p className="font-bold mb-2 text-slate-700">Required Columns:</p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="flex items-center gap-2"><div className="w-6 h-6 rounded bg-slate-200 flex items-center justify-center text-xs font-bold">A</div> Fabric Name</div>
-                        <div className="flex items-center gap-2"><div className="w-6 h-6 rounded bg-slate-200 flex items-center justify-center text-xs font-bold">B</div> Production (Kg)</div>
-                        <div className="flex items-center gap-2"><div className="w-6 h-6 rounded bg-slate-200 flex items-center justify-center text-xs font-bold">C</div> Customer</div>
-                        <div className="flex items-center gap-2"><div className="w-6 h-6 rounded bg-slate-200 flex items-center justify-center text-xs font-bold">D</div> Scrap (Kg)</div>
-                        <div className="flex items-center gap-2"><div className="w-6 h-6 rounded bg-slate-200 flex items-center justify-center text-xs font-bold">E</div> Machine Name</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex-1 overflow-auto bg-slate-100 p-4">
-                  <div className="bg-white rounded-lg shadow border border-slate-200 overflow-hidden">
-                    <table className="w-full text-sm text-left border-collapse">
-                      <thead className="bg-slate-50 text-slate-700 font-bold sticky top-0 z-10 shadow-sm">
-                        <tr>
-                          <th className="p-3 border-b w-10 text-center">
-                            <input 
-                              type="checkbox" 
-                              checked={importPreview.every(i => i.selected)}
-                              onChange={(e) => {
-                                const allSelected = e.target.checked;
-                                setImportPreview(prev => prev.map(p => ({ ...p, selected: allSelected })));
-                              }}
-                            />
-                          </th>
-                          <th className="p-3 border-b w-48">Machine</th>
-                          
-                          {/* Context Group */}
-                          <th className="p-3 border-b border-l border-slate-200 bg-slate-50/50 w-64">
-                            <div className="flex items-center gap-1 text-slate-500 mb-1 text-xs uppercase tracking-wider">
-                              <History size={12} /> Yesterday (Context)
-                            </div>
-                          </th>
-
-                          {/* Import Group */}
-                          <th className="p-3 border-b border-l border-slate-200 bg-indigo-50/30 w-64">
-                            <div className="flex items-center gap-1 text-indigo-600 mb-1 text-xs uppercase tracking-wider">
-                              <FileSpreadsheet size={12} /> Import (Today)
-                            </div>
-                          </th>
-
-                          {/* Result Group */}
-                          <th className="p-3 border-b border-l border-slate-200 bg-purple-100">
-                            <div className="flex items-center gap-1 text-purple-700 mb-1 text-xs uppercase tracking-wider">
-                              <ArrowRight size={12} /> Forecast
-                            </div>
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200">
-                        {importPreview.map((item, idx) => {
-                           const isWarning = item.validationStatus === 'WARNING';
-                           const isError = item.validationStatus === 'ERROR';
-                           const rowClass = isError ? 'bg-red-50' : isWarning ? 'bg-amber-50' : 'hover:bg-slate-50';
-
-                           return (
-                            <tr key={idx} className={`${rowClass} transition-colors`}>
-                              <td className="p-3 text-center border-r border-slate-100">
-                                <input 
-                                  type="checkbox" 
-                                  checked={item.selected}
-                                  onChange={() => {
-                                    setImportPreview(prev => {
-                                      const next = [...prev];
-                                      next[idx].selected = !next[idx].selected;
-                                      return next;
-                                    });
-                                  }}
-                                />
-                              </td>
-                              <td className="p-3 border-r border-slate-100">
-                                <div className="font-bold text-slate-800">{item.machineName}</div>
-                                <div className="text-xs text-slate-500 flex items-center gap-1 mt-1">
-                                  {item.hasImportData ? (
-                                    <span className="text-green-600 flex items-center gap-0.5">
-                                      <CheckCircle2 size={10} /> Found in Excel
-                                    </span>
-                                  ) : (
-                                    <span className="text-slate-400 flex items-center gap-0.5">
-                                      <XCircle size={10} /> Not in Excel
-                                    </span>
-                                  )}
-                                </div>
-                                {item.validationMessage && (
-                                  <div className={`text-[10px] mt-2 p-1 rounded border ${
-                                    isError ? 'bg-red-100 text-red-700 border-red-200' : 'bg-amber-100 text-amber-700 border-amber-200'
-                                  }`}>
-                                    {item.validationMessage}
-                                  </div>
-                                )}
-                              </td>
-
-                              {/* Context (Yesterday) */}
-                              <td className="p-3 border-r border-slate-100 text-slate-600">
-                                <div className="flex justify-between items-center mb-1">
-                                  <span className="text-xs font-medium">Status:</span>
-                                  <span className={`text-xs px-1.5 py-0.5 rounded ${
-                                    item.previousStatus === 'Working' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600'
-                                  }`}>{item.previousStatus}</span>
-                                </div>
-                                <div className="flex justify-between items-center mb-1">
-                                  <span className="text-xs font-medium">Rem:</span>
-                                  <span className="font-mono font-bold">{item.previousRemaining} kg</span>
-                                </div>
-                                {item.previousClient && (
-                                  <div className="text-xs text-slate-500 truncate max-w-[180px]" title={`${item.previousClient} / ${item.previousFabric}`}>
-                                    {item.previousClient} • {item.previousFabric}
-                                  </div>
-                                )}
-                                {item.isStale && (
-                                  <div className="text-[10px] text-red-500 mt-1 flex items-center gap-1">
-                                    <AlertTriangle size={10} /> Data from {item.previousDate}
-                                  </div>
-                                )}
-                              </td>
-
-                              {/* Import (Today) */}
-                              <td className="p-3 border-r border-slate-100 bg-indigo-50/10">
-                                {item.hasImportData ? (
-                                  <>
-                                    {/* Source WorkCenters (Mapping) */}
-                                    <div className="mb-2 flex flex-wrap gap-1">
-                                      {item.sourceWorkCenters?.map((wc, i) => (
-                                        <div key={i} className="flex items-center gap-1 bg-white border border-slate-200 rounded px-1.5 py-0.5 text-[10px] text-slate-500 shadow-sm">
-                                          <span className="truncate max-w-[80px]" title={wc}>{wc}</span>
-                                          <button 
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              handleRemap(wc, item.machineId);
-                                            }}
-                                            className="text-indigo-500 hover:text-indigo-700 p-0.5 rounded hover:bg-indigo-50"
-                                            title="Edit Mapping"
-                                          >
-                                            <Edit size={10} />
-                                          </button>
-                                        </div>
-                                      ))}
-                                    </div>
-
-                                    <div className="flex justify-between items-center mb-1">
-                                      <span className="text-xs font-medium text-indigo-700">Prod:</span>
-                                      <span className="font-mono font-bold text-indigo-700">{item.importProduction} kg</span>
-                                    </div>
-                                    {item.importScrap > 0 && (
-                                      <div className="flex justify-between items-center mb-1 text-red-600">
-                                        <span className="text-xs">Scrap:</span>
-                                        <span className="font-mono text-xs">-{item.importScrap} kg</span>
-                                      </div>
-                                    )}
-                                    <div className="text-xs text-slate-700 font-medium truncate max-w-[180px]">
-                                      {item.importClient}
-                                    </div>
-                                    <div className="text-xs text-slate-500 truncate max-w-[180px]">
-                                      {item.importFabric}
-                                    </div>
-                                    {item.isSplit && (
-                                      <div className="mt-1">
-                                        <span className="text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded border border-red-200 font-bold flex items-center gap-1">
-                                          <AlertTriangle size={10} /> CONFLICT
-                                        </span>
-                                        <div className="text-[10px] text-slate-500 mt-0.5">
-                                          Multiple rows map to this machine.
-                                        </div>
-                                      </div>
-                                    )}
-                                  </>
-                                ) : (
-                                  <div className="text-center text-slate-400 text-xs italic py-2">
-                                    No data in Excel
-                                  </div>
-                                )}
-                              </td>
-
-                              {/* Forecast */}
-                              <td className="p-3 bg-purple-50/20">
-                                <div className="flex justify-between items-center mb-1">
-                                  <span className="text-xs font-medium">New Rem:</span>
-                                  <div className="flex items-center gap-1">
-                                    <span className={`font-mono font-bold ${item.newRemaining < 0 ? 'text-red-600' : 'text-slate-800'}`}>
-                                      {item.newRemaining} kg
-                                    </span>
-                                    {item.hasImportData && (
-                                      <span className="text-[10px] text-slate-400">
-                                        ({item.newRemaining - item.previousRemaining})
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="flex justify-between items-center">
-                                  <span className="text-xs font-medium">New Status:</span>
-                                  <span className={`text-xs px-1.5 py-0.5 rounded font-bold ${
-                                    item.newStatus === 'Working' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                                  }`}>
-                                    {item.newStatus}
-                                  </span>
-                                </div>
-                              </td>
-                            </tr>
-                           );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-            
-            {/* Footer */}
-            <div className="p-4 border-t border-slate-200 bg-slate-50 flex justify-between items-center">
-              <div className="text-sm text-slate-500">
-                {importPreview.filter(i => i.selected).length} machines selected for update
-              </div>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => {
-                    setShowImportModal(false);
-                    setImportPreview([]);
-                  }}
-                  className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium transition-colors"
-                >
-                  Cancel
-                </button>
-                {importPreview.length > 0 && (
-                  <button
-                    onClick={applyImport}
-                    className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg shadow-sm transition-colors flex items-center gap-2"
-                  >
-                    <Check size={18} />
-                    Confirm & Apply
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
       {/* New Day Modal */}
       {isNewDay && (
         <div className="fixed inset-0 z-[60] bg-slate-900/50 flex items-center justify-center p-4 backdrop-blur-sm">

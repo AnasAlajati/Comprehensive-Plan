@@ -21,6 +21,7 @@ export enum MachineStatus {
   NO_ORDER = 'No Order',
   OUT_OF_SERVICE = 'Out of Service',
   QALB = 'Qalb', // New Status: Changeover
+  SAMPLES = 'Samples', // New Status: Samples
   OTHER = 'Other'
 }
 
@@ -215,6 +216,16 @@ export interface ColorApproval {
   date: string;
 }
 
+export interface DyeingAccessory {
+  id: string;
+  name: string;
+  dateSent?: string;        // تاريخ الارسال للاكسسوار
+  sent?: number;            // مرسل اكسسوار
+  received?: number;        // مستلم اكسسوار
+  remaining?: number;       // متبقي اكسسوار (اختياري لو اختلف عن المحسوب)
+  notes?: string;
+}
+
 export interface DyeingBatch {
   id: string;
   color: string;
@@ -227,6 +238,7 @@ export interface DyeingBatch {
   dispatchNumber?: string; // رقم الازن
   dateSent?: string;       // تاريخ بعت المصبغة
   formationDate?: string;  // تاريخ التشكيل
+  accessories?: DyeingAccessory[]; // Nested accessories tied to this color
   
   // Sent fields - split into raw and accessory
   quantitySent?: number;        // Legacy: الكمية المبعوتة (for backward compatibility)

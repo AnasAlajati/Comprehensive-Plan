@@ -1088,6 +1088,31 @@ const formatDateShort = (dateStr: string) => {
 };
 
 // --- Optimized Row Component ---
+const StatusLegend = () => (
+    <div className="flex flex-wrap gap-4 text-xs text-slate-600 mb-2 px-1">
+        <div className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-sm border-l-4 border-l-slate-300 bg-white border border-slate-200"></span>
+            <span>لم يبدأ (Not Started)</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-sm border-l-4 border-l-blue-500 bg-blue-50 border border-blue-100"></span>
+            <span>في الإنتاج (In Production)</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-sm border-l-4 border-l-cyan-400 bg-cyan-50 border border-cyan-100"></span>
+            <span>انتهى خام (Finished Raw)</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-sm border-l-4 border-l-purple-500 bg-purple-50 border border-purple-100"></span>
+            <span>بالمصبغة (In Dyehouse)</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-sm border-l-4 border-l-emerald-500 bg-emerald-50 border border-emerald-100"></span>
+            <span>مكتمل (Completed)</span>
+        </div>
+    </div>
+);
+
 const MemoizedOrderRow = React.memo(({
   row,
   statusInfo,
@@ -1341,7 +1366,7 @@ const MemoizedOrderRow = React.memo(({
   }, [machines, externalFactories, row, selectedCustomerName, statusInfo]);
 
   // --- Mobile & Status Logic Extraction ---
-  const { internalActive, internalPlanned, externalMatches, directMachine, hasAnyPlan } = useMemo(() => {
+  const { internalActive, internalPlanned, externalMatches, directMachine, hasAnyPlan, rowColorBorder } = useMemo(() => {
     // 1. Internal Active & Planned
     const rawActive = (statusInfo && statusInfo.active) ? statusInfo.active : [];
     const internalActive = rawActive.filter((m: string) => !m.endsWith('(Ext)'));
@@ -1392,14 +1417,50 @@ const MemoizedOrderRow = React.memo(({
 
     const hasAnyPlan = internalActive.length > 0 || internalPlanned.length > 0 || externalMatches.length > 0 || directMachine;
     
-    return { internalActive, internalPlanned, externalMatches, directMachine, hasAnyPlan };
-  }, [statusInfo, externalFactories, selectedCustomerName, row.material, row.machine, machines]);
+    // --- Sorting & Color Coding Helper inside component to utilize existing logic ---
+    let rowTier = 0;
+    let rowColorBorder = '';
+
+     // Tier 1: Not Started
+    if (!hasAnyPlan && (displayRemaining || 0) > 0 && totalSent === 0) {
+        rowTier = 1;
+        rowColorBorder = 'border-l-4 border-l-slate-300'; // Gray
+    }
+    
+    // Tier 2: Working (Also Mixed Phase)
+    else if (hasAnyPlan || (displayRemaining > 0 && displayRemaining < row.requiredQty)) {
+        rowTier = 2;
+        rowColorBorder = 'border-l-4 border-l-blue-500'; // Blue
+    }
+    
+    // Tier 3: Finished Raw Production (Raw done, but waiting for dyehouse/partial)
+    // Means Remaining <= 0, but Sent < Required
+    else if ((displayRemaining || 0) <= 0 && totalSent < row.requiredQty) {
+        rowTier = 3;
+        rowColorBorder = 'border-l-4 border-l-cyan-400'; // Cyan/Teal
+    }
+    
+    // Tier 4: In Dyehouse
+    // Sent > 0, Received < Required
+    else if (totalSent > 0 && totalReceived < row.requiredQty) {
+        rowTier = 4;
+        rowColorBorder = 'border-l-4 border-l-purple-500'; // Purple
+    }
+
+    // Tier 5: Completed
+    else if (totalReceived >= row.requiredQty) {
+        rowTier = 5;
+        rowColorBorder = 'border-l-4 border-l-emerald-500'; // Green
+    }
+
+    return { internalActive, internalPlanned, externalMatches, directMachine, hasAnyPlan, rowTier, rowColorBorder };
+  }, [statusInfo, externalFactories, selectedCustomerName, row.material, row.machine, machines, displayRemaining, totalSent, totalReceived]);
 
   return (
     <>
     <tr 
       data-fabric-name={row.material}
-      className={`transition-colors group text-sm table-view hidden sm:table-row ${isSelected ? 'bg-blue-50' : 'hover:bg-blue-50/30'}`}
+      className={`transition-colors group text-sm table-view hidden sm:table-row ${isSelected ? 'bg-blue-50' : 'hover:bg-blue-50/30'} ${rowColorBorder}`}
     >
       {/* Checkbox */}
       <td className="p-0 border-r border-slate-200 text-center align-middle">
@@ -2444,6 +2505,20 @@ const MemoizedOrderRow = React.memo(({
                     // Group batches by colorGroupId
                     const batchesWithIdx = (row.dyeingPlan || []).map((batch, idx) => ({ batch, idx }));
                     const colorGroups = row.colorGroups || [];
+
+                    // Keep dyeing plan + accessories in sync with the main order accessory summary
+                    const updatePlanWithAccessories = (nextPlan: typeof row.dyeingPlan) => {
+                      const accessories = (nextPlan || []).flatMap(b => b?.accessories || []);
+                      const accessoryNames = accessories
+                        .map(acc => (acc?.name || '').trim())
+                        .filter(Boolean);
+                      const totalAccessoryReceived = accessories.reduce((sum, acc) => sum + (Number(acc?.received) || 0), 0);
+                      handleUpdateOrder(row.id, {
+                        dyeingPlan: nextPlan,
+                        accessory: accessoryNames.join(', '),
+                        accessoryDeliveries: totalAccessoryReceived
+                      });
+                    };
                     
                     // Sort batches: grouped ones first (by group), then ungrouped
                     const sortedBatches = [...batchesWithIdx].sort((a, b) => {
@@ -2585,11 +2660,12 @@ const MemoizedOrderRow = React.memo(({
                       const batchStatus = batch.status || 'pending';
                       const isLocked = false; 
                       
-                      let rowBgClass = 'hover:bg-blue-50/30';
+                      // Using hover:shadow-md and hover:bg-slate-50 for clearer row focus
+                      let rowBgClass = 'hover:bg-slate-50 hover:shadow-md hover:z-10 relative transition-all duration-200';
                       let rowStyle = {};
                       
                       if (currentGroupId) {
-                          rowBgClass = 'bg-slate-50/50 hover:bg-indigo-50/30';
+                          rowBgClass = 'bg-slate-50/50 hover:bg-indigo-50/30 hover:shadow-md hover:z-10 relative transition-all duration-200';
                           rowStyle = {
                               borderLeft: '4px solid #6366f1', // Indigo-500
                           };
@@ -3196,6 +3272,193 @@ const MemoizedOrderRow = React.memo(({
                       </td>
                     </tr>
                       );
+
+                      // Nested accessories under this color
+                      const addAccessoryRow = () => {
+                        const newPlan = [...(row.dyeingPlan || [])];
+                        const accessories = [...(batch.accessories || [])];
+                        accessories.push({
+                          id: crypto.randomUUID(),
+                          name: '',
+                          sent: 0,
+                          received: 0,
+                          dateSent: ''
+                        });
+                        newPlan[idx] = { ...batch, accessories };
+                        updatePlanWithAccessories(newPlan);
+                      };
+
+                      const accessories = batch.accessories || [];
+                      if (accessories.length === 0) {
+                        elements.push(
+                          <tr key={`acc-empty-${batch.id || idx}`} className="bg-white group/acc-empty">
+                            <td className="p-0 border-r border-slate-100 relative">
+                                <div className="h-full w-full flex items-center pr-2">
+                                      {/* Connector Line (L-shape for single empty item) */}
+                                      <div className="w-8 h-full flex flex-col items-center justify-start ml-4">
+                                          <div className="w-px h-1/2 bg-slate-200"></div>
+                                          <div className="w-full h-px bg-slate-200"></div>
+                                      </div>
+                                      <span className="text-[9px] text-slate-300 font-medium px-1.5 py-0.5 select-none">
+                                        Acc
+                                      </span>
+                                </div>
+                            </td>
+                            {/* Merge rest of columns */}
+                            <td colSpan={19} className="p-0 border-t border-slate-50">
+                              <div className="flex items-center gap-3 px-2 py-1 h-8">
+                                <span className="text-[10px] text-slate-400 italic">No accessories</span>
+                                <button
+                                  onClick={addAccessoryRow}
+                                  className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-blue-600 hover:bg-blue-50 hover:text-blue-700 transition-colors"
+                                >
+                                  <Plus size={10} />
+                                  Add
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      } else {
+                        accessories.forEach((acc, accIdx) => {
+                          const remaining = (Number(acc.sent) || 0) - (Number(acc.received) || 0);
+                          
+                          // Calculate colspan for the "Details" middle section
+                          // Spanning from 'colorApproval' to 'accessory'
+                          let middleCols = [
+                            'colorApproval', 'dispatchNumber', 'formationDate', 'daysAfterFormation',
+                            'dateSent', 'daysAfterSent', 'dyehouse', 'quantity', 'machine', 'accessory'
+                          ];
+                          let middleSpan = middleCols.reduce((count, col) => 
+                            visibleColumns[col] !== false ? count + 1 : count, 0);
+
+                          elements.push(
+                            <tr key={`acc-${batch.id || idx}-${acc.id || accIdx}`} className="bg-white hover:bg-indigo-50/30 hover:shadow-md hover:z-10 transition-all duration-200 group/acc text-xs relative">
+                              {/* 1. Tree Connector & Label (Color Column) */}
+                              <td className="p-0 border-r border-slate-100 relative">
+                                  <div className="h-full w-full flex items-center pr-2">
+                                      {/* Connector Line */}
+                                      <div className="w-8 h-full flex flex-col items-center justify-start ml-4">
+                                          <div className="w-px h-1/2 bg-slate-200 group-last/acc:h-1/2"></div>
+                                          <div className="w-full h-px bg-slate-200"></div>
+                                      </div>
+                                      <span className="text-[10px] text-slate-400 font-medium bg-slate-100/50 px-1.5 py-0.5 rounded border border-slate-100 select-none">
+                                        Acc
+                                      </span>
+                                  </div>
+                              </td>
+
+                              {/* 2. Middle Section: Name & Date (Spanning multiple columns) */}
+                              {middleSpan > 0 && (
+                                <td colSpan={middleSpan} className="p-1 border-r border-slate-100">
+                                    <div className="flex items-center gap-2 px-1">
+                                        <input
+                                            type="text"
+                                            className="flex-1 bg-transparent border-b border-transparent hover:border-slate-200 focus:border-blue-400 focus:bg-blue-50/50 outline-none px-2 py-1 text-slate-700 placeholder-slate-300 text-xs transition-colors"
+                                            placeholder="Accessory Name..."
+                                            value={acc.name || ''}
+                                            onChange={(e) => {
+                                                const newPlan = [...(row.dyeingPlan || [])];
+                                                const updatedAccessories = [...(batch.accessories || [])];
+                                                updatedAccessories[accIdx] = { ...acc, name: e.target.value };
+                                                newPlan[idx] = { ...batch, accessories: updatedAccessories };
+                                                updatePlanWithAccessories(newPlan);
+                                            }}
+                                        />
+                                        
+                                        {/* Date Field - only show if there's enough room or if logically relevant */}
+                                        <div className="flex items-center gap-1 border-l border-slate-100 pl-2">
+                                            <span className="text-[9px] text-slate-400">Date</span>
+                                            <input
+                                                type="date"
+                                                className="w-24 bg-transparent border-none outline-none text-[10px] text-slate-500 hover:text-blue-600 focus:text-blue-700 cursor-pointer"
+                                                value={acc.dateSent || ''}
+                                                onChange={(e) => {
+                                                    const newPlan = [...(row.dyeingPlan || [])];
+                                                    const updatedAccessories = [...(batch.accessories || [])];
+                                                    updatedAccessories[accIdx] = { ...acc, dateSent: e.target.value };
+                                                    newPlan[idx] = { ...batch, accessories: updatedAccessories };
+                                                    updatePlanWithAccessories(newPlan);
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
+                                </td>
+                              )}
+
+                              {/* 3. Sent (Column Aligned) */}
+                              {visibleColumns['sent'] !== false && (
+                                <td className="p-0 border-r border-slate-100">
+                                    <input
+                                        type="number"
+                                        className="w-full h-full text-center bg-transparent outline-none focus:bg-blue-50 text-blue-600 font-mono font-medium placeholder-slate-200 text-xs"
+                                        placeholder="-"
+                                        value={acc.sent ?? ''}
+                                        onChange={(e) => {
+                                            const newPlan = [...(row.dyeingPlan || [])];
+                                            const updatedAccessories = [...(batch.accessories || [])];
+                                            updatedAccessories[accIdx] = { ...acc, sent: Number(e.target.value) };
+                                            newPlan[idx] = { ...batch, accessories: updatedAccessories };
+                                            updatePlanWithAccessories(newPlan);
+                                        }}
+                                    />
+                                </td>
+                              )}
+
+                              {/* 4. Received (Column Aligned) */}
+                              {visibleColumns['received'] !== false && (
+                                <td className="p-0 border-r border-slate-100">
+                                    <input
+                                        type="number"
+                                        className="w-full h-full text-center bg-transparent outline-none focus:bg-emerald-50 text-emerald-600 font-mono font-medium placeholder-slate-200 text-xs"
+                                        placeholder="-"
+                                        value={acc.received ?? ''}
+                                        onChange={(e) => {
+                                            const newPlan = [...(row.dyeingPlan || [])];
+                                            const updatedAccessories = [...(batch.accessories || [])];
+                                            updatedAccessories[accIdx] = { ...acc, received: Number(e.target.value) };
+                                            newPlan[idx] = { ...batch, accessories: updatedAccessories };
+                                            updatePlanWithAccessories(newPlan);
+                                        }}
+                                    />
+                                </td>
+                              )}
+
+                              {/* 5. Remaining (Column Aligned) */}
+                              {visibleColumns['remaining'] !== false && (
+                                <td className="p-0 border-r border-slate-100 text-center">
+                                    <span className={`font-mono font-medium text-xs ${remaining > 0 ? 'text-amber-500' : 'text-slate-300'}`}>
+                                        {remaining > 0 ? remaining : '-'}
+                                    </span>
+                                </td>
+                              )}
+                              
+                              {/* 6. Spacers for Status/Notes */}
+                              {visibleColumns['status'] !== false && <td className="p-0 border-r border-slate-100 bg-slate-50/20"></td>}
+                              {visibleColumns['dyehouseStatus'] !== false && <td className="p-0 border-r border-slate-100 bg-slate-50/20"></td>}
+                              {visibleColumns['notes'] !== false && <td className="p-0 border-r border-slate-100 bg-slate-50/20"></td>}
+                              
+                              {/* 7. Action: Delete */}
+                              <td className="p-0 text-center">
+                                  <button
+                                    onClick={() => {
+                                        if (confirm('Delete accessory?')) {
+                                            const newPlan = [...(row.dyeingPlan || [])];
+                                            const updatedAccessories = [...(batch.accessories || [])].filter((_, i) => i !== accIdx);
+                                            newPlan[idx] = { ...batch, accessories: updatedAccessories };
+                                            updatePlanWithAccessories(newPlan);
+                                        }
+                                    }}
+                                    className="p-1.5 text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover/acc:opacity-100"
+                                    title="Remove Accessory"
+                                  >
+                                      <X size={10} />
+                                  </button>
+                              </td>
+                            </tr>
+                          );
+                        });
+                      }
                       
                       // Add blue separator line after the last item in a group
                       if (isLastInGroup) {
@@ -3668,22 +3931,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
 
 
-  // Import/Export State
-  const [showImportModal, setShowImportModal] = useState(false);
-
-  const [importData, setImportData] = useState<{
-    customerName: string;
-    exportedAt: string;
-    orders: OrderRow[];
-  } | null>(null);
-  const [importDiff, setImportDiff] = useState<{
-    orderId: string;
-    orderMaterial: string;
-    changes: { field: string; oldValue: any; newValue: any }[];
-    isNew: boolean;
-    hasServerConflict: boolean;
-  }[]>([]);
-  const [selectedImportItems, setSelectedImportItems] = useState<Set<string>>(new Set());
+  // Import/Export State - REMOVED
 
   // Fetch Data
   useEffect(() => {
@@ -4513,185 +4761,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       }
   };
 
-  // === EXPORT CUSTOMER DATA ===
-  const handleExportCustomer = () => {
-    if (!selectedCustomer || !selectedCustomerId) return;
-
-    const exportPayload = {
-      version: '1.0',
-      exportedAt: new Date().toISOString(),
-      customerId: selectedCustomerId,
-      customerName: selectedCustomer.name,
-      seasonId: selectedSeasonId,
-      orders: selectedCustomer.orders.map(order => ({
-        ...order,
-        // Include lastUpdated for conflict detection
-        lastUpdated: order.lastUpdated || new Date().toISOString()
-      }))
-    };
-
-    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const date = new Date().toISOString().split('T')[0];
-    a.download = `${selectedCustomer.name.replace(/\s+/g, '_')}_orders_${date}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // === IMPORT CUSTOMER DATA ===
-  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      try {
-        const parsed = JSON.parse(evt.target?.result as string);
-        
-        if (!parsed.customerName || !parsed.orders) {
-          alert('Invalid file format. Please select a valid customer export file.');
-          return;
-        }
-
-        setImportData(parsed);
-
-        // Find matching customer
-        const matchingCustomer = customers.find(c => 
-          c.name.toLowerCase() === parsed.customerName.toLowerCase() ||
-          c.id === parsed.customerId
-        );
-
-        if (!matchingCustomer) {
-          // New customer import
-          const allNew = parsed.orders.map((order: OrderRow) => ({
-            orderId: order.id,
-            orderMaterial: order.material,
-            changes: [],
-            isNew: true,
-            hasServerConflict: false
-          }));
-          setImportDiff(allNew);
-          setSelectedImportItems(new Set(parsed.orders.map((o: OrderRow) => o.id)));
-        } else {
-          // Existing customer - calculate diff
-          const diff: typeof importDiff = [];
-          
-          for (const importedOrder of parsed.orders) {
-            const existingOrder = matchingCustomer.orders.find(o => o.id === importedOrder.id);
-            
-            if (!existingOrder) {
-              // New order
-              diff.push({
-                orderId: importedOrder.id,
-                orderMaterial: importedOrder.material,
-                changes: [],
-                isNew: true,
-                hasServerConflict: false
-              });
-            } else {
-              // Compare fields
-              const changes: { field: string; oldValue: any; newValue: any }[] = [];
-              const fieldsToCompare = ['material', 'requiredQty', 'remainingQty', 'fabricColor', 'notes', 'dyeingPlan'];
-              
-              for (const field of fieldsToCompare) {
-                const oldVal = existingOrder[field as keyof OrderRow];
-                const newVal = importedOrder[field as keyof OrderRow];
-                
-                // Deep compare for dyeingPlan
-                if (field === 'dyeingPlan') {
-                  const oldPlan = JSON.stringify(oldVal || []);
-                  const newPlan = JSON.stringify(newVal || []);
-                  if (oldPlan !== newPlan) {
-                    changes.push({ field: 'dyeingPlan (Colors)', oldValue: `${(oldVal as any[])?.length || 0} batches`, newValue: `${(newVal as any[])?.length || 0} batches` });
-                  }
-                } else if (oldVal !== newVal) {
-                  changes.push({ field, oldValue: oldVal, newValue: newVal });
-                }
-              }
-
-              // Check for server conflict (server updated after export)
-              const serverUpdated = existingOrder.lastUpdated ? new Date(existingOrder.lastUpdated) : new Date(0);
-              const exportedAt = new Date(parsed.exportedAt);
-              const hasConflict = serverUpdated > exportedAt;
-
-              if (changes.length > 0) {
-                diff.push({
-                  orderId: importedOrder.id,
-                  orderMaterial: importedOrder.material,
-                  changes,
-                  isNew: false,
-                  hasServerConflict: hasConflict
-                });
-              }
-            }
-          }
-
-          setImportDiff(diff);
-          setSelectedImportItems(new Set(diff.filter(d => !d.hasServerConflict).map(d => d.orderId)));
-        }
-
-        setShowImportModal(true);
-      } catch (err) {
-        console.error('Import error:', err);
-        alert('Failed to parse import file. Please check the file format.');
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = ''; // Reset input
-  };
-
-  // === APPLY IMPORT ===
-  const handleApplyImport = async () => {
-    if (!importData || selectedImportItems.size === 0) return;
-
-    // Find or create customer
-    let targetCustomerId = customers.find(c => 
-      c.name.toLowerCase() === importData.customerName.toLowerCase()
-    )?.id;
-
-    if (!targetCustomerId) {
-      // Create new customer
-      const newCustomerRef = await addDoc(collection(db, 'CustomerSheets'), {
-        name: importData.customerName,
-        orders: [],
-        createdSeasonId: selectedSeasonId
-      });
-      targetCustomerId = newCustomerRef.id;
-    }
-
-    const batch = writeBatch(db);
-    const user = auth.currentUser;
-    const auditInfo = {
-      lastUpdatedBy: userName || user?.displayName || 'Unknown',
-      lastUpdatedByEmail: user?.email || 'Unknown',
-      lastUpdated: new Date().toISOString()
-    };
-
-    // Apply selected changes
-    for (const orderId of selectedImportItems) {
-      const importedOrder = importData.orders.find(o => o.id === orderId);
-      if (!importedOrder) continue;
-
-      const orderRef = doc(db, 'CustomerSheets', targetCustomerId, 'orders', orderId);
-      batch.set(orderRef, {
-        ...importedOrder,
-        customerId: targetCustomerId,
-        ...auditInfo
-      }, { merge: true });
-    }
-
-    await batch.commit();
-
-    // Reset state
-    setShowImportModal(false);
-    setImportData(null);
-    setImportDiff([]);
-    setSelectedImportItems(new Set());
-    
-    alert(`✅ Successfully imported ${selectedImportItems.size} orders!`);
-  };
+  // === EXPORT/IMPORT REMOVED ===
 
   const toggleSelectAll = () => {
     if (!selectedCustomer) return;
@@ -5135,8 +5205,103 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
               );
           });
       }
-      return orders;
-  }, [selectedCustomer, machineFilter]);
+
+      // --- Helper: Calculate Order Tier for Sorting ---
+      const getOrderTier = (row: OrderRow) => {
+          const custName = selectedCustomer?.name || '';
+          // 1. Calculate Status Info (Simplified logic for sorting)
+          // Note: We duplicate some logic from MemoizedOrderRow but purely for sorting priority
+          let active: string[] = [];
+          
+          // Internal Machines
+          machines.forEach(m => {
+              const activeOrder = m.activeOrder;
+              if (!activeOrder) return;
+              const isMatch = (activeOrder.id === row.id) || 
+                              (row.material && activeOrder.material && activeOrder.material === row.material && activeOrder.clientName === custName);
+              if (isMatch) active.push(m.name);
+          });
+
+          // External
+          externalFactories.forEach(f => {
+              f.plans?.forEach((p: any) => {
+                 if (p.status === 'ACTIVE' && p.client === custName && p.fabric === row.material) {
+                     active.push(`${f.name} (Ext)`);
+                 }
+              });
+          });
+
+          // Manual Machine Assignment
+          if (row.machine) active.push(row.machine);
+
+          const hasActive = active.length > 0;
+          
+          // Calculate Sent/Received
+          let sent = 0;
+          let received = 0;
+          (row.dyeingPlan || []).forEach(b => {
+             const sEvents = b.sentEvents || [];
+             const rEvents = b.receiveEvents || [];
+             sent += sEvents.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(b.quantitySentRaw) || Number(b.quantitySent) || 0);
+             // Also include accessory sent? User focused on production/dyehouse flow.
+             // Usually main quantity is what matters for "Finished Raw".
+             
+             received += rEvents.reduce((s, e) => s + (Number(e.quantityRaw) || 0), 0) + (Number(b.receivedQuantity) || 0);
+          });
+          
+          const required = row.requiredQty || 0;
+          // Remaining Raw calculation: 
+          // If active, remaining is managed dynamically. If not, fallback to row.remainingQty
+          const remainingRaw = hasActive ? (row.remainingQty || 0) : (row.remainingQty || 0); // Logic actually depends on snapshots, but roughly row.remainingQty is the source of truth if updated.
+          
+          // --- Sorting Logic ---
+          // Tier 1: Not Started
+          // Condition: No active machines AND Remaining ≈ Required (Produced ≈ 0)
+          // AND Sent == 0 (No dyehouse activity)
+          if (!hasActive && remainingRaw >= (required * 0.95) && sent === 0 && received === 0) return 1;
+
+          // Tier 5: Fully Received (Completed)
+          // Condition: Received >= Required
+          if (received >= (required * 0.95)) return 5;
+          
+          // Tier 4: In Dyehouse (Partially Received or Fully Sent)
+          // Condition: Sent > 0 AND (Received < Required)
+          // Note: If machines are working, it overrides this?
+          // User said: "There could be a possibility when it is still working on the machine and some colors are sent to the dyehouse"
+          // "how can I arrange it in a way that would keep the CSS clean and still have the basic table feel"
+          // -> User implied: "Work status (Did not start) -> (Working) -> (Finished Raw) -> (In Dyehouse) -> (Received All)"
+          // So "Working" takes precedence over "Partially in Dyehouse".
+          
+          if (hasActive || (remainingRaw > 0 && remainingRaw < required)) {
+              // Working on Machines (includes Mixed state)
+              return 2; 
+          }
+
+          // Tier 3: Finished Raw Production
+          // Condition: Remaining <= 0 (Raw done) BUT Sent < Required (Not fully in dyehouse)
+          // Wait, "In Dyehouse" (Tier 4) implies "Fully in Dyehouse"? 
+          // User phrasing: "then remanining is finished raw production, then in dyehouse, recived partial in dyehouse"
+          // My interpretation:
+          // 2. Working (Raw > 0)
+          // 3. Finished Raw (Raw == 0, but Dyehouse process not "Full"?)
+          //    Perhaps: "Ready for Dyehouse" vs "Currently Dyeing".
+          // If Sent > 0, it's Dyehouse. If Sent == 0, it's Finished Raw (Sitting in stock).
+          if (remainingRaw <= 0 && sent === 0) return 3;
+          
+          // Tier 4: In Dyehouse
+          // Condition: Sent > 0 (and imply Raw is done because we passed Tier 2)
+          return 4;
+      };
+
+      return [...orders].sort((a, b) => {
+          const tierDiff = getOrderTier(a) - getOrderTier(b);
+          if (tierDiff !== 0) return tierDiff;
+          // Within same tier, group by fabric name so same fabrics appear together
+          const matA = (a.material || '').toLowerCase();
+          const matB = (b.material || '').toLowerCase();
+          return matA.localeCompare(matB);
+      });
+  }, [selectedCustomer, machineFilter, machines, externalFactories]);
 
   const usedFabricNames = useMemo(() => {
       if (!selectedCustomer || selectedCustomerId === ALL_CLIENTS_ID || selectedCustomerId === ALL_YARNS_ID) {
@@ -5739,31 +5904,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             {/* Right: Client Actions */}
             {selectedCustomer && (
                 <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
-                    {/* Export/Import Buttons */}
-                    <div className="flex items-center gap-1 border-r border-slate-200 pr-3">
-                        <button 
-                            onClick={handleExportCustomer}
-                            className="flex items-center gap-1.5 px-2.5 py-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 border border-transparent hover:border-emerald-100 rounded-md transition-colors text-xs font-medium"
-                            title="Export for Offline Use"
-                        >
-                            <Download className="w-3.5 h-3.5" />
-                            <span className="hidden lg:inline">Export</span>
-                        </button>
-                        <label 
-                            className="flex items-center gap-1.5 px-2.5 py-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 rounded-md transition-colors text-xs font-medium cursor-pointer"
-                            title="Import Offline Changes"
-                        >
-                            <Upload className="w-3.5 h-3.5" />
-                            <span className="hidden lg:inline">Import</span>
-                            <input
-                                type="file"
-                                accept=".json"
-                                onChange={handleImportFile}
-                                className="hidden"
-                            />
-                        </label>
-                    </div>
 
+                    
                     {/* Migration Button */}
                     {(() => {
                         const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
@@ -5952,6 +6094,43 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             <div className="flex-1 p-4 bg-slate-50">
               {!showYarnRequirements ? (
                 <>
+                   {/* Status Legend & Filter Bar */}
+                   <div className="flex flex-col gap-2 mb-4">
+                      <StatusLegend />
+                      <div className="flex gap-2">
+                         <div className="relative flex-1">
+                            <input
+                              type="text"
+                              placeholder="بحث في الطلبات (القماش)..."
+                              className="w-full px-4 py-2 pr-10 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none shadow-sm"
+                              value={searchTerm}
+                              onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                            <Search className="absolute right-3 top-2.5 text-slate-400 w-5 h-5 pointer-events-none" />
+                         </div>
+                         <div className="relative w-48">
+                            <select
+                                className="w-full h-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm text-slate-700 appearance-none bg-white cursor-pointer"
+                                value={machineFilter}
+                                onChange={(e) => setMachineFilter(e.target.value)}
+                            >
+                                <option value="">كل المكنات</option>
+                                <option value="200">200 kg</option>
+                                <option value="250">250 kg</option>
+                                <option value="300">300 kg</option>
+                                <option value="400">400 kg</option>
+                                <option value="500">500 kg</option>
+                                <option value="600">600 kg</option>
+                                <option value="700">700 kg</option>
+                                <option value="800">800 kg</option>
+                                <option value="900">900 kg</option>
+                                <option value="1000">1000 kg</option>
+                            </select>
+                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
+                         </div>
+                      </div>
+                   </div>
+
                   <div className="bg-white rounded-lg shadow border border-slate-200 overflow-x-auto mb-4">
                     <table className="w-full text-sm border-collapse whitespace-nowrap">
                       <thead className="bg-slate-100 text-slate-600 font-semibold shadow-sm text-xs uppercase tracking-wider table-view hidden sm:table-header-group">
@@ -7247,37 +7426,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         )}
 
         {/* Import Preview Modal */}
-        <ImportPreviewModal
-          isOpen={showImportModal}
-          onClose={() => {
-            setShowImportModal(false);
-            setImportData(null);
-            setImportDiff([]);
-            setSelectedImportItems(new Set());
-          }}
-          importData={importData}
-          diff={importDiff}
-          selectedItems={selectedImportItems}
-          onToggleItem={(id: string) => {
-            setSelectedImportItems(prev => {
-              const next = new Set(prev);
-              if (next.has(id)) {
-                next.delete(id);
-              } else {
-                next.add(id);
-              }
-              return next;
-            });
-          }}
-          onToggleAll={() => {
-            if (selectedImportItems.size === importDiff.length) {
-              setSelectedImportItems(new Set());
-            } else {
-              setSelectedImportItems(new Set(importDiff.map(d => d.orderId)));
-            }
-          }}
-          onApply={handleApplyImport}
-        />
+
       </div>
     </div>
   );
@@ -7697,184 +7846,5 @@ const FabricDictionaryModal: React.FC<{
   );
 };
 
-// Import Preview Modal Component
-const ImportPreviewModal: React.FC<{
-  isOpen: boolean;
-  onClose: () => void;
-  importData: { customerName: string; exportedAt: string; orders: OrderRow[] } | null;
-  diff: { orderId: string; orderMaterial: string; changes: { field: string; oldValue: any; newValue: any }[]; isNew: boolean; hasServerConflict: boolean }[];
-  selectedItems: Set<string>;
-  onToggleItem: (id: string) => void;
-  onToggleAll: () => void;
-  onApply: () => void;
-}> = ({ isOpen, onClose, importData, diff, selectedItems, onToggleItem, onToggleAll, onApply }) => {
-  if (!isOpen || !importData) return null;
 
-  const newOrders = diff.filter(d => d.isNew);
-  const modifiedOrders = diff.filter(d => !d.isNew);
-  const conflictOrders = diff.filter(d => d.hasServerConflict);
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden">
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-blue-50 to-white flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-              <Eye className="w-5 h-5 text-blue-600" />
-              Import Preview
-            </h2>
-            <p className="text-sm text-slate-500 mt-1">
-              Importing data for <span className="font-semibold text-slate-700">{importData.customerName}</span>
-              <span className="mx-2">•</span>
-              Exported: {new Date(importData.exportedAt).toLocaleString()}
-            </p>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-            <X className="w-5 h-5 text-slate-400" />
-          </button>
-        </div>
-
-        {/* Summary Stats */}
-        <div className="px-6 py-3 bg-slate-50 border-b border-slate-200 flex items-center gap-6">
-          <div className="flex items-center gap-2 text-sm">
-            <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
-            <span className="text-slate-600">{newOrders.length} New Orders</span>
-          </div>
-          <div className="flex items-center gap-2 text-sm">
-            <div className="w-3 h-3 rounded-full bg-amber-500"></div>
-            <span className="text-slate-600">{modifiedOrders.length} Modified</span>
-          </div>
-          {conflictOrders.length > 0 && (
-            <div className="flex items-center gap-2 text-sm">
-              <div className="w-3 h-3 rounded-full bg-red-500"></div>
-              <span className="text-red-600 font-medium">{conflictOrders.length} Conflicts</span>
-            </div>
-          )}
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-auto p-6">
-          {diff.length === 0 ? (
-            <div className="text-center py-12 text-slate-500">
-              <CheckCircle2 className="w-12 h-12 mx-auto mb-4 text-emerald-500" />
-              <p className="font-medium">No changes detected</p>
-              <p className="text-sm">The imported data matches the current data.</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {/* Select All */}
-              <div className="flex items-center gap-2 pb-3 border-b border-slate-200">
-                <button
-                  onClick={onToggleAll}
-                  className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-800"
-                >
-                  {selectedItems.size === diff.length ? (
-                    <CheckSquare className="w-4 h-4 text-blue-600" />
-                  ) : (
-                    <Square className="w-4 h-4" />
-                  )}
-                  Select All ({selectedItems.size}/{diff.length})
-                </button>
-              </div>
-
-              {/* Changes List */}
-              {diff.map((item) => (
-                <div 
-                  key={item.orderId}
-                  className={`border rounded-lg overflow-hidden transition-all ${
-                    item.hasServerConflict 
-                      ? 'border-red-200 bg-red-50/50' 
-                      : item.isNew 
-                        ? 'border-emerald-200 bg-emerald-50/50' 
-                        : 'border-amber-200 bg-amber-50/50'
-                  }`}
-                >
-                  <div className="px-4 py-3 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <button onClick={() => onToggleItem(item.orderId)}>
-                        {selectedItems.has(item.orderId) ? (
-                          <CheckSquare className="w-5 h-5 text-blue-600" />
-                        ) : (
-                          <Square className="w-5 h-5 text-slate-400" />
-                        )}
-                      </button>
-                      <div>
-                        <div className="font-semibold text-slate-800">{item.orderMaterial}</div>
-                        <div className="text-xs text-slate-500">Order ID: {item.orderId}</div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {item.isNew && (
-                        <span className="px-2 py-1 bg-emerald-100 text-emerald-700 text-xs font-bold rounded">NEW</span>
-                      )}
-                      {item.hasServerConflict && (
-                        <span className="px-2 py-1 bg-red-100 text-red-700 text-xs font-bold rounded flex items-center gap-1">
-                          <AlertTriangle className="w-3 h-3" /> CONFLICT
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Changes Detail */}
-                  {item.changes.length > 0 && (
-                    <div className="px-4 py-2 bg-white/50 border-t border-slate-200/50">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="text-slate-500 text-xs">
-                            <th className="text-left py-1 font-medium">Field</th>
-                            <th className="text-left py-1 font-medium">Current</th>
-                            <th className="text-left py-1 font-medium">Imported</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {item.changes.map((change, idx) => (
-                            <tr key={idx} className="border-t border-slate-100">
-                              <td className="py-1.5 font-medium text-slate-600">{change.field}</td>
-                              <td className="py-1.5 text-red-600 line-through">{String(change.oldValue || '-')}</td>
-                              <td className="py-1.5 text-emerald-600 font-medium">{String(change.newValue || '-')}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-
-                  {item.hasServerConflict && (
-                    <div className="px-4 py-2 bg-red-100 border-t border-red-200 text-xs text-red-700">
-                      ⚠️ Server data was modified after your export. Importing may overwrite recent changes.
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
-          <div className="text-sm text-slate-500">
-            {selectedItems.size} items selected for import
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={onApply}
-              disabled={selectedItems.size === 0}
-              className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold rounded-lg shadow-sm transition-colors flex items-center gap-2"
-            >
-              <Check className="w-4 h-4" />
-              Apply {selectedItems.size} Changes
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
