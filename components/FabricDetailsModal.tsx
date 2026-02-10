@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Fabric, Yarn, YarnComponent, YarnInventoryItem, YarnAllocationItem, FabricDefinition } from '../types';
-import { Plus, Trash2, Save, Calculator, X, AlertCircle, Package, Check, MapPin, ChevronDown, CheckCircle2, Search as SearchIcon } from 'lucide-react';
+import { Plus, Trash2, Save, Calculator, X, AlertCircle, Package, Check, MapPin, ChevronDown, CheckCircle2, Search as SearchIcon, PenSquare } from 'lucide-react';
 import { DataService } from '../services/dataService';
 import { YarnService } from '../services/yarnService';
 import { collection, query, where, getDocs, doc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore';
@@ -1055,6 +1055,8 @@ const YarnAllocationManager: React.FC<{
 }> = ({ yarnId, yarnName, requiredQty, allocations, availableLots, onUpdate, onFindInventory }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [selectedLotId, setSelectedLotId] = useState('');
+  const [manualLotNumber, setManualLotNumber] = useState(''); // NEW: For manual entry
+  const [isManualEntry, setIsManualEntry] = useState(false); // NEW: Toggle state
   const [qtyToAllocate, setQtyToAllocate] = useState<number>(0);
 
   // Defensive check: Ensure allocations is an array
@@ -1071,11 +1073,6 @@ const YarnAllocationManager: React.FC<{
     const lotAvailability = availableLots.map(lot => {
         const allocatedDb = (lot.allocations || []).reduce((sum, a) => sum + (a.quantity || 0), 0);
         // Also subtract what we've already allocated in this session for THIS yarn requirement
-        // (Wait, safeAllocations are already "allocated" in our view, so they reduce 'remaining'.
-        //  But if we have multiple allocations from the SAME lot in this list, we should account for that?
-        //  Actually, safeAllocations are what we have *already* decided to take.
-        //  So the lot's available quantity for *further* allocation is:
-        //  Total - DB_Allocated - (Sum of safeAllocations for this lot)
         const allocatedSession = safeAllocations
             .filter(a => a.lotId === lot.id)
             .reduce((sum, a) => sum + (a.quantity || 0), 0);
@@ -1089,14 +1086,11 @@ const YarnAllocationManager: React.FC<{
     // 1. Check for single lot sufficiency
     const sufficientLots = lotAvailability.filter(l => l.available >= remaining);
     if (sufficientLots.length > 0) {
-        // Recommend the one with the MOST available quantity (to keep large lots? or smallest sufficient to clear fragmentation?
-        // User said: "recommond the lot with most avaialble quantity"
         sufficientLots.sort((a, b) => b.available - a.available);
         return new Set([sufficientLots[0].id]);
     }
 
     // 2. Split Recommendation
-    // Sort by available descending
     lotAvailability.sort((a, b) => b.available - a.available);
     
     const recommended = new Set<string>();
@@ -1113,21 +1107,33 @@ const YarnAllocationManager: React.FC<{
   }, [availableLots, safeAllocations, remaining]);
 
   const handleAdd = () => {
-    if (!selectedLotId || qtyToAllocate <= 0) return;
+    if ((isManualEntry && !manualLotNumber) || (!isManualEntry && !selectedLotId) || qtyToAllocate <= 0) return;
     
-    const lot = availableLots.find(l => l.id === selectedLotId);
-    if (!lot) return;
+    let newAllocation: YarnAllocationItem;
 
-    const newAllocation: YarnAllocationItem = {
-      lotId: lot.id,
-      lotNumber: lot.lotNumber,
-      quantity: qtyToAllocate,
-      allocatedAt: new Date().toISOString()
-    };
+    if (isManualEntry) {
+         newAllocation = {
+            lotNumber: manualLotNumber,
+            quantity: qtyToAllocate,
+            allocatedAt: new Date().toISOString(),
+            isManual: true
+         };
+    } else {
+        const lot = availableLots.find(l => l.id === selectedLotId);
+        if (!lot) return;
+
+        newAllocation = {
+          lotId: lot.id,
+          lotNumber: lot.lotNumber,
+          quantity: qtyToAllocate,
+          allocatedAt: new Date().toISOString()
+        };
+    }
 
     onUpdate([...safeAllocations, newAllocation]);
     setIsAdding(false);
     setSelectedLotId('');
+    setManualLotNumber('');
     setQtyToAllocate(0);
   };
 
@@ -1210,50 +1216,81 @@ const YarnAllocationManager: React.FC<{
         </div>
       ) : (
         <div className="bg-indigo-50/50 border border-indigo-100 rounded p-2 animate-in slide-in-from-top-1">
-          <div className="mb-2">
-            <label className="block text-[10px] text-indigo-900 font-bold mb-1">Select Lot from Inventory</label>
-            <div className="relative">
-                <select 
-                className="w-full text-xs border border-indigo-200 rounded pl-2 pr-8 py-1.5 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white appearance-none"
-                value={selectedLotId}
-                onChange={(e) => {
-                    setSelectedLotId(e.target.value);
-                    // Auto-fill remaining qty if possible
-                    const lot = availableLots.find(l => l.id === e.target.value);
-                    if (lot) {
+          <div className="mb-3">
+            <div className="flex items-center justify-between mb-2">
+                <label className="block text-[10px] text-indigo-900 font-bold">
+                    {isManualEntry ? 'Enter Manual Lot Number' : 'Select Lot from Inventory'}
+                </label>
+                <button
+                    onClick={() => {
+                        setIsManualEntry(!isManualEntry);
+                        setSelectedLotId('');
+                        setManualLotNumber('');
+                    }}
+                    className={`flex items-center gap-1.5 text-[10px] px-2.5 py-1 rounded-full border transition-all font-semibold shadow-sm ${
+                        isManualEntry 
+                        ? 'bg-indigo-100 border-indigo-200 text-indigo-700 hover:bg-indigo-200' 
+                        : 'bg-white border-amber-200 text-amber-700 hover:bg-amber-50 hover:border-amber-300'
+                    }`}
+                >
+                    <PenSquare className="w-3 h-3" />
+                    {isManualEntry ? 'Switch to List' : 'Enter Manually'}
+                </button>
+            </div>
+            
+            {isManualEntry ? (
+                 <input 
+                    type="text" 
+                    className="w-full text-xs border border-indigo-200 rounded px-2 py-1.5 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white"
+                    placeholder="e.g. Manual-Lot-001"
+                    value={manualLotNumber}
+                    onChange={(e) => setManualLotNumber(e.target.value)}
+                    autoFocus
+                />
+            ) : (
+                <div className="relative">
+                    <select 
+                    className="w-full text-xs border border-indigo-200 rounded pl-2 pr-8 py-1.5 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white appearance-none"
+                    value={selectedLotId}
+                    onChange={(e) => {
+                        setSelectedLotId(e.target.value);
+                        // Auto-fill remaining qty if possible
+                        const lot = availableLots.find(l => l.id === e.target.value);
+                        if (lot) {
+                            const allocatedDb = (lot.allocations || []).reduce((sum, a) => sum + (a.quantity || 0), 0);
+                            const allocatedSession = safeAllocations
+                                .filter(a => a.lotId === lot.id)
+                                .reduce((sum, a) => sum + (a.quantity || 0), 0);
+                            const available = Math.max(0, (lot.quantity || 0) - allocatedDb - allocatedSession);
+                            setQtyToAllocate(Math.min(remaining, available));
+                        }
+                    }}
+                    >
+                    <option value="">-- Select Available Lot --</option>
+                    {availableLots
+                    .map(lot => {
                         const allocatedDb = (lot.allocations || []).reduce((sum, a) => sum + (a.quantity || 0), 0);
                         const allocatedSession = safeAllocations
                             .filter(a => a.lotId === lot.id)
                             .reduce((sum, a) => sum + (a.quantity || 0), 0);
                         const available = Math.max(0, (lot.quantity || 0) - allocatedDb - allocatedSession);
-                        setQtyToAllocate(Math.min(remaining, available));
-                    }
-                }}
-                >
-                <option value="">-- Select Available Lot --</option>
-                {availableLots
-                  .map(lot => {
-                    const allocatedDb = (lot.allocations || []).reduce((sum, a) => sum + (a.quantity || 0), 0);
-                    const allocatedSession = safeAllocations
-                        .filter(a => a.lotId === lot.id)
-                        .reduce((sum, a) => sum + (a.quantity || 0), 0);
-                    const available = Math.max(0, (lot.quantity || 0) - allocatedDb - allocatedSession);
-                    return { lot, available };
-                  })
-                  .sort((a, b) => b.available - a.available)
-                  .map(({ lot, available }) => {
-                    const isRecommended = recommendedLotIds.has(lot.id);
-                    const locationDisplay = lot.location ? `[${lot.location}] ` : '';
+                        return { lot, available };
+                    })
+                    .sort((a, b) => b.available - a.available)
+                    .map(({ lot, available }) => {
+                        const isRecommended = recommendedLotIds.has(lot.id);
+                        const locationDisplay = lot.location ? `[${lot.location}] ` : '';
 
-                    return (
-                    <option key={lot.id} value={lot.id} disabled={available <= 0} className={isRecommended ? "font-bold text-indigo-700 bg-indigo-50" : ""}>
-                    {isRecommended ? "★ " : ""}{locationDisplay}{lot.lotNumber} — {available.toFixed(1)} kg avail. {isRecommended ? "(Recommended)" : ""}
-                    </option>
-                    );
-                })}
-                </select>
-                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-indigo-400 pointer-events-none" />
-            </div>
+                        return (
+                        <option key={lot.id} value={lot.id} disabled={available <= 0} className={isRecommended ? "font-bold text-indigo-700 bg-indigo-50" : ""}>
+                        {isRecommended ? "★ " : ""}{locationDisplay}{lot.lotNumber} — {available.toFixed(1)} kg avail. {isRecommended ? "(Recommended)" : ""}
+                        </option>
+                        );
+                    })}
+                    </select>
+                    <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-indigo-400 pointer-events-none" />
+                </div>
+            )}
           </div>
           
           <div className="flex items-end gap-2">
@@ -1272,7 +1309,7 @@ const YarnAllocationManager: React.FC<{
             </div>
             <button 
               onClick={handleAdd}
-              disabled={!selectedLotId || qtyToAllocate <= 0}
+              disabled={(!isManualEntry && !selectedLotId) || (isManualEntry && !manualLotNumber) || qtyToAllocate <= 0}
               className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded hover:bg-indigo-700 disabled:opacity-50 shadow-sm shadow-indigo-200"
             >
               Confirm
