@@ -448,11 +448,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
   const handleCreateItem = async (type: 'fabric' | 'client', name: string) => {
     try {
       if (type === 'fabric') {
-        await DataService.addFabric({ 
-            name,
-            fabricId: `fabric-${Date.now()}`,
-            type: 'General'
-        });
+        await DataService.upsertFabric({ name });
         setFabrics(await DataService.getFabrics());
       } else {
         await DataService.addClient({ 

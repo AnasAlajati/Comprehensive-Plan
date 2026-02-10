@@ -1088,30 +1088,7 @@ const formatDateShort = (dateStr: string) => {
 };
 
 // --- Optimized Row Component ---
-const StatusLegend = () => (
-    <div className="flex flex-wrap gap-4 text-xs text-slate-600 mb-2 px-1">
-        <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-sm border-l-4 border-l-slate-300 bg-white border border-slate-200"></span>
-            <span>لم يبدأ (Not Started)</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-sm border-l-4 border-l-blue-500 bg-blue-50 border border-blue-100"></span>
-            <span>في الإنتاج (In Production)</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-sm border-l-4 border-l-cyan-400 bg-cyan-50 border border-cyan-100"></span>
-            <span>انتهى خام (Finished Raw)</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-sm border-l-4 border-l-purple-500 bg-purple-50 border border-purple-100"></span>
-            <span>بالمصبغة (In Dyehouse)</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-sm border-l-4 border-l-emerald-500 bg-emerald-50 border border-emerald-100"></span>
-            <span>مكتمل (Completed)</span>
-        </div>
-    </div>
-);
+// (StatusLegend Removed)
 
 const MemoizedOrderRow = React.memo(({
   row,
@@ -1272,101 +1249,21 @@ const MemoizedOrderRow = React.memo(({
     return { summary, totalCapacity: total, totalSent: sent, totalReceived: received, groupedBatches: grouped };
   }, [row.dyeingPlan]);
 
-  // Calculate Finished Details (Audit Trail)
+  // Calculate Finished Details (SIMPLIFIED - no logs)
   const finishedDetails = useMemo(() => {
-      const hasActive = statusInfo && statusInfo.active.length > 0;
-      const displayRemaining = hasActive ? statusInfo.remaining : row.remainingQty;
       const hasAnyPlan = (statusInfo?.active?.length > 0) || (statusInfo?.planned?.length > 0);
       
-      // Only calculate if potentially finished
-      if (hasAnyPlan || (displayRemaining > 0)) return null;
+      // Only show if truly finished
+      if (hasAnyPlan || (row.remainingQty || 0) > 0) return null;
 
-      const logs: { date: string; machine: string; qty: number; isExternal?: boolean }[] = [];
-      
-      // 1. Internal Logs
-      machines.forEach(m => {
-          m.dailyLogs?.forEach(log => {
-              const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
-              const logClient = normalize(log.client);
-              const logFabric = normalize(log.fabric);
-              const normClient = normalize(selectedCustomerName);
-              const normFabric = normalize(row.material);
-              
-              const isMatch = (log.orderReference && row.material && log.orderReference.includes(row.material)) || 
-                              (logClient === normClient && logFabric === normFabric);
-
-              if (isMatch && log.dayProduction > 0) {
-                  logs.push({
-                      date: log.date,
-                      machine: m.name,
-                      qty: log.dayProduction,
-                      isExternal: false
-                  });
-              }
-          });
-      });
-
-      // 2. External Plans
-      externalFactories.forEach(factory => {
-          factory.plans?.forEach((plan: any) => {
-              const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
-              const planClient = normalize(plan.client);
-              const planFabric = normalize(plan.fabric);
-              const normClient = normalize(selectedCustomerName);
-              const normFabric = normalize(row.material);
-
-              if (planClient === normClient && planFabric === normFabric) {
-                  logs.push({
-                      date: plan.endDate || plan.startDate || 'Unknown',
-                      machine: factory.name,
-                      qty: plan.quantity || 0,
-                      isExternal: true
-                  });
-              }
-          });
-      });
-
-      if (logs.length === 0) return null;
-
-      // Sort by date ascending to find start and end
-      logs.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-      const startDate = logs[0].date;
-      const endDate = logs[logs.length - 1].date;
-      
-      // Group by machine with production totals
-      const machineStats: Record<string, { total: number; isExternal: boolean; days: number }> = {};
-      logs.forEach(l => {
-          if (!machineStats[l.machine]) {
-              machineStats[l.machine] = { total: 0, isExternal: l.isExternal || false, days: 0 };
-          }
-          machineStats[l.machine].total += l.qty;
-          machineStats[l.machine].days += 1;
-      });
-      
-      const machineList = Object.entries(machineStats).map(([name, stats]) => ({
-          name,
-          total: stats.total,
-          isExternal: stats.isExternal,
-          days: stats.days
-      })).sort((a, b) => b.total - a.total); // Sort by most production
-      
-      const totalProduction = logs.reduce((sum, l) => sum + l.qty, 0);
-      const uniqueMachines = Array.from(new Set(logs.map(l => l.machine)));
-      
       return { 
-        startDate, 
-        endDate, 
-        lastDate: formatDateShort(endDate),
-        uniqueMachines, 
-        machineList, 
-        totalProduction, 
-        logs 
+        lastDate: formatDateShort(row.endDate || row.receiveDate || ''),
+        uniqueMachines: [], 
       };
-  }, [machines, externalFactories, row, selectedCustomerName, statusInfo]);
+  }, [row.remainingQty, statusInfo]);
 
-  // --- Mobile & Status Logic Extraction ---
-  const { internalActive, internalPlanned, externalMatches, directMachine, hasAnyPlan, rowColorBorder } = useMemo(() => {
+  // --- Mobile & Status Logic Extraction (SIMPLIFIED - no heavy calculation) ---
+  const { internalActive, internalPlanned, externalMatches, directMachine, hasAnyPlan } = useMemo(() => {
     // 1. Internal Active & Planned
     const rawActive = (statusInfo && statusInfo.active) ? statusInfo.active : [];
     const internalActive = rawActive.filter((m: string) => !m.endsWith('(Ext)'));
@@ -1374,38 +1271,15 @@ const MemoizedOrderRow = React.memo(({
 
     // 2. External Matches
     const externalMatches: { factoryName: string; status: string }[] = [];
-    const reference = row.material ? `${selectedCustomerName}-${row.material}` : '';
-    
-    if (externalFactories && externalFactories.length > 0 && row.material) {
-      for (const factory of externalFactories) {
-        if (factory.plans && Array.isArray(factory.plans)) {
-          for (const plan of factory.plans) {
-              const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
-              const planClient = normalize(plan.client);
-              const planFabric = normalize(plan.fabric);
-              const normCustomer = normalize(selectedCustomerName);
-              const normMaterial = normalize(row.material);
-
-              const isClientMatch = planClient === normCustomer;
-              const isFabricMatch = planFabric === normMaterial;
-              
-              const constructedRef = `${plan.client || ''}-${plan.fabric ? plan.fabric.split(/[\s-]+/).map((w: string) => w[0]).join('').toUpperCase() : ''}`;
-              
-              const planRef = normalize(plan.orderReference);
-              const searchRef = normalize(reference);
-              const constRef = normalize(constructedRef);
-
-              const isRefMatch = (planRef && planRef === searchRef) || (constRef === searchRef);
-
-              if ((isClientMatch && isFabricMatch) || isRefMatch) {
-                externalMatches.push({
-                  factoryName: factory.name,
-                  status: plan.status === 'ACTIVE' ? 'Active' : 'Planned'
-                });
-              }
-          }
-        }
-      }
+    if (statusInfo && statusInfo.active) {
+        statusInfo.active.forEach((m: string) => {
+           if (m.endsWith('(Ext)')) externalMatches.push({ factoryName: m.replace(' (Ext)', ''), status: 'Active' });
+        });
+    }
+    if (statusInfo && statusInfo.planned) {
+        statusInfo.planned.forEach((m: string) => {
+           if (m.endsWith('(Ext)')) externalMatches.push({ factoryName: m.replace(' (Ext)', ''), status: 'Planned' });
+        });
     }
 
     // 3. Direct Machine
@@ -1417,50 +1291,14 @@ const MemoizedOrderRow = React.memo(({
 
     const hasAnyPlan = internalActive.length > 0 || internalPlanned.length > 0 || externalMatches.length > 0 || directMachine;
     
-    // --- Sorting & Color Coding Helper inside component to utilize existing logic ---
-    let rowTier = 0;
-    let rowColorBorder = '';
-
-     // Tier 1: Not Started
-    if (!hasAnyPlan && (displayRemaining || 0) > 0 && totalSent === 0) {
-        rowTier = 1;
-        rowColorBorder = 'border-l-4 border-l-slate-300'; // Gray
-    }
-    
-    // Tier 2: Working (Also Mixed Phase)
-    else if (hasAnyPlan || (displayRemaining > 0 && displayRemaining < row.requiredQty)) {
-        rowTier = 2;
-        rowColorBorder = 'border-l-4 border-l-blue-500'; // Blue
-    }
-    
-    // Tier 3: Finished Raw Production (Raw done, but waiting for dyehouse/partial)
-    // Means Remaining <= 0, but Sent < Required
-    else if ((displayRemaining || 0) <= 0 && totalSent < row.requiredQty) {
-        rowTier = 3;
-        rowColorBorder = 'border-l-4 border-l-cyan-400'; // Cyan/Teal
-    }
-    
-    // Tier 4: In Dyehouse
-    // Sent > 0, Received < Required
-    else if (totalSent > 0 && totalReceived < row.requiredQty) {
-        rowTier = 4;
-        rowColorBorder = 'border-l-4 border-l-purple-500'; // Purple
-    }
-
-    // Tier 5: Completed
-    else if (totalReceived >= row.requiredQty) {
-        rowTier = 5;
-        rowColorBorder = 'border-l-4 border-l-emerald-500'; // Green
-    }
-
-    return { internalActive, internalPlanned, externalMatches, directMachine, hasAnyPlan, rowTier, rowColorBorder };
-  }, [statusInfo, externalFactories, selectedCustomerName, row.material, row.machine, machines, displayRemaining, totalSent, totalReceived]);
+    return { internalActive, internalPlanned, externalMatches, directMachine, hasAnyPlan };
+  }, [statusInfo, row.machine, machines]);
 
   return (
     <>
     <tr 
       data-fabric-name={row.material}
-      className={`transition-colors group text-sm table-view hidden sm:table-row ${isSelected ? 'bg-blue-50' : 'hover:bg-blue-50/30'} ${rowColorBorder}`}
+      className={`transition-colors group text-sm table-view hidden sm:table-row ${isSelected ? 'bg-blue-50' : 'hover:bg-blue-50/30'}`}
     >
       {/* Checkbox */}
       <td className="p-0 border-r border-slate-200 text-center align-middle">
@@ -1904,17 +1742,6 @@ const MemoizedOrderRow = React.memo(({
 
                   return (
                     <div className="flex flex-col gap-1.5 relative">
-                        {/* Debug Info */}
-                        {statusInfo?.debug && (
-                            <div className="hidden group-hover:block absolute z-50 bg-black text-white text-[10px] p-2 rounded shadow-lg bottom-full left-1/2 -translate-x-1/2 mb-2 whitespace-nowrap pointer-events-none">
-                                <div className="font-bold border-b border-gray-700 mb-1 pb-1">Debug Status Source</div>
-                                <div>Active: {statusInfo.debug.activeReasons.length ? statusInfo.debug.activeReasons.join(', ') : 'None'}</div>
-                                <div>Planned: {statusInfo.debug.plannedReasons.length ? statusInfo.debug.plannedReasons.join(', ') : 'None'}</div>
-                                <div>Ext Matches: {externalMatches.length ? externalMatches.map(m => m.factoryName).join(', ') : 'None'}</div>
-                                <div>Direct Machine: {directMachine ? `${directMachine.name} (Assigned to Order)` : 'None'}</div>
-                            </div>
-                        )}
-
                       {/* Internal Active */}
                       {internalActive.length > 0 && (
                         <div className="flex flex-wrap gap-1">
@@ -2099,10 +1926,10 @@ const MemoizedOrderRow = React.memo(({
       {!showDyehouse && (
         <>
           {/* Remaining Qty */}
-          <td className={`p-0 border-r border-slate-200 font-mono font-bold ${hasActive ? 'bg-emerald-50/30' : ''}`}>
+          <td className="p-0 border-r border-slate-200 font-mono font-bold">
             <input 
               type="number"
-              className={`w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 ${hasActive ? 'text-emerald-600' : 'text-slate-600'}`}
+              className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 text-slate-600"
               value={displayRemaining ?? ''}
               onChange={(e) => handleUpdateOrder(row.id, { remainingQty: Number(e.target.value) })}
             />
@@ -2266,13 +2093,13 @@ const MemoizedOrderRow = React.memo(({
                         )}
                      </div>
                  ) : (
-                     <div className={`p-2 rounded border ${hasActive ? 'bg-emerald-50 border-emerald-100' : 'bg-slate-50 border-slate-100'}`}>
+                     <div className="bg-slate-50 p-2 rounded border border-slate-100">
                         <span className="text-[10px] text-slate-400 uppercase font-bold block mb-1">Remaining</span>
                         <input 
                         type="number" 
                         value={displayRemaining || ''} 
                         onChange={(e) => handleUpdateOrder(row.id, { remainingQty: Number(e.target.value) })}
-                        className={`w-full bg-transparent font-mono text-lg font-medium outline-none p-0 border-0 focus:ring-0 ${hasActive ? 'text-emerald-600' : 'text-slate-700'}`}
+                        className="w-full bg-transparent font-mono text-lg font-medium outline-none p-0 border-0 focus:ring-0 text-slate-700"
                         />
                      </div>
                  )}
@@ -4152,144 +3979,74 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
 
   // --- Optimization: Pre-calculate Stats Map ---
+  // --- Optimization: Pre-calculate Stats Map (LIGHT VERSION) ---
   const statsMap = useMemo(() => {
     if (!selectedCustomer) return new Map();
     
     const map = new Map<string, any>();
     const clientName = selectedCustomer.name;
 
-    // We only care about fabrics in the current order list to save time
+    // We only care about fabrics in the current order list
     const relevantFabrics = new Set(selectedCustomer.orders.map(o => o.material).filter(Boolean));
 
     relevantFabrics.forEach(fabric => {
-        const refCode = `${clientName}-${fabric}`;
         const activeMachines: string[] = [];
         const plannedMachines: string[] = [];
-        let remaining = 0;
-        let scrap = 0;
-        let minDate: string | null = null;
-        let maxDate: string | null = null;
 
-        // 1. Scan Machines
+        // 1. Scan Machines for Active/Planned orders (Direct properties only, no logs)
         machines.forEach(m => {
-            // Helper for robust comparison
             const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
             const normClient = normalize(clientName);
             const normFabric = normalize(fabric);
 
-            // Check Active Logs
-            const activeLog = m.dailyLogs?.find(l => l.date === activeDay);
-            if (activeLog) {
-                // Robust Match: Check Reference OR (Client AND Fabric)
-                // We normalize client/fabric to handle case/whitespace differences
-                const logClient = normalize(activeLog.client);
-                const logFabric = normalize(activeLog.fabric);
-                
-                const isMatch = (activeLog.orderReference === refCode) || 
-                                (logClient === normClient && logFabric === normFabric);
-                                
-                if (isMatch) {
+            // Check if machine is currently working on this client/fabric
+            if (m.activeOrder) {
+                const activeClient = normalize(m.activeOrder.clientName);
+                const activeFabric = normalize(m.activeOrder.material);
+                if (activeClient === normClient && activeFabric === normFabric) {
                     activeMachines.push(m.name);
-                    remaining += (Number(activeLog.remainingMfg) || 0);
-
-                    // Calculate End Date for Active Machine
-                    const prod = Number(activeLog.dayProduction) || 0;
-                    const rem = Number(activeLog.remainingMfg) || 0;
-                    if (prod > 0 && rem > 0) {
-                        const daysNeeded = Math.ceil(rem / prod);
-                        const d = new Date(activeDay);
-                        d.setDate(d.getDate() + daysNeeded);
-                        const dateStr = d.toISOString().split('T')[0];
-                        if (!maxDate || dateStr > maxDate) {
-                            maxDate = dateStr;
-                        }
-                        // Also update minDate if it's the first date we see (start date is today/activeDay)
-                        if (!minDate || activeDay < minDate) {
-                            minDate = activeDay;
-                        }
-                    }
                 }
             }
 
-            // Check All Logs (Scrap)
-            m.dailyLogs?.forEach(log => {
-                const logClient = normalize(log.client);
-                const logFabric = normalize(log.fabric);
-                const isMatch = (log.orderReference === refCode) || 
-                                (logClient === normClient && logFabric === normFabric);
-                if (isMatch) {
-                    scrap += (Number(log.scrap) || 0);
-                }
-            });
-
-            // Check Future Plans
+            // Check if machine has this client/fabric in future plans
             m.futurePlans?.forEach(plan => {
                 const planClient = normalize(plan.client);
                 const planFabric = normalize(plan.fabric);
-                
                 if (planClient === normClient && planFabric === normFabric) {
                     if (!plannedMachines.includes(m.name)) plannedMachines.push(m.name);
-                    
-                    if (plan.startDate && (!minDate || plan.startDate < minDate)) minDate = plan.startDate;
-                    if (plan.endDate && (!maxDate || plan.endDate > maxDate)) maxDate = plan.endDate;
                 }
             });
         });
 
-        // 1.5 Add External Scrap (Once per fabric)
-        if (externalScrapMap) {
-            const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
-            const normFabric = normalize(fabric);
-            scrap += (externalScrapMap[normFabric] || 0);
-        }
-
-        // Check External Plans
+        // 2. Scan External Factories
         externalFactories.forEach(factory => {
-            if (!factory.plans) return;
-            factory.plans.forEach((plan: any) => {
+            factory.plans?.forEach((plan: any) => {
                 const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
                 const planClient = normalize(plan.client);
                 const planFabric = normalize(plan.fabric);
-                const normClient = normalize(clientName);
-                const normFabric = normalize(fabric);
-
-                if (planClient === normClient && planFabric === normFabric) {
-                    // Only include if not completed
-                    if (plan.status !== 'COMPLETED') {
-                        remaining += (Number(plan.remaining) || 0);
-                        // Add to active machines list to ensure the calculated remaining is used
+                if (planClient === normalize(clientName) && planFabric === normalize(fabric)) {
+                    if (plan.status === 'ACTIVE') {
                         activeMachines.push(`${factory.name} (Ext)`);
+                    } else if (plan.status !== 'COMPLETED') {
+                        plannedMachines.push(`${factory.name} (Ext)`);
                     }
                 }
             });
-        });
-
-        // 2. Scan Other Customers
-        const otherClients = new Set<string>();
-        customers.forEach(c => {
-            if (c.id === selectedCustomer.id) return;
-            const hasFabric = c.orders.some(o => o.material === fabric);
-            if (hasFabric) otherClients.add(c.name);
         });
 
         map.set(fabric, {
             active: activeMachines,
             planned: plannedMachines,
-            remaining,
-            startDate: minDate || '-',
-            endDate: maxDate || '-',
-            scrap,
-            others: Array.from(otherClients).join(', '),
-            // Debug Info
-            debug: {
-                activeReasons: activeMachines.map(m => `Active: ${m}`),
-                plannedReasons: plannedMachines.map(m => `Planned: ${m}`)
-            }
+            remaining: 0, // Removed dynamic log-based calculation
+            scrap: 0,     // Removed dynamic log-based calculation
+            startDate: '-',
+            endDate: '-',
+            others: ''
         });
     });
 
     return map;
-  }, [selectedCustomer, machines, customers, activeDay, externalFactories, externalScrapMap]);
+  }, [selectedCustomer, machines, externalFactories]);
 
   const allClientsStats = useMemo(() => {
     if (selectedCustomerId !== ALL_CLIENTS_ID) return [];
@@ -4429,20 +4186,17 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         const required = order.requiredQty || 0;
         totalOrdered += required;
 
-        const statusInfo = order.material ? statsMap.get(order.material) : null;
-        const hasActive = statusInfo && statusInfo.active.length > 0;
-        
-        // Use the same logic as the row display
-        const displayRemaining = hasActive ? statusInfo.remaining : (order.remainingQty ?? (required - (order.producedQty || 0)));
+        // Use row remainingQty directly for performance
+        const displayRemaining = order.remainingQty ?? (required - (order.producedQty || 0));
         totalRemaining += displayRemaining;
     });
 
-    // Manufactured = Ordered - Remaining (as requested)
+    // Manufactured = Ordered - Remaining
     const totalManufactured = Math.max(0, totalOrdered - totalRemaining);
     const progress = totalOrdered > 0 ? (totalManufactured / totalOrdered) * 100 : 0;
 
     return { ordered: totalOrdered, manufactured: totalManufactured, remaining: totalRemaining, progress };
-  }, [selectedCustomer, statsMap]);
+  }, [selectedCustomer]);
 
   const totalYarnRequirements = useMemo(() => {
     if (!selectedCustomer || !selectedCustomer.orders) return [];
@@ -5594,6 +5348,126 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     XLSX.writeFile(wb, `${selectedCustomer?.name || 'Orders'}_DyehousePlan.xlsx`);
   };
 
+  const exportStyledOrders = () => {
+    // 1. Setup Workbook
+    const wb = XLSX.utils.book_new();
+
+    // 2. Define Styles
+    const headerStyle = {
+      font: { name: "Calibri", sz: 12, bold: true, color: { rgb: "FFFFFF" } },
+      fill: { fgColor: { rgb: "4CAF50" } }, // Green
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      border: {
+        top: { style: "thin", color: { rgb: "E2E8F0" } },
+        bottom: { style: "thin", color: { rgb: "E2E8F0" } },
+        left: { style: "thin", color: { rgb: "E2E8F0" } },
+        right: { style: "thin", color: { rgb: "E2E8F0" } }
+      }
+    };
+
+    const rowStyle = {
+       font: { name: "Calibri", sz: 11 },
+       alignment: { horizontal: "center", vertical: "center", wrapText: true },
+       fill: { fgColor: { rgb: "E8F5E9" } }, // Light Green Rows
+       border: {
+        top: { style: "thin", color: { rgb: "E2E8F0" } },
+        bottom: { style: "thin", color: { rgb: "E2E8F0" } },
+        left: { style: "thin", color: { rgb: "E2E8F0" } },
+        right: { style: "thin", color: { rgb: "E2E8F0" } }
+      }
+    };
+
+    // 3. Group Orders
+    const ordersByCustomer: Record<string, OrderRow[]> = {};
+    
+    // If a specific customer is selected, we only export that one.
+    // If "All" is selected (selectedCustomer is null), we separate by customer.
+    
+    // Use the currently filtered list as base
+    const sourceOrders = filteredOrders;
+
+    sourceOrders.forEach(order => {
+        let cName = "Unknown";
+        if (selectedCustomer) {
+            cName = selectedCustomer.name; 
+        } else {
+            // Try to resolve customer name from ID
+            const c = customers.find(x => x.id === order.customerId);
+            cName = c ? c.name : "Unknown Customer";
+        }
+        
+        if (!ordersByCustomer[cName]) ordersByCustomer[cName] = [];
+        ordersByCustomer[cName].push(order);
+    });
+
+    Object.entries(ordersByCustomer).forEach(([custName, orders]) => {
+        const wsData: any[][] = [];
+        
+        // Headers (English as in user request)
+        const headers = [
+            "Fabric", 
+            "Req", 
+            "Accessory", 
+            "Manufactured", 
+            "Remaining", 
+            "Receipt", 
+            "Start", 
+            "End", 
+            "Delivered", 
+            "Delivered (Acc)", 
+            "Scrap", 
+            "Others", 
+            "Notes"
+        ];
+        
+        wsData.push(headers.map(h => ({ v: h, s: headerStyle })));
+        
+        orders.forEach(order => {
+             const row = [
+                { v: order.material || '', s: rowStyle },
+                { v: order.requiredQty || 0, s: rowStyle },
+                { v: order.accessory || order.accessoryType || '-', s: rowStyle },
+                { v: order.manufacturedQty || 0, s: rowStyle },
+                { v: order.remainingQty || 0, s: rowStyle },
+                { v: order.orderReceiptDate || '', s: rowStyle },
+                { v: order.startDate || '', s: rowStyle },
+                { v: order.endDate || '', s: rowStyle },
+                { v: order.batchDeliveries || 0, s: rowStyle },
+                { v: order.accessoryDeliveries || 0, s: rowStyle },
+                { v: order.scrapQty || 0, s: rowStyle },
+                { v: order.others || '', s: rowStyle },
+                { v: order.notes || '', s: rowStyle }
+             ];
+             wsData.push(row);
+        });
+        
+        const ws = XLSX.utils.aoa_to_sheet(wsData);
+        
+        // Column Widths
+        ws['!cols'] = [
+            { wch: 25 }, // Fabric
+            { wch: 10 }, // Req
+            { wch: 15 }, // Acc
+            { wch: 12 }, // Man
+            { wch: 12 }, // Rem
+            { wch: 15 }, // Rec
+            { wch: 15 }, // Sta
+            { wch: 15 }, // End
+            { wch: 12 }, // Del
+            { wch: 15 }, // DelAcc
+            { wch: 10 }, // Scr
+            { wch: 15 }, // Oth
+            { wch: 30 }  // Not
+        ];
+
+        // Sanitize sheet name
+        const safeName = custName.replace(/[\\/?*[\]]/g, "_").substring(0, 30) || "Sheet1";
+        XLSX.utils.book_append_sheet(wb, ws, safeName);
+    });
+
+    XLSX.writeFile(wb, `Orders_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
   const handleSaveImportedData = async (importedClients: ParsedClient[]) => {
        try {
            const batch = writeBatch(db);
@@ -5805,6 +5679,14 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                 </button>
 
                 <div className="h-4 w-px bg-slate-300 mx-1"></div>
+
+                <button 
+                    onClick={exportStyledOrders}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 text-slate-600 hover:text-green-600 hover:border-green-200 text-xs font-medium rounded-md shadow-sm transition-all whitespace-nowrap"
+                >
+                    <FileText className="w-3.5 h-3.5" />
+                    Export Report
+                </button>
 
                 <button 
                     onClick={() => {
@@ -6094,43 +5976,6 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             <div className="flex-1 p-4 bg-slate-50">
               {!showYarnRequirements ? (
                 <>
-                   {/* Status Legend & Filter Bar */}
-                   <div className="flex flex-col gap-2 mb-4">
-                      <StatusLegend />
-                      <div className="flex gap-2">
-                         <div className="relative flex-1">
-                            <input
-                              type="text"
-                              placeholder="بحث في الطلبات (القماش)..."
-                              className="w-full px-4 py-2 pr-10 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none shadow-sm"
-                              value={searchTerm}
-                              onChange={(e) => setSearchTerm(e.target.value)}
-                            />
-                            <Search className="absolute right-3 top-2.5 text-slate-400 w-5 h-5 pointer-events-none" />
-                         </div>
-                         <div className="relative w-48">
-                            <select
-                                className="w-full h-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm text-slate-700 appearance-none bg-white cursor-pointer"
-                                value={machineFilter}
-                                onChange={(e) => setMachineFilter(e.target.value)}
-                            >
-                                <option value="">كل المكنات</option>
-                                <option value="200">200 kg</option>
-                                <option value="250">250 kg</option>
-                                <option value="300">300 kg</option>
-                                <option value="400">400 kg</option>
-                                <option value="500">500 kg</option>
-                                <option value="600">600 kg</option>
-                                <option value="700">700 kg</option>
-                                <option value="800">800 kg</option>
-                                <option value="900">900 kg</option>
-                                <option value="1000">1000 kg</option>
-                            </select>
-                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
-                         </div>
-                      </div>
-                   </div>
-
                   <div className="bg-white rounded-lg shadow border border-slate-200 overflow-x-auto mb-4">
                     <table className="w-full text-sm border-collapse whitespace-nowrap">
                       <thead className="bg-slate-100 text-slate-600 font-semibold shadow-sm text-xs uppercase tracking-wider table-view hidden sm:table-header-group">

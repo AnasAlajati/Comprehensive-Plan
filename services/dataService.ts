@@ -106,7 +106,15 @@ export const DataService = {
     if (!formData.name) throw new Error('Fabric name is required');
 
     // Generate deterministic ID from name if not provided
-    const docId = existingId || formData.id || formData.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+    // Use a hash-based approach to support Arabic/non-Latin fabric names
+    const generateId = (name: string) => {
+      const latinized = name.replace(/[^a-zA-Z0-9\u0600-\u06FF\u0750-\u077F]/g, '_').toLowerCase().replace(/_+/g, '_').replace(/^_|_$/g, '');
+      // If the name produced a valid ID (has at least some alphanumeric/Arabic chars), use it
+      if (latinized && !/^_+$/.test(latinized)) return latinized;
+      // Fallback: generate a unique ID from timestamp + random
+      return `fabric_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    };
+    const docId = existingId || formData.id || generateId(formData.name);
     
     // Auto-calculate specs based on work centers (if machines provided)
     const workCenterList = formData.workCenters || [];
@@ -144,13 +152,7 @@ export const DataService = {
     return fabricData;
   },
 
-  async addFabric(fabric: Omit<Fabric, 'id'>): Promise<string> {
-    const docRef = await addDoc(collection(db, 'FabricSS'), {
-      ...fabric,
-      createdAt: Timestamp.now()
-    });
-    return docRef.id;
-  },
+  // addFabric removed — use upsertFabric() instead for unified ID generation,
 
 
 
