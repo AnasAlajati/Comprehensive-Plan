@@ -38,6 +38,7 @@ import {
   FileSpreadsheet,
   MapPin,
   Layers,
+  Bug, // Added for debug
   FileText,
   CheckCircle2,
   AlertCircle,
@@ -74,7 +75,8 @@ import {
   Edit2,
   Unlink,
   Image as ImageIcon,
-  Camera
+  Camera,
+  Send
 } from 'lucide-react';
 
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
@@ -1104,6 +1106,7 @@ const MemoizedOrderRow = React.memo(({
   onOpenFabricDetails,
   showDyehouse,
   onOpenCreatePlan,
+  onOpenDyehousePlan,
   dyehouses,
   handleCreateDyehouse,
   machines,
@@ -1122,7 +1125,8 @@ const MemoizedOrderRow = React.memo(({
   onOpenDyehouseTracking,
   visibleColumns,
   onToggleColumnVisibility,
-  onUploadFabricImage
+  onUploadFabricImage,
+  inventory
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -1137,6 +1141,7 @@ const MemoizedOrderRow = React.memo(({
   onOpenFabricDetails: (fabricName: string, qty: number, orderId: string) => void;
   showDyehouse: boolean;
   onOpenCreatePlan: (order: OrderRow) => void;
+  onOpenDyehousePlan: (order: OrderRow) => void;
   dyehouses: any[];
   handleCreateDyehouse: (name: string) => void;
   machines: MachineSS[];
@@ -1156,6 +1161,7 @@ const MemoizedOrderRow = React.memo(({
   visibleColumns: Record<string, boolean>;
   onToggleColumnVisibility: (columnId: string) => void;
   onUploadFabricImage: (fabricId: string, file: File) => void;
+  inventory: YarnInventoryItem[];
 }) => {
   // Viewer role is read-only
   const isReadOnly = userRole === 'viewer';
@@ -1169,6 +1175,9 @@ const MemoizedOrderRow = React.memo(({
   const [isExpanded, setIsExpanded] = useState(false);
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [showImagePreview, setShowImagePreview] = useState(false);
+  const [showDyehouseModal, setShowDyehouseModal] = useState(false);
+  const [showYarnModal, setShowYarnModal] = useState(false);
+  const [selectedBatchForDetails, setSelectedBatchForDetails] = useState<number>(-1);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const refCode = row.material ? `${selectedCustomerName}-${row.material}` : '-';
   const hasActive = statusInfo && statusInfo.active.length > 0;
@@ -1206,6 +1215,34 @@ const MemoizedOrderRow = React.memo(({
       return sum + (base * scrap);
     }, 0);
   }
+
+  // Calculate Produced from Machine Logs (matches History Modal)
+  const totalProducedFromLogs = useMemo(() => {
+    const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+    const targetClient = normalize(selectedCustomerName);
+    const targetFabric = normalize(row.material);
+    
+    let total = 0;
+    
+    // Sum from internal machine dailyLogs
+    machines.forEach(machine => {
+      if (!machine.dailyLogs || !Array.isArray(machine.dailyLogs)) return;
+      
+      machine.dailyLogs.forEach((log) => {
+        const logClient = normalize(log.client);
+        const logFabric = normalize(log.fabric);
+        
+        const isMatch = (logClient === targetClient && logFabric === targetFabric) ||
+                        (log.client === selectedCustomerName && log.fabric === row.material);
+        
+        if (isMatch) {
+          total += Number(log.dayProduction) || 0;
+        }
+      });
+    });
+    
+    return total;
+  }, [machines, selectedCustomerName, row.material]);
 
   // Calculate Assigned Machines Summary & Total Capacity
   const { summary: assignedMachinesSummary, totalCapacity, totalSent, totalReceived, groupedBatches } = useMemo(() => {
@@ -1256,11 +1293,35 @@ const MemoizedOrderRow = React.memo(({
       // Only show if truly finished
       if (hasAnyPlan || (row.remainingQty || 0) > 0) return null;
 
+      // Extract machine names from daily logs (like OrderProductionHistoryModal does)
+      const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+      const targetClient = normalize(selectedCustomerName);
+      const targetFabric = normalize(row.material);
+      const finishedMachines = new Set<string>();
+
+      machines.forEach(machine => {
+        if (!machine.dailyLogs || !Array.isArray(machine.dailyLogs)) return;
+        
+        machine.dailyLogs.forEach((log) => {
+          const logClient = normalize(log.client);
+          const logFabric = normalize(log.fabric);
+          
+          const isMatch = (logClient === targetClient && logFabric === targetFabric) ||
+                          (log.client === selectedCustomerName && log.fabric === row.material);
+
+          if (isMatch) {
+            finishedMachines.add(machine.name);
+          }
+        });
+      });
+
       return { 
-        lastDate: formatDateShort(row.endDate || row.receiveDate || ''),
-        uniqueMachines: [], 
+        lastDate: formatDateShort(statusInfo?.endDate || row.endDate || ''),
+        startDate: statusInfo?.startDate || row.startDate,
+        endDate: statusInfo?.endDate || row.endDate,
+        uniqueMachines: Array.from(finishedMachines),
       };
-  }, [row.remainingQty, statusInfo]);
+  }, [row.remainingQty, statusInfo, row.endDate, row.startDate, machines, selectedCustomerName, row.material]);
 
   // --- Mobile & Status Logic Extraction (SIMPLIFIED - no heavy calculation) ---
   const { internalActive, internalPlanned, externalMatches, directMachine, hasAnyPlan } = useMemo(() => {
@@ -1740,6 +1801,24 @@ const MemoizedOrderRow = React.memo(({
                      );
                   }
 
+                  // Check if finished: remaining is 0 and has production history
+                  const isFinished = (displayRemaining || 0) <= 0 && hasHistory;
+                  
+                  if (isFinished) {
+                    // Get machines from internalActive/internalPlanned OR from finishedDetails
+                    const activeMachines = internalActive.length > 0 || internalPlanned.length > 0 
+                      ? [...new Set([...internalActive, ...internalPlanned])]
+                      : (finishedDetails?.uniqueMachines || []);
+                    
+                    if (activeMachines.length > 0) {
+                      return (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap border bg-green-100 text-green-700 border-green-200 w-fit">
+                          Finished on {activeMachines.join(', ')}
+                        </span>
+                      );
+                    }
+                  }
+
                   return (
                     <div className="flex flex-col gap-1.5 relative">
                       {/* Internal Active */}
@@ -1829,7 +1908,7 @@ const MemoizedOrderRow = React.memo(({
                       )}
                     </div>
                   );
-                })()}
+                  })()}
               </div>
               
               <button
@@ -1925,13 +2004,19 @@ const MemoizedOrderRow = React.memo(({
 
       {!showDyehouse && (
         <>
+          {/* Produced Qty (From Machine Logs - matches History Modal) */}
+          <td className="p-2 text-right border-r border-slate-200 font-mono font-bold text-emerald-600 bg-emerald-50/30">
+            {totalProducedFromLogs > 0 ? totalProducedFromLogs.toLocaleString() : '-'}
+          </td>
+
           {/* Remaining Qty */}
           <td className="p-0 border-r border-slate-200 font-mono font-bold">
             <input 
               type="number"
               className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 text-slate-600"
-              value={displayRemaining ?? ''}
+              value={statusInfo?.remaining && statusInfo.remaining > 0 ? statusInfo.remaining : (displayRemaining ?? '')}
               onChange={(e) => handleUpdateOrder(row.id, { remainingQty: Number(e.target.value) })}
+              title={statusInfo?.remaining && statusInfo.remaining > 0 ? "Real-time remaining from active machines" : "Planned remaining"}
             />
           </td>
 
@@ -1993,13 +2078,15 @@ const MemoizedOrderRow = React.memo(({
                     </div>
                 </div>
             )}
-            <button 
-            onClick={() => handleDeleteRow(row.id)}
-            className={`p-2 text-slate-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 ${isReadOnly ? 'hidden' : ''}`}
-            disabled={isReadOnly}
-            >
-            <Trash2 className="w-4 h-4" />
-            </button>
+            {!isReadOnly && userRole === 'admin' && (
+                <button 
+                onClick={() => handleDeleteRow(row.id)}
+                className="p-2 text-slate-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                title="Delete Row (Admin Only)"
+                >
+                <Trash2 className="w-4 h-4" />
+                </button>
+            )}
         </div>
       </td>
     </tr>
@@ -2007,66 +2094,221 @@ const MemoizedOrderRow = React.memo(({
     {/* Mobile Card View Row */}
     <tr 
       data-fabric-name={row.material}
-      className="card-view sm:hidden border-b border-slate-200 last:border-0"
+      className={`card-view sm:hidden block bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden active:shadow-md transition-all h-full ${isSelected ? 'ring-2 ring-blue-500 border-transparent shadow-blue-100' : ''}`}
     >
-      <td colSpan={100} className="p-0 block w-full whitespace-normal">
-         <div className={`p-4 flex flex-col gap-3 ${isSelected ? 'bg-blue-50' : 'bg-white'}`}>
-            {/* Header: Fabric & Checkbox */}
-            <div className="flex justify-between items-start gap-2">
-                <div className="flex items-center gap-3 flex-1 min-w-0">
-                    <button onClick={() => toggleSelectRow(row.id)} className={`flex-shrink-0 w-6 h-6 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-slate-300 text-slate-300'}`}>
-                       {isSelected && <CheckSquare size={14} />}
-                    </button>
-                    <div className="min-w-0">
-                         <div className="font-bold text-slate-800 text-sm leading-tight break-words">{fabrics.find(f => f.name === row.material)?.shortName || row.material}</div>
-                         {row.variantId && <div className="text-[10px] text-amber-600 font-medium truncate">Variant Selected</div>}
-                    </div>
+      <td colSpan={100} className="p-0 block w-full h-full whitespace-normal">
+         <div className={`p-3.5 flex flex-col gap-3 h-full ${isSelected ? 'bg-blue-50/30' : 'bg-white'}`}>
+            {/* Top Header: Image, Name, Status Badge */}
+            <div className="flex gap-3">
+                {/* Fabric Image */}
+                <div className="flex-shrink-0 relative group/mobile-img">
+                    {fabricDetails?.imageUrl ? (
+                        <div className="relative">
+                            <img 
+                              src={fabricDetails.imageUrl} 
+                              alt={row.material}
+                              className="w-16 h-16 object-cover rounded-2xl border border-slate-200 shadow-sm"
+                            />
+                            {!isReadOnly && (
+                              <label className="absolute -bottom-1 -right-1 p-1 bg-white rounded-full shadow-md border border-slate-100 cursor-pointer hover:bg-blue-50 text-blue-600 z-10">
+                                <Camera size={10} />
+                                <input 
+                                  type="file" 
+                                  accept="image/*" 
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file && fabricDetails?.id) {
+                                      onUploadFabricImage(fabricDetails.id, file);
+                                    }
+                                  }}
+                                />
+                              </label>
+                            )}
+                        </div>
+                    ) : (
+                        <label className="w-16 h-16 bg-slate-50 border border-dashed border-slate-200 rounded-2xl flex items-center justify-center text-slate-300 cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all">
+                            <div className="flex flex-col items-center">
+                                <ImageIcon size={20} className="mb-0.5" />
+                                <span className="text-[8px] font-bold">ADD</span>
+                            </div>
+                            {!isReadOnly && fabricDetails?.id && (
+                              <input 
+                                type="file" 
+                                accept="image/*" 
+                                className="hidden"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file && fabricDetails?.id) {
+                                    onUploadFabricImage(fabricDetails.id, file);
+                                  }
+                                }}
+                              />
+                            )}
+                        </label>
+                    )}
                 </div>
-                {/* Actions */}
-                <div className="flex items-center gap-1">
-                     <button onClick={() => onOpenHistory(row)} className={`p-2 rounded-full ${hasHistory ? 'bg-orange-100 text-orange-600' : 'bg-slate-100 text-slate-400'}`}>
-                        <History size={14} />
-                     </button>
-                     <button onClick={() => setIsExpanded(!isExpanded)} className={`p-2 rounded-full transition-colors ${isExpanded ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-500'}`}>
-                        {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                     </button>
+                
+                <div className="flex-1 min-w-0 flex flex-col py-0.5 justify-center">
+                     <h3 className="text-sm font-bold text-slate-900 leading-tight">
+                        {fabricDetails?.shortName || row.material}
+                     </h3>
                 </div>
             </div>
 
-            {/* Status Section */}
-            <div className="flex flex-wrap gap-1 items-center min-h-[24px]">
-                 {showDyehouse ? (
-                    // 1. Dyehouse View Status
-                    <>
-                         <div className="bg-slate-100 px-2 py-0.5 rounded text-[10px] border border-slate-200 font-mono text-slate-500">
-                             Sent: <span className="font-bold text-blue-600">{totalSent > 0 ? totalSent : '-'}</span>
-                         </div>
-                         <div className="bg-slate-100 px-2 py-0.5 rounded text-[10px] border border-slate-200 font-mono text-slate-500">
-                             Rcv: <span className="font-bold text-emerald-600">{totalReceived > 0 ? totalReceived : '-'}</span>
-                         </div>
-                         {assignedMachinesSummary && Array.isArray(assignedMachinesSummary) && assignedMachinesSummary.map((part, idx) => (
-                             <span key={idx} className="bg-slate-50 text-slate-700 font-mono text-[10px] px-1.5 py-0.5 rounded border border-slate-200">
-                                {part.capacity}kg x{part.count}
-                             </span>
-                         ))}
-                    </>
-                 ) : (
-                    // 2. Standard View Status
-                    <>
-                        {!hasAnyPlan && displayRemaining <= 0 && <span className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded text-[10px] border border-slate-200 font-medium">Finished</span>}
-                        {!hasAnyPlan && displayRemaining > 0 && <button onClick={() => onOpenCreatePlan(row)} className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] border border-amber-200 font-medium flex items-center gap-1">Not Planned <Plus size={10}/></button>}
-                        
-                        {internalActive.map((m: string, i: number) => <span key={`${m}-${i}`} className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[10px] border border-emerald-200 font-medium">{m}</span>)}
-                        {directMachine && <span className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded text-[10px] border border-emerald-200 font-medium">{directMachine.name}</span>}
-                        {externalMatches.map((m: any, idx: number) => <span key={`${m.factoryName}-${idx}`} className="bg-cyan-100 text-cyan-700 px-2 py-0.5 rounded text-[10px] border border-cyan-200 font-medium">{m.factoryName}</span>)}
-                    </>
-                 )}
+            {/* Badges Flow */}
+            <div className="flex flex-wrap items-center gap-1.5">
+                {row.variantId ? (
+                <span className="text-[8px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-full font-bold border border-indigo-100">Variant</span>
+                ) : fabricDetails?.variants?.length > 0 && (
+                <span className="text-[8px] bg-red-50 text-red-600 px-1.5 py-0.5 rounded-full font-bold border border-red-100 flex items-center gap-1">
+                    <AlertTriangle size={8} /> No Variant
+                </span>
+                )}
+                {row.isPrinted && (
+                <span className="text-[8px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded-full font-bold flex items-center gap-1 border border-emerald-100">
+                    <CheckCircle2 size={9} /> Printed
+                </span>
+                )}
+                {hasHistory && (
+                <span className="text-[8px] bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded-full font-bold border border-orange-100 italic">History ✓</span>
+                )}
             </div>
 
-            {/* Metrics Grid */}
-            <div className="grid grid-cols-2 gap-3 mt-1">
-                 <div className="bg-slate-50 p-2 rounded border border-slate-100">
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-1">Ordered</span>
+            {/* Status-First Action Dashboard - Compact */}
+            <div className="border border-slate-200 rounded-2xl p-0.5 grid grid-cols-6 gap-0.5 bg-slate-50">
+                 {/* Machine / Production Plan */}
+                 <button 
+                    onClick={() => onOpenCreatePlan(row)}
+                    className={`flex flex-col items-center justify-center py-2 rounded-xl transition-all ${hasAnyPlan ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-500'}`}
+                 >
+                    <Factory size={12} className="mb-0.5" />
+                    <span className="text-[6.5px] font-bold uppercase tracking-tighter">Plan</span>
+                 </button>
+                 
+                 {/* Dyehouse Plan */}
+                 <button 
+                    onClick={() => setShowDyehouseModal(true)}
+                    className={`flex flex-col items-center justify-center py-2 rounded-xl transition-all ${(row.dyeingPlan?.length || 0) > 0 ? 'bg-cyan-100 text-cyan-700' : 'text-slate-400 hover:text-slate-500'}`}
+                 >
+                    <Droplets size={12} className="mb-0.5" />
+                    <span className="text-[6.5px] font-bold uppercase tracking-tighter">Dye</span>
+                 </button>
+
+                 {/* Yarn Requirements */}
+                 <button 
+                    onClick={() => setShowYarnModal(true)}
+                    className={`flex flex-col items-center justify-center py-2 rounded-xl transition-all ${hasComposition ? 'bg-blue-100 text-blue-700' : 'text-slate-400 hover:text-slate-500'}`}
+                 >
+                    <Layers size={12} className="mb-0.5" />
+                    <span className="text-[6.5px] font-bold uppercase tracking-tighter">Yarn</span>
+                 </button>
+
+                 {/* Print Report */}
+                 <button 
+                    onClick={() => {
+                       const rawActive = statusInfo?.active || [];
+                       const internalActive = rawActive.filter((m: string) => !m.endsWith('(Ext)'));
+                       const internalPlanned = statusInfo?.planned || [];
+                       onOpenProductionOrder(row, internalActive, internalPlanned);
+                    }}
+                    className={`flex flex-col items-center justify-center py-2 rounded-xl transition-all ${row.isPrinted ? 'bg-emerald-100 text-emerald-700' : 'text-slate-400 hover:text-slate-500'}`}
+                 >
+                    <FileText size={12} className="mb-0.5" />
+                    <span className="text-[6.5px] font-bold uppercase tracking-tighter">Print</span>
+                 </button>
+
+                 {/* History */}
+                 <button 
+                    onClick={() => onOpenHistory(row)}
+                    className={`flex flex-col items-center justify-center py-2 rounded-xl transition-all ${hasHistory ? 'bg-orange-100 text-orange-700' : 'text-slate-400 hover:text-slate-500'}`}
+                 >
+                    <History size={12} className="mb-0.5" />
+                    <span className="text-[6.5px] font-bold uppercase tracking-tighter">Hist</span>
+                 </button>
+
+                 {/* Expansion Toggle */}
+                 <button 
+                    onClick={() => setIsExpanded(!isExpanded)}
+                    className={`flex flex-col items-center justify-center py-2 rounded-xl transition-all ${isExpanded ? 'bg-slate-200 text-slate-700' : 'text-slate-400 hover:text-slate-500'}`}
+                 >
+                    <Calculator size={12} className="mb-0.5" />
+                    <span className="text-[6.5px] font-bold uppercase tracking-tighter">{isExpanded ? 'Hide' : 'More'}</span>
+                 </button>
+            </div>
+
+            {/* BIG STATUS SECTION (Finished / Working / Planned) */}
+            <div className="flex-1 flex flex-col justify-center">
+                {(() => {
+                    // Check if finished
+                    const isFinished = (displayRemaining || 0) <= 0 && (hasHistory || totalReceived >= row.requiredQty);
+                    
+                    if (isFinished) {
+                        const finishedMachines = finishedDetails?.uniqueMachines || internalActive;
+                        return (
+                            <div className="bg-emerald-600/70 text-white rounded-xl p-2 shadow-md shadow-emerald-50 flex flex-col items-center justify-center text-center animate-in zoom-in-95 h-full">
+                                <CheckCircle2 size={14} className="mb-1 opacity-80" />
+                                <h4 className="text-[8px] font-bold uppercase tracking-widest opacity-70">Finished</h4>
+                                <div className="text-xs font-bold mt-0.5 leading-tight line-clamp-1">
+                                    {finishedMachines.length > 0 ? finishedMachines.join(' & ').substring(0, 12) : 'COMPLETED'}
+                                </div>
+                                {finishedDetails?.lastDate && <div className="text-[7px] font-medium mt-1 bg-white/20 px-1.5 py-0.25 rounded-full">{finishedDetails.lastDate}</div>}
+                            </div>
+                        );
+                    }
+
+                    if (internalActive.length > 0 || directMachine) {
+                        const workingMachines = [...new Set([...internalActive, directMachine ? directMachine.name : ''].filter(Boolean))];
+                        return (
+                            <div className="bg-indigo-600/80 text-white rounded-2xl p-3 shadow-md shadow-indigo-50 flex flex-col items-center justify-center text-center animate-in zoom-in-95 h-full">
+                                <div className="flex gap-1 mb-1.5">
+                                    <div className="w-1 h-1 rounded-full bg-emerald-400 animate-ping"></div>
+                                    <div className="w-1 h-1 rounded-full bg-emerald-400"></div>
+                                </div>
+                                <h4 className="text-[9px] font-bold uppercase tracking-widest opacity-70">Working</h4>
+                                <div className="text-sm font-black mt-0.5 leading-tight uppercase line-clamp-2">
+                                    {workingMachines.join(' & ')}
+                                </div>
+                                <div className="text-[8px] font-medium mt-1.5 bg-white/20 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                    <Clock size={8} /> IN PRODUCTION
+                                </div>
+                            </div>
+                        );
+                    }
+
+                    if (internalPlanned.length > 0 || externalMatches.length > 0) {
+                        const plannedDest = [...new Set([...internalPlanned, ...externalMatches.map(m => m.factoryName)])];
+                        return (
+                            <div className="bg-blue-500/80 text-white rounded-2xl p-3 shadow-md shadow-blue-50 flex flex-col items-center justify-center text-center animate-in zoom-in-95 h-full">
+                                <Calendar size={16} className="mb-1.5 opacity-80" />
+                                <h4 className="text-[9px] font-bold uppercase tracking-widest opacity-70">Planned</h4>
+                                <div className="text-sm font-black mt-0.5 leading-tight uppercase line-clamp-2">
+                                    {plannedDest.join(' & ')}
+                                </div>
+                            </div>
+                        );
+                    }
+
+                    return (
+                        <div className="bg-amber-500/80 text-white rounded-2xl p-3 shadow-md shadow-amber-50 flex flex-col items-center justify-center text-center animate-in zoom-in-95 h-full">
+                            <AlertTriangle size={16} className="mb-1.5 opacity-80" />
+                            <h4 className="text-[9px] font-bold uppercase tracking-widest opacity-70">Status</h4>
+                            <div className="text-sm font-black mt-0.5 leading-tight">UNPLANNED</div>
+                            <button 
+                                onClick={() => onOpenCreatePlan(row)}
+                                className="mt-2 text-[9px] font-bold bg-white text-amber-600 px-3 py-1 rounded-full shadow-sm active:scale-95 transition-all"
+                            >
+                                FIX NOW
+                            </button>
+                        </div>
+                    );
+                })()}
+            </div>
+
+            {/* Core Metrics Grid - Stacked for 2-column layout */}
+            <div className="grid grid-cols-1 gap-1.5">
+                 <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 flex flex-col">
+                    <span className="text-[8px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">Ordered</span>
                     <input 
                       type="number" 
                       value={row.requiredQty || ''} 
@@ -2076,141 +2318,370 @@ const MemoizedOrderRow = React.memo(({
                           if (!statusInfo || statusInfo.active.length === 0) updates.remainingQty = val;
                           handleUpdateOrder(row.id, updates);
                       }}
-                      className="w-full bg-transparent font-mono text-lg font-medium text-slate-700 outline-none p-0 border-0 focus:ring-0"
+                      className="w-full bg-transparent font-mono text-lg font-bold text-slate-700 outline-none p-0 border-0 focus:ring-0"
                     />
                  </div>
-                 {showDyehouse ? (
-                     <div className="bg-slate-50 p-2 rounded border border-slate-100 relative">
-                        <span className="text-[10px] text-slate-400 uppercase font-bold block mb-1">Capacity</span>
-                        <div className="font-mono text-lg font-medium text-slate-700">
-                            {totalCapacity}
-                            <span className="text-xs text-slate-400 ml-1">kg</span>
-                        </div>
-                        {totalCapacity < row.requiredQty && (
-                            <div className="absolute top-2 right-2 text-amber-500">
-                                <AlertTriangle size={14} />
-                            </div>
-                        )}
-                     </div>
-                 ) : (
-                     <div className="bg-slate-50 p-2 rounded border border-slate-100">
-                        <span className="text-[10px] text-slate-400 uppercase font-bold block mb-1">Remaining</span>
-                        <input 
-                        type="number" 
-                        value={displayRemaining || ''} 
-                        onChange={(e) => handleUpdateOrder(row.id, { remainingQty: Number(e.target.value) })}
-                        className="w-full bg-transparent font-mono text-lg font-medium outline-none p-0 border-0 focus:ring-0 text-slate-700"
-                        />
-                     </div>
-                 )}
+                 <div className="bg-emerald-50/50 p-2.5 rounded-xl border border-emerald-100 flex flex-col shadow-sm">
+                    <span className="text-[8px] text-emerald-600 font-bold uppercase tracking-wider mb-0.5">Produced</span>
+                    <div className="font-mono text-lg font-bold text-emerald-700">{totalProducedFromLogs > 0 ? totalProducedFromLogs.toLocaleString() : '-'}</div>
+                 </div>
+                 <div className="bg-white p-2.5 rounded-xl border border-indigo-100 flex flex-col shadow-sm">
+                    <span className="text-[8px] text-indigo-400 font-bold uppercase tracking-wider mb-0.5">Remaining</span>
+                    <div className="font-mono text-lg font-bold text-indigo-600">{statusInfo?.remaining && statusInfo.remaining > 0 ? statusInfo.remaining : (displayRemaining ?? '-')}</div>
+                 </div>
             </div>
             
-            {/* ... Dates (Unchanged) ... */}
-
-             {/* Expanded Mobile Input Section - Dyehouse Mode */}
-             {isExpanded && showDyehouse && (
-               <div className="mt-2 pt-3 border-t border-slate-100 space-y-3 animate-in fade-in slide-in-from-top-1">
-                   <div className="flex justify-between items-center mb-2">
-                       <h4 className="text-xs font-bold text-slate-700 flex items-center gap-2">
-                           <Droplets size={12} className="text-blue-500" />
-                           Dyeing Batches
-                       </h4>
-                       {/* Placeholder for future Add Batch functionality */}
-                       <div className="hidden"></div>
-                   </div>
-                   
-                   <div className="space-y-4">
-                       {(row.dyeingPlan || []).map((batch, idx) => (
-                           <div key={idx} className="bg-slate-50 rounded border border-slate-200 p-3 shadow-sm relative">
-                               {/* Color Header */}
-                               <div className="flex justify-between items-start mb-2 border-b border-slate-200 pb-2">
-                                   <div className="flex items-center gap-2">
-                                       <div 
-                                            className="w-4 h-4 rounded-full border border-slate-300 shadow-sm"
-                                            style={{ backgroundColor: batch.colorHex || '#ffffff' }}
-                                       />
-                                       <span className="font-bold text-sm text-slate-800">{batch.color || 'No Color'}</span>
-                                   </div>
-                                    <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold ${
-                                        batch.status === 'received' ? 'bg-emerald-100 text-emerald-700' :
-                                        batch.status === 'sent' ? 'bg-blue-100 text-blue-700' :
-                                        'bg-indigo-100 text-indigo-700'
-                                    }`}>
-                                        {(batch.status === 'draft' ? 'pending' : batch.status) || 'Pending'}
-                                    </span>
-                               </div>
-                               
-                               {/* Key Fields Grid */}
-                               <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-                                   <div>
-                                       <label className="text-[10px] text-slate-400 block">Dyehouse</label>
-                                       <div className="font-medium text-slate-700">{batch.dyehouse || '-'}</div>
-                                   </div>
-                                   <div>
-                                       <label className="text-[10px] text-slate-400 block">Capacity</label>
-                                       <div className="font-mono font-medium text-slate-700">{batch.plannedCapacity ? `${batch.plannedCapacity}kg` : '-'}</div>
-                                   </div>
-                                   <div>
-                                       <label className="text-[10px] text-slate-400 block">Sent</label>
-                                       <div className="font-mono text-blue-600">{batch.quantitySentRaw || batch.quantitySent || '-'}</div>
-                                   </div>
-                                   <div>
-                                       <label className="text-[10px] text-slate-400 block">Received</label>
-                                       <div className="font-mono text-emerald-600">
-                                            {(() => {
-                                                const events = batch.receiveEvents || [];
-                                                const total = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
-                                                return total > 0 ? total : '-';
-                                            })()}
-                                       </div>
-                                   </div>
-                               </div>
-                               
-                               {/* Dates Footer */}
-                               <div className="mt-2 pt-2 border-t border-slate-200 flex justify-between text-[10px] text-slate-400">
-                                   <span>Sent: {formatDateShort(batch.dateSent)}</span>
-                                   <span>Dispatch: {batch.dispatchNumber || '-'}</span>
-                               </div>
-                           </div>
-                       ))}
-                   </div>
-               </div>
-             )}
-
-             {/* Expanded Mobile Input Section - Standard Mode */}
-             {isExpanded && !showDyehouse && (
-               <div className="mt-2 pt-3 border-t border-slate-100 space-y-3 animate-in fade-in slide-in-from-top-1">
+            {/* Dynamic Expanded Sections */}
+            {isExpanded && (
+               <div className="space-y-3 animate-in fade-in slide-in-from-top-3 duration-300 pointer-events-auto mt-1 col-span-full">
+                    {/* 3. Accessory Section Grid */}
                     <div className="grid grid-cols-2 gap-3">
-                        <div>
-                             <label className="text-[10px] text-slate-400 font-medium mb-1 block">Acc. Qty</label>
+                        <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                             <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Acc. Qty</label>
                              <input 
                                 type="number" 
-                                className="w-full text-xs p-2 bg-slate-50 border border-slate-200 rounded"
+                                className="w-full bg-transparent font-mono text-sm font-bold text-slate-700 outline-none"
                                 value={row.accessoryQty || ''}
                                 onChange={(e) => handleUpdateOrder(row.id, { accessoryQty: Number(e.target.value) })}
                              />
                         </div>
-                        <div>
-                             <label className="text-[10px] text-slate-400 font-medium mb-1 block">Acc. Deliveries</label>
+                        <div className="bg-purple-50 p-3 rounded-2xl border border-purple-100">
+                             <label className="text-[10px] text-purple-400 font-bold uppercase tracking-wider block mb-1">Deliveries</label>
                              <input 
                                 type="number" 
-                                className="w-full text-xs p-2 bg-purple-50 border border-purple-100 rounded text-purple-700"
+                                className="w-full bg-transparent font-mono text-sm font-bold text-purple-700 outline-none"
                                 value={row.accessoryDeliveries || ''}
                                 onChange={(e) => handleUpdateOrder(row.id, { accessoryDeliveries: Number(e.target.value) })}
                              />
                         </div>
                     </div>
-                   <div>
-                      <label className="text-[10px] text-slate-400 font-medium mb-1 block">Notes</label>
-                      <textarea 
-                        value={row.notes || ''} 
-                        onChange={(e) => handleUpdateOrder(row.id, { notes: e.target.value })}
-                        className="w-full bg-slate-50 p-2 text-xs rounded border border-slate-200 h-16 resize-none"
-                        placeholder="Add notes..."
-                      />
-                   </div>
+
+                    {/* 4. Notes Section - Conditional Visibility */}
+                    {(row.notes && row.notes.trim() !== '') ? (
+                        <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 shadow-inner">
+                            <div className="flex justify-between items-center mb-2">
+                                <label className="text-[10px] text-amber-600 font-bold uppercase tracking-widest">Internal Order Notes</label>
+                                <button onClick={() => handleUpdateOrder(row.id, { notes: '' })} className="text-amber-400 hover:text-amber-600">
+                                    <Trash2 size={12} />
+                                </button>
+                            </div>
+                            <textarea 
+                                value={row.notes} 
+                                onChange={(e) => handleUpdateOrder(row.id, { notes: e.target.value })}
+                                className="w-full bg-transparent text-sm text-amber-900 border-0 p-0 focus:ring-0 resize-none h-24 font-medium"
+                                placeholder="..."
+                            />
+                        </div>
+                    ) : (
+                        <button 
+                            onClick={() => handleUpdateOrder(row.id, { notes: ' ' })}
+                            className="w-full py-4 border-2 border-dashed border-slate-100 rounded-2xl text-slate-300 text-[10px] font-bold uppercase tracking-widest hover:bg-slate-50 hover:border-slate-200 transition-all flex items-center justify-center gap-2"
+                        >
+                            <Edit2 size={14} />
+                            Add Internal Note
+                        </button>
+                    )}
+
+                    {/* Delete Action Removed - Not displayed on mobile */}
                </div>
-             )}
+            )}
+
+            {/* Dyehouse Modal for Mobile */}
+            {showDyehouseModal && (
+              <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center" onClick={() => setShowDyehouseModal(false)}>
+                <div className="bg-white rounded-t-3xl sm:rounded-2xl w-full sm:w-[95%] sm:max-w-2xl max-h-[85vh] overflow-y-auto shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95" onClick={(e) => e.stopPropagation()}>
+                  {/* Modal Header */}
+                  <div className="sticky top-0 bg-gradient-to-r from-cyan-50 to-blue-50 px-4 py-4 sm:px-6 sm:py-5 border-b border-cyan-100 shadow-sm flex items-center justify-between rounded-t-3xl sm:rounded-t-2xl">
+                    <h2 className="text-base sm:text-lg font-bold text-cyan-900 flex items-center gap-2">
+                      <Droplets size={20} className="text-cyan-600" />
+                      صباغة الخطة
+                    </h2>
+                    <button 
+                      onClick={() => setShowDyehouseModal(false)}
+                      className="text-cyan-400 hover:text-cyan-600 hover:bg-cyan-100 p-2 rounded-lg transition-colors"
+                    >
+                      <X size={20} />
+                    </button>
+                  </div>
+
+                  {/* Orders Count Summary */}
+                  <div className="px-4 sm:px-6 py-3 bg-cyan-50/50 border-b border-cyan-100">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-600">إجمالي الدفعات:</span>
+                      <span className="font-bold text-cyan-700">{row.dyeingPlan?.length || 0} دفعة</span>
+                    </div>
+                  </div>
+
+                  {/* Batches List */}
+                  <div className="p-4 sm:p-6 space-y-3">
+                    {(!row.dyeingPlan || row.dyeingPlan.length === 0) ? (
+                      <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+                        <Droplets size={32} className="opacity-30 mb-2" />
+                        <p className="text-sm font-medium">لا توجد خطط صباغة</p>
+                      </div>
+                    ) : (
+                      row.dyeingPlan.map((batch: any, idx: number) => {
+                        const formationDateObj = batch.formationDate ? (
+                          typeof batch.formationDate === 'string' 
+                            ? new Date(batch.formationDate) 
+                            : batch.formationDate instanceof Date 
+                            ? batch.formationDate 
+                            : new Date(batch.formationDate.seconds * 1000)
+                        ) : null;
+                        
+                        const today = new Date();
+                        const daysAfterFormation = formationDateObj 
+                          ? Math.floor((today.getTime() - formationDateObj.getTime()) / (1000 * 60 * 60 * 24))
+                          : null;
+
+                        const sentTotal = (batch.sentEvents || []).reduce((sum: number, e: any) => sum + (e.quantity || 0), 0);
+                        const receivedTotal = (batch.receiveEvents || []).reduce((sum: number, e: any) => sum + (e.quantity || 0), 0);
+                        const batchRemaining = (batch.quantity || 0) - receivedTotal;
+
+                        return (
+                          <div 
+                            key={idx}
+                            className={`border-2 rounded-xl p-3 sm:p-4 transition-all cursor-pointer hover:shadow-md ${
+                              selectedBatchForDetails === idx
+                                ? 'border-cyan-500 bg-cyan-50/80 shadow-md'
+                                : 'border-slate-200 bg-white hover:border-cyan-300'
+                            }`}
+                            onClick={() => setSelectedBatchForDetails(selectedBatchForDetails === idx ? -1 : idx)}
+                          >
+                            {/* Batch Header */}
+                            <div className="flex items-start justify-between mb-2">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <div className="w-4 h-4 rounded-full border-2 border-slate-300" style={{backgroundColor: batch.colorHex || '#ffffff'}}></div>
+                                  <h3 className="font-bold text-slate-800">{batch.color || 'لون غير محدد'}</h3>
+                                </div>
+                                <p className="text-xs text-slate-500">{batch.dyehouse || 'مصبغة غير محددة'}</p>
+                              </div>
+                              <ChevronDown 
+                                size={16} 
+                                className={`text-slate-400 transition-transform ${selectedBatchForDetails === idx ? 'rotate-180' : ''}`}
+                              />
+                            </div>
+
+                            {/* Batch Metrics Grid */}
+                            <div className="grid grid-cols-2 gap-2 mb-3 pt-2 border-t border-slate-100">
+                              <div className="bg-blue-50 p-2 rounded">
+                                <div className="text-[10px] text-blue-600 font-semibold uppercase mb-0.5">الكمية</div>
+                                <div className="font-bold text-blue-900">{batch.quantity || 0}</div>
+                              </div>
+                              <div className="bg-amber-50 p-2 rounded">
+                                <div className="text-[10px] text-amber-600 font-semibold uppercase mb-0.5">بعد التشكيل</div>
+                                <div className="font-bold text-amber-900">{daysAfterFormation !== null ? `${daysAfterFormation}د` : '-'}</div>
+                              </div>
+                            </div>
+
+                            {/* Sent/Received Buttons */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenSentModal(row.id, idx, batch);
+                                }}
+                                className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all ${
+                                  sentTotal > 0
+                                    ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                                    : 'bg-slate-50 text-slate-400'
+                                }`}
+                              >
+                                <Send size={13} />
+                                <span>مرسل: {sentTotal}</span>
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenReceiveModal(row.id, idx, batch);
+                                }}
+                                className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all ${
+                                  receivedTotal > 0
+                                    ? 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                                    : 'bg-slate-50 text-slate-400'
+                                }`}
+                              >
+                                <Download size={13} />
+                                <span>مستلm: {receivedTotal}</span>
+                              </button>
+                            </div>
+
+                            {/* Expanded Details */}
+                            {selectedBatchForDetails === idx && (
+                              <div className="mt-3 pt-3 border-t border-cyan-200 space-y-2 animate-in slide-in-from-top-2">
+                                <div className="grid grid-cols-3 gap-2 text-xs">
+                                  <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/70 p-2 rounded border border-emerald-200">
+                                    <div className="text-emerald-600 font-semibold uppercase">مرسل</div>
+                                    <div className="text-lg font-bold text-emerald-700">{sentTotal}</div>
+                                  </div>
+                                  <div className="bg-gradient-to-br from-indigo-50 to-indigo-100/70 p-2 rounded border border-indigo-200">
+                                    <div className="text-indigo-600 font-semibold uppercase">مستلم</div>
+                                    <div className="text-lg font-bold text-indigo-700">{receivedTotal}</div>
+                                  </div>
+                                  <div className="bg-gradient-to-br from-orange-50 to-orange-100/70 p-2 rounded border border-orange-200">
+                                    <div className="text-orange-600 font-semibold uppercase">متبقي</div>
+                                    <div className="text-lg font-bold text-orange-700">{batchRemaining > 0 ? batchRemaining : 0}</div>
+                                  </div>
+                                </div>
+
+                                {/* Formation Date Info */}
+                                {formationDateObj && (
+                                  <div className="bg-slate-50 p-2 rounded border border-slate-200 text-xs">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-slate-600">تاريخ التشكيل:</span>
+                                      <span className="font-bold text-slate-800">{formationDateObj.toLocaleDateString('ar-EG')}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between mt-1">
+                                      <span className="text-slate-600">الأيام المستغرقة:</span>
+                                      <span className="font-bold text-amber-700">{daysAfterFormation} يوم</span>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  {/* Modal Footer */}
+                  <div className="sticky bottom-0 px-4 sm:px-6 py-3 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+                    <button
+                      onClick={() => setShowDyehouseModal(false)}
+                      className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-semibold text-sm transition-colors"
+                    >
+                      إغلاق
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Yarn Modal for Mobile */}
+            {showYarnModal && (
+              <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center" onClick={() => setShowYarnModal(false)}>
+                <div className="bg-white rounded-t-3xl sm:rounded-2xl w-full sm:w-[95%] sm:max-w-2xl max-h-[85vh] overflow-y-auto shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95" onClick={(e) => e.stopPropagation()}>
+                  {/* Modal Header */}
+                  <div className="sticky top-0 bg-gradient-to-r from-blue-50 to-blue-100 px-4 py-4 sm:px-6 sm:py-5 border-b border-blue-200 shadow-sm flex items-center justify-between rounded-t-3xl sm:rounded-t-2xl">
+                    <h2 className="text-base sm:text-lg font-bold text-blue-900 flex items-center gap-2">
+                      <Layers size={20} className="text-blue-600" />
+                      متطلبات الخيوط
+                    </h2>
+                    <button 
+                      onClick={() => setShowYarnModal(false)}
+                      className="text-blue-400 hover:text-blue-600 hover:bg-blue-200 p-2 rounded-lg transition-colors"
+                    >
+                      <X size={20} />
+                    </button>
+                  </div>
+
+                  {/* Yarn Total Summary */}
+                  <div className="px-4 sm:px-6 py-3 bg-blue-50/50 border-b border-blue-200">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-600">إجمالي الخيوط المطلوبة:</span>
+                      <span className="font-bold text-blue-700">{totalYarnForOrder > 0 ? totalYarnForOrder.toLocaleString() : '-'} kg</span>
+                    </div>
+                  </div>
+
+                  {/* Yarn Content */}
+                  <div className="p-4 sm:p-6">
+                    {!hasComposition ? (
+                      <div className="flex flex-col items-center justify-center py-12">
+                        <AlertCircle size={48} className="text-amber-400 mb-3 opacity-60" />
+                        <p className="text-slate-600 font-medium mb-4">لا يوجد تعريف لتكوين الخيوط</p>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCreateFabric(row.material, row.id);
+                            setShowYarnModal(false);
+                          }}
+                          className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-semibold text-sm transition-colors flex items-center gap-2"
+                        >
+                          <Plus size={16} />
+                          إضافة تعريف الخيوط
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {/* Yarn Composition Grid */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                          {activeComposition.map((comp, idx) => {
+                            const yarnQty = (row.requiredQty || 0) * (comp.percentage / 100);
+                            return (
+                              <div 
+                                key={idx}
+                                className="border-2 border-blue-100 rounded-xl p-3 sm:p-4 bg-gradient-to-br from-blue-50 to-blue-50/50 hover:border-blue-300 transition-colors"
+                              >
+                                <div className="flex items-start justify-between mb-2">
+                                  <div>
+                                    <p className="font-bold text-slate-800">{comp.name}</p>
+                                    <p className="text-xs text-blue-600 font-medium mt-0.5">{comp.percentage}% من الكمية</p>
+                                  </div>
+                                  <div className="text-right">
+                                    <div className="text-sm font-bold text-blue-700">{yarnQty.toLocaleString(undefined, { maximumFractionDigits: 1 })}</div>
+                                    <div className="text-[10px] text-slate-500">kg</div>
+                                  </div>
+                                </div>
+                                
+                                {/* Inventory Status */}
+                                <div className="pt-2 border-t border-blue-100">
+                                  <div className="text-[11px] text-slate-600 flex justify-between">
+                                    <span>المخزون المتاح:</span>
+                                    <span className="font-semibold text-slate-800">
+                                      {(() => {
+                                        const inventoryItems = inventory.filter(item => 
+                                          item.yarnName.toLowerCase().trim() === comp.name.toLowerCase().trim()
+                                        );
+                                        const totalStock = inventoryItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
+                                        let totalAllocated = 0;
+                                        inventoryItems.forEach(item => {
+                                          if (item.allocations) {
+                                            item.allocations.forEach(alloc => {
+                                              totalAllocated += (alloc.quantity || 0);
+                                            });
+                                          }
+                                        });
+                                        const netAvailable = Math.max(0, totalStock - totalAllocated);
+                                        return netAvailable.toLocaleString(undefined, { maximumFractionDigits: 1 });
+                                      })()}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* Manual Allocation Button */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenFabricDetails(row.material, row.requiredQty || 0, row.id);
+                            setShowYarnModal(false);
+                          }}
+                          className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-blue-200 shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all"
+                        >
+                          <Calculator size={16} />
+                          تعديل توزيع الخيوط يدويا
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Modal Footer */}
+                  <div className="sticky bottom-0 px-4 sm:px-6 py-3 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+                    <button
+                      onClick={() => setShowYarnModal(false)}
+                      className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-semibold text-sm transition-colors"
+                    >
+                      إغلاق
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
          </div>
       </td>
     </tr>
@@ -3533,11 +4004,14 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const [showYarnRequirements, setShowYarnRequirements] = useState(false);
   const [selectedYarnDetails, setSelectedYarnDetails] = useState<any>(null);
   const [showDyehouse, setShowDyehouse] = useState(userRole === 'dyehouse_manager');
+  const [dyehousePlanningModal, setDyehousePlanningModal] = useState<{isOpen: boolean, order: OrderRow | null}>({isOpen: false, order: null});
 //   const [showDyehouseImport, setShowDyehouseImport] = useState(false);
   // const [showRemainingWork, setShowRemainingWork] = useState(false); // Removed
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
   const [externalFactories, setExternalFactories] = useState<any[]>([]);
   const [externalScrapMap, setExternalScrapMap] = useState<Record<string, number>>({});
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [selectedClientsForExport, setSelectedClientsForExport] = useState<Set<string>>(new Set());
 
   // Column Visibility State (localStorage for user-only persistence)
   const [manageColorsVisibleColumns, setManageColorsVisibleColumns] = useState<Record<string, boolean>>(() => {
@@ -3979,74 +4453,223 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
 
   // --- Optimization: Pre-calculate Stats Map ---
-  // --- Optimization: Pre-calculate Stats Map (LIGHT VERSION) ---
+  const [showDebug, setShowDebug] = useState(false);
+
+  // --- Optimization: Pre-calculate Stats Map (With Dates, Scrap, and Others) ---
   const statsMap = useMemo(() => {
     if (!selectedCustomer) return new Map();
     
-    const map = new Map<string, any>();
+    // Structure: fabric -> { active: [], planned: [], logDates: [], planStarts: [], planEnds: [], totalScrap: 0 }
+    const intermediateMap = new Map<string, {
+        active: string[];
+        planned: string[];
+        logDates: string[];
+        planStarts: string[];
+        planEnds: string[];
+        totalScrap: number;
+        remainingFromMachine?: number;
+    }>();
+
     const clientName = selectedCustomer.name;
+    const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+    const normCurrentClient = normalize(clientName);
 
-    // We only care about fabrics in the current order list
+    // 1. Initialize keys for relevant fabrics
     const relevantFabrics = new Set(selectedCustomer.orders.map(o => o.material).filter(Boolean));
+    relevantFabrics.forEach(f => {
+        intermediateMap.set(f, { active: [], planned: [], logDates: [], planStarts: [], planEnds: [], totalScrap: 0, remainingFromMachine: 0 });
+    });
 
-    relevantFabrics.forEach(fabric => {
-        const activeMachines: string[] = [];
-        const plannedMachines: string[] = [];
+    // 2. Scan Machines (Single Pass)
+    machines.forEach(m => {
+        // A. Active Order - Match FetchDataPage Logic (Real or Virtual Log)
+        // ------------------------------------------------------------------
+        // Determine "Effective" status/client/fabric for the Active Day
+        
+        let effectiveStatus = '';
+        let effectiveClient = '';
+        let effectiveFabric = '';
+        let hasActiveLog = false;
 
-        // 1. Scan Machines for Active/Planned orders (Direct properties only, no logs)
-        machines.forEach(m => {
-            const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
-            const normClient = normalize(clientName);
-            const normFabric = normalize(fabric);
+        const activeLog = m.dailyLogs?.find(l => l.date === activeDay);
 
-            // Check if machine is currently working on this client/fabric
-            if (m.activeOrder) {
-                const activeClient = normalize(m.activeOrder.clientName);
-                const activeFabric = normalize(m.activeOrder.material);
-                if (activeClient === normClient && activeFabric === normFabric) {
-                    activeMachines.push(m.name);
+        if (activeLog) {
+            // Case 1: Real Log Exists for Today
+            effectiveStatus = activeLog.status || '';
+            effectiveClient = activeLog.client || '';
+            effectiveFabric = activeLog.fabric || '';
+            hasActiveLog = true;
+        } else {
+            // Case 2: No Log -> Check "Virtual Log" (Carry over from last known state)
+            // This matches FetchDataPage logic which creates a virtual log if none exists
+            const sortedLogs = (m.dailyLogs || []).filter(l => l.date < activeDay).sort((a,b) => b.date.localeCompare(a.date));
+            const lastLog = sortedLogs[0];
+            
+            effectiveStatus = lastLog ? lastLog.status : (m.status || '');
+            effectiveClient = lastLog ? lastLog.client : (m.client || '');
+            effectiveFabric = lastLog ? lastLog.fabric : (m.material || '');
+        }
+
+        // Normalize
+        const normEffectiveClient = normalize(effectiveClient);
+        const lowerStatus = (effectiveStatus || '').trim().toLowerCase();
+        
+        // Define what considers as "Active"
+        // Also include 'finished' states to show them as recently active but done
+        const isActiveState = ['working', 'active', 'under operation', 'تعمل', 'تشغيل', 'تحت التشغيل'].includes(lowerStatus);
+        const isFinishedState = ['finished', 'completed', 'done', 'منتهي', 'تم', 'finish'].includes(lowerStatus);
+
+        if (isActiveState || isFinishedState) {
+            if (normEffectiveClient === normCurrentClient && relevantFabrics.has(effectiveFabric)) {
+                 const entry = intermediateMap.get(effectiveFabric);
+                 if (entry) {
+                     // If finished, append label
+                     const displayName = isFinishedState ? `${m.name} (Finished)` : m.name;
+                     if (!entry.active.includes(displayName)) entry.active.push(displayName);
+                     
+                     // If it's active today from a REAL log, use accurate remaining props?
+                     // If virtual, use last log's remaining (which might be old)
+                     const remaining = activeLog ? Number(activeLog.remainingMfg || m.remainingMfg) : Number(m.remainingMfg);
+                     if (remaining) entry.remainingFromMachine = (entry.remainingFromMachine || 0) + remaining;
+                 }
+            }
+        } else if (m.activeOrder) {
+            // Fallback to legacy activeOrder object if status check didn't catch it
+            const activeClient = normalize(m.activeOrder.clientName);
+            const activeFabric = m.activeOrder.material; 
+            
+            if (activeClient === normCurrentClient && relevantFabrics.has(activeFabric)) {
+                const entry = intermediateMap.get(activeFabric);
+                if (entry) {
+                    if (!entry.active.includes(m.name)) entry.active.push(m.name);
+                    if (m.activeOrder.startDate) entry.planStarts.push(m.activeOrder.startDate);
                 }
             }
+        }
 
-            // Check if machine has this client/fabric in future plans
-            m.futurePlans?.forEach(plan => {
-                const planClient = normalize(plan.client);
-                const planFabric = normalize(plan.fabric);
-                if (planClient === normClient && planFabric === normFabric) {
-                    if (!plannedMachines.includes(m.name)) plannedMachines.push(m.name);
-                }
-            });
+        // B. Future Plans
+        m.futurePlans?.forEach(plan => {
+            const planClient = normalize(plan.client);
+            const planFabric = plan.fabric; 
+
+            if (planClient === normCurrentClient && relevantFabrics.has(planFabric)) {
+                 const entry = intermediateMap.get(planFabric);
+                 if (entry) {
+                     if (!entry.planned.includes(m.name)) entry.planned.push(m.name);
+                     if (plan.startDate) entry.planStarts.push(plan.startDate);
+                     if (plan.endDate) entry.planEnds.push(plan.endDate);
+                 }
+            }
         });
 
-        // 2. Scan External Factories
-        externalFactories.forEach(factory => {
-            factory.plans?.forEach((plan: any) => {
-                const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
-                const planClient = normalize(plan.client);
-                const planFabric = normalize(plan.fabric);
-                if (planClient === normalize(clientName) && planFabric === normalize(fabric)) {
-                    if (plan.status === 'ACTIVE') {
-                        activeMachines.push(`${factory.name} (Ext)`);
-                    } else if (plan.status !== 'COMPLETED') {
-                        plannedMachines.push(`${factory.name} (Ext)`);
-                    }
-                }
-            });
-        });
-
-        map.set(fabric, {
-            active: activeMachines,
-            planned: plannedMachines,
-            remaining: 0, // Removed dynamic log-based calculation
-            scrap: 0,     // Removed dynamic log-based calculation
-            startDate: '-',
-            endDate: '-',
-            others: ''
+        // C. History Logs (Scrap + Dates)
+        m.dailyLogs?.forEach(log => {
+             const logClient = normalize(log.client);
+             const logFabric = log.fabric;
+             
+             if (logClient === normCurrentClient && relevantFabrics.has(logFabric)) {
+                 const entry = intermediateMap.get(logFabric);
+                 if (entry) {
+                     if (log.date) entry.logDates.push(log.date);
+                     if (log.scrap) entry.totalScrap += Number(log.scrap);
+                 }
+             }
         });
     });
 
-    return map;
-  }, [selectedCustomer, machines, externalFactories]);
+    // 3. Scan External Factories
+    externalFactories.forEach(factory => {
+        factory.plans?.forEach((plan: any) => {
+            const planClient = normalize(plan.client);
+            const planFabric = plan.fabric;
+            if (planClient === normCurrentClient && relevantFabrics.has(planFabric)) {
+                const entry = intermediateMap.get(planFabric);
+                if (entry) {
+                    if (plan.status === 'ACTIVE') {
+                        entry.active.push(`${factory.name} (Ext)`);
+                    } else if (plan.status !== 'COMPLETED') {
+                        entry.planned.push(`${factory.name} (Ext)`);
+                    }
+                    if (plan.startDate) entry.planStarts.push(plan.startDate);
+                    if (plan.endDate) entry.planEnds.push(plan.endDate);
+                }
+            }
+        });
+    });
+
+    // 4. Calculate "Others" (Which other clients ordered this fabric?)
+    // We iterate through ALL customers to find matches.
+    const fabricToOthersMap = new Map<string, Set<string>>();
+    customers.forEach(bgClient => {
+        // Skip the current client
+        if (bgClient.id === selectedCustomer.id) return;
+        
+        bgClient.orders.forEach(o => {
+            if (o.material && relevantFabrics.has(o.material)) {
+                if (!fabricToOthersMap.has(o.material)) {
+                    fabricToOthersMap.set(o.material, new Set());
+                }
+                const shortName = bgClient.name.split(' ')[0]; // Use first name for brevity
+                fabricToOthersMap.get(o.material)?.add(shortName);
+            }
+         });
+    });
+
+    // 5. Finalize Map (Min/Max calc + Scrap + Others)
+    const finalMap = new Map<string, any>();
+    intermediateMap.forEach((data, fabric) => {
+        // Sort dates to find min/max
+        data.logDates.sort(); // String sort works for YYYY-MM-DD
+        data.planStarts.sort();
+        data.planEnds.sort();
+
+        // Priority 1: Plans
+        // Priority 2: History
+        
+        let startDate = '-';
+        let endDate = '-';
+
+        // Start Date Logic: Earliest Plan OR Earliest Log
+        const earliestPlan = data.planStarts.length > 0 ? data.planStarts[0] : null;
+        const earliestLog = data.logDates.length > 0 ? data.logDates[0] : null;
+        
+        if (earliestPlan && earliestLog) {
+            startDate = earliestPlan < earliestLog ? earliestPlan : earliestLog;
+        } else {
+            startDate = earliestPlan || earliestLog || '-';
+        }
+
+        // End Date Logic: Latest Plan OR Latest Log
+        const latestPlan = data.planEnds.length > 0 ? data.planEnds[data.planEnds.length - 1] : null;
+        const latestLog = data.logDates.length > 0 ? data.logDates[data.logDates.length - 1] : null;
+
+        if (latestPlan && latestLog) {
+            endDate = latestPlan > latestLog ? latestPlan : latestLog;
+        } else {
+            endDate = latestPlan || latestLog || '-';
+        }
+
+        // Formatting Others string
+        const othersSet = fabricToOthersMap.get(fabric);
+        const othersStr = othersSet ? Array.from(othersSet).join(' + ') : '';
+        
+        // Calculate Remaining: If we have machine live data use that, otherwise use 0 (logic handles fallback elsewhere, or we can pipe it up)
+        // For now, we just pass it in the object
+        const finalRemaining = data.remainingFromMachine && data.remainingFromMachine > 0 ? data.remainingFromMachine : 0;
+
+        finalMap.set(fabric, {
+            active: data.active,
+            planned: data.planned,
+            remaining: finalRemaining,
+            scrap: data.totalScrap,
+            startDate: startDate,
+            endDate: endDate,
+            others: othersStr
+        });
+    });
+
+    return finalMap;
+  }, [selectedCustomer, machines, externalFactories, customers, activeDay]);
 
   const allClientsStats = useMemo(() => {
     if (selectedCustomerId !== ALL_CLIENTS_ID) return [];
@@ -5074,12 +5697,11 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       };
 
       return [...orders].sort((a, b) => {
-          const tierDiff = getOrderTier(a) - getOrderTier(b);
-          if (tierDiff !== 0) return tierDiff;
-          // Within same tier, group by fabric name so same fabrics appear together
-          const matA = (a.material || '').toLowerCase();
-          const matB = (b.material || '').toLowerCase();
-          return matA.localeCompare(matB);
+          // Maintain insertion order only - no tier or fabric sorting
+          // This keeps new rows at the bottom and prevents them from jumping around
+          const createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return createdA - createdB;
       });
   }, [selectedCustomer, machineFilter, machines, externalFactories]);
 
@@ -5374,53 +5996,338 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     XLSX.writeFile(wb, `${selectedCustomer?.name || 'Orders'}_DyehousePlan.xlsx`);
   };
 
-  const exportStyledOrders = () => {
+  // Export Clients Selection Modal
+  const ExportClientsModal = ({ isOpen, onClose, onExport }: { isOpen: boolean; onClose: () => void; onExport: (selected: Set<string>) => void }) => {
+    const [localSelected, setLocalSelected] = useState<Set<string>>(new Set());
+    const [searchTerm, setSearchTerm] = useState('');
+
+    useEffect(() => {
+      setLocalSelected(new Set(selectedClientsForExport));
+      setSearchTerm('');
+    }, [isOpen]);
+
+    const toggleClient = (clientId: string) => {
+      const newSelected = new Set(localSelected);
+      if (newSelected.has(clientId)) {
+        newSelected.delete(clientId);
+      } else {
+        newSelected.add(clientId);
+      }
+      setLocalSelected(newSelected);
+    };
+
+    const selectAllClients = () => {
+      if (localSelected.size === filteredClients.length) {
+        setLocalSelected(new Set());
+      } else {
+        setLocalSelected(new Set(filteredClients.map(c => c.id)));
+      }
+    };
+
+    const filteredClients = customers.filter(client =>
+      client.name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    if (!isOpen) return null;
+
+    return (
+      <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl h-fit max-h-[80vh] overflow-hidden flex flex-col">
+          {/* Header */}
+          <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-gradient-to-r from-indigo-50 to-blue-50">
+            <h3 className="font-bold text-lg text-slate-800 flex items-center gap-2">
+              <Users className="text-indigo-600" size={20} />
+              Select Clients to Export
+            </h3>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 hover:bg-slate-100 rounded transition-colors">
+              <X size={20} />
+            </button>
+          </div>
+
+          {/* Search Bar */}
+          <div className="p-4 border-b border-slate-100 bg-white">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search clients..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 transition-all"
+              />
+            </div>
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 overflow-y-auto p-5 bg-slate-50/30">
+            {/* Select All Button */}
+            <button
+              onClick={selectAllClients}
+              className={`w-full mb-4 px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                localSelected.size === filteredClients.length && filteredClients.length > 0
+                  ? 'bg-indigo-50 text-indigo-600 border-indigo-200'
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              {localSelected.size === filteredClients.length && filteredClients.length > 0
+                ? '✓ Deselect All '
+                : `Select All (${filteredClients.length})`}
+            </button>
+
+            {/* Divider */}
+            <div className="h-px bg-slate-200 mb-4"></div>
+
+            {/* Client Grid */}
+            {filteredClients.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {filteredClients.map(client => (
+                  <button
+                    key={client.id}
+                    onClick={() => toggleClient(client.id)}
+                    className={`text-left p-3 rounded-lg border-2 transition-all ${
+                      localSelected.has(client.id)
+                        ? 'bg-indigo-50 border-indigo-400 shadow-md'
+                        : 'bg-white border-slate-200 hover:border-indigo-200 hover:shadow-sm'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center mt-0.5 ${
+                        localSelected.has(client.id)
+                          ? 'bg-indigo-600 border-indigo-600'
+                          : 'border-slate-300'
+                      }`}>
+                        {localSelected.has(client.id) && (
+                          <Check size={14} className="text-white" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-slate-800 truncate">{client.name}</div>
+                        <div className="text-xs text-slate-500 mt-1">
+                          {flatOrders.filter(o => o.customerId === client.id).length} order{flatOrders.filter(o => o.customerId === client.id).length !== 1 ? 's' : ''}
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-12 text-slate-400">
+                {customers.length === 0 ? 'No clients available' : 'No clients matching your search'}
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-3 justify-end">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 border border-slate-200 hover:bg-slate-100 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                setSelectedClientsForExport(localSelected);
+                onExport(localSelected);
+                onClose();
+              }}
+              disabled={localSelected.size === 0}
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Export ({localSelected.size})
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const exportStyledOrders = (selectedCustomerIds?: Set<string>) => {
     // 1. Setup Workbook
     const wb = XLSX.utils.book_new();
 
     // 2. Define Styles
+    const THEME_HEADER_GREEN = "1B4824"; // Deep Green
+    const THEME_LIGHT_BG = "EBF1DE"; // Light Green/Beige
+    const THEME_BORDER_COLOR = { auto: 1 };
+    
+    const dashboardHeaderStyle = {
+      font: { name: "Calibri", sz: 14, bold: true, color: { rgb: "000000" } }, // Black text
+      alignment: { horizontal: "center", vertical: "center" },
+      fill: { fgColor: { rgb: "FFFFFF" } } // White background for crisp look or THEME_LIGHT_BG
+    };
+    
+    // Main Headers (Professional Green Theme)
     const headerStyle = {
-      font: { name: "Calibri", sz: 12, bold: true, color: { rgb: "FFFFFF" } },
-      fill: { fgColor: { rgb: "4CAF50" } }, // Green
+      font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "FFFFFF" } },
+      fill: { fgColor: { rgb: THEME_HEADER_GREEN } },
       alignment: { horizontal: "center", vertical: "center", wrapText: true },
       border: {
-        top: { style: "thin", color: { rgb: "E2E8F0" } },
-        bottom: { style: "thin", color: { rgb: "E2E8F0" } },
-        left: { style: "thin", color: { rgb: "E2E8F0" } },
-        right: { style: "thin", color: { rgb: "E2E8F0" } }
+        top: { style: "thin", color: THEME_BORDER_COLOR },
+        bottom: { style: "thin", color: THEME_BORDER_COLOR },
+        left: { style: "thin", color: THEME_BORDER_COLOR },
+        right: { style: "thin", color: THEME_BORDER_COLOR }
+      }
+    };
+    
+    // Status-based fabric name colors
+    const fabricFinishedStyle = {
+      font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "FFFFFF" } },
+      fill: { fgColor: { rgb: "10B981" } }, // Green
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      border: {
+        top: { style: "thin", color: THEME_BORDER_COLOR },
+        bottom: { style: "thin", color: THEME_BORDER_COLOR },
+        left: { style: "thin", color: THEME_BORDER_COLOR },
+        right: { style: "thin", color: THEME_BORDER_COLOR }
+      }
+    };
+    
+    const fabricActiveStyle = {
+      font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "000000" } },
+      fill: { fgColor: { rgb: "FBBF24" } }, // Yellow/Amber
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      border: {
+        top: { style: "thin", color: THEME_BORDER_COLOR },
+        bottom: { style: "thin", color: THEME_BORDER_COLOR },
+        left: { style: "thin", color: THEME_BORDER_COLOR },
+        right: { style: "thin", color: THEME_BORDER_COLOR }
+      }
+    };
+    
+    const fabricPlannedStyle = {
+      font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "FFFFFF" } },
+      fill: { fgColor: { rgb: "EF4444" } }, // Red
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      border: {
+        top: { style: "thin", color: THEME_BORDER_COLOR },
+        bottom: { style: "thin", color: THEME_BORDER_COLOR },
+        left: { style: "thin", color: THEME_BORDER_COLOR },
+        right: { style: "thin", color: THEME_BORDER_COLOR }
       }
     };
 
     const rowStyle = {
        font: { name: "Calibri", sz: 11 },
        alignment: { horizontal: "center", vertical: "center", wrapText: true },
-       fill: { fgColor: { rgb: "E8F5E9" } }, // Light Green Rows
        border: {
-        top: { style: "thin", color: { rgb: "E2E8F0" } },
-        bottom: { style: "thin", color: { rgb: "E2E8F0" } },
-        left: { style: "thin", color: { rgb: "E2E8F0" } },
-        right: { style: "thin", color: { rgb: "E2E8F0" } }
+        top: { style: "thin", color: THEME_BORDER_COLOR },
+        bottom: { style: "thin", color: THEME_BORDER_COLOR },
+        left: { style: "thin", color: THEME_BORDER_COLOR },
+        right: { style: "thin", color: THEME_BORDER_COLOR }
       }
     };
 
-    // 3. Group Orders
+    const numberStyle = {
+      ...rowStyle,
+      alignment: { horizontal: "center", vertical: "center", wrapText: true }
+    };
+    
+    const footerHeaderStyle = {
+      font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "FFFFFF" } },
+      fill: { fgColor: { rgb: THEME_HEADER_GREEN } },
+      alignment: { horizontal: "center", vertical: "center" },
+      border: {
+        top: { style: "thin", color: THEME_BORDER_COLOR },
+        bottom: { style: "thin", color: THEME_BORDER_COLOR },
+        left: { style: "thin", color: THEME_BORDER_COLOR },
+        right: { style: "thin", color: THEME_BORDER_COLOR }
+      }
+    };
+
+    const footerValueStyle = {
+      font: { name: "Calibri", sz: 11, bold: true },
+      fill: { fgColor: { rgb: THEME_LIGHT_BG } },
+      alignment: { horizontal: "center", vertical: "center" },
+      border: {
+        top: { style: "thin", color: THEME_BORDER_COLOR },
+        bottom: { style: "thin", color: THEME_BORDER_COLOR },
+        left: { style: "thin", color: THEME_BORDER_COLOR },
+        right: { style: "thin", color: THEME_BORDER_COLOR }
+      }
+    };
+
+    // Helper: Calculate statusInfo for export (for any customer, not just selected)
+    const getExportStatusInfo = (order: OrderRow, customerName: string) => {
+      const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+      const normCurrentClient = normalize(customerName);
+      const normFabric = normalize(order.material);
+      
+      let active: string[] = [];
+      let planned: string[] = [];
+      let scrap = 0;
+      let remaining = order.remainingQty || 0;
+      let startDate = order.startDate || '';
+      let endDate = order.endDate || '';
+      const allDates: string[] = [];
+      
+      // Calculate "Others" - other clients using same fabric
+      const otherClientsSet = new Set<string>();
+      flatOrders.forEach(o => {
+        if (o.material === order.material && o.customerId !== order.customerId) {
+          const otherCustomer = customers.find(c => c.id === o.customerId);
+          if (otherCustomer) {
+            otherClientsSet.add(otherCustomer.name);
+          }
+        }
+      });
+      const others = Array.from(otherClientsSet).join(' + ');
+
+      machines.forEach(m => {
+        // Check active logs
+        const activeLog = m.dailyLogs?.find(l => l.date === activeDay);
+        if (activeLog && normalize(activeLog.client) === normCurrentClient && normalize(activeLog.fabric) === normFabric) {
+          active.push(m.name);
+          remaining = remaining - (Number(activeLog.quantityProduced) || 0);
+          if (activeLog.date) allDates.push(activeLog.date);
+          endDate = activeLog.date || endDate;
+        }
+
+        // Check future plans
+        m.futurePlans?.forEach(plan => {
+          if (normalize(plan.client) === normCurrentClient && normalize(plan.fabric) === normFabric) {
+            if (!planned.includes(m.name)) planned.push(m.name);
+            if (plan.startDate) allDates.push(plan.startDate);
+            if (plan.endDate) allDates.push(plan.endDate);
+          }
+        });
+
+        // Check history logs for scrap and dates
+        m.dailyLogs?.forEach(log => {
+          if (normalize(log.client) === normCurrentClient && normalize(log.fabric) === normFabric) {
+            if (log.scrap) scrap += Number(log.scrap);
+            if (log.date) allDates.push(log.date);
+          }
+        });
+      });
+
+      // Set start and end dates from all collected dates
+      if (allDates.length > 0) {
+        const sortedDates = allDates.sort();
+        startDate = startDate || sortedDates[0] || order.startDate || '';
+        endDate = endDate || sortedDates[sortedDates.length - 1] || order.endDate || '';
+      }
+
+      return { active, planned, scrap, remaining: Math.max(0, remaining), startDate, endDate, others };
+    };
+
+    // 3. Group Orders by Customer
     const ordersByCustomer: Record<string, OrderRow[]> = {};
     
-    // If a specific customer is selected, we only export that one.
-    // If "All" is selected (selectedCustomer is null), we separate by customer.
+    // Determine which customers to export
+    let customersToExport = customers;
+    if (selectedCustomerIds && selectedCustomerIds.size > 0) {
+        customersToExport = customers.filter(c => selectedCustomerIds.has(c.id));
+    }
     
-    // Use the currently filtered list as base
-    const sourceOrders = filteredOrders;
+    // Use flatOrders (all orders) instead of filteredOrders (which is filtered by currently selected customer)
+    const sourceOrders = flatOrders.filter(order => 
+        customersToExport.some(c => c.id === order.customerId)
+    );
 
     sourceOrders.forEach(order => {
-        let cName = "Unknown";
-        if (selectedCustomer) {
-            cName = selectedCustomer.name; 
-        } else {
-            // Try to resolve customer name from ID
-            const c = customers.find(x => x.id === order.customerId);
-            cName = c ? c.name : "Unknown Customer";
-        }
+        const customer = customersToExport.find(c => c.id === order.customerId);
+        const cName = customer?.name || "Unknown Customer";
         
         if (!ordersByCustomer[cName]) ordersByCustomer[cName] = [];
         ordersByCustomer[cName].push(order);
@@ -5428,62 +6335,200 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
     Object.entries(ordersByCustomer).forEach(([custName, orders]) => {
         const wsData: any[][] = [];
+        const merges: any[] = [];
+        const currentDate = new Date().toLocaleDateString('en-GB'); // DD/MM/YYYY
         
-        // Headers (English as in user request)
+        // --- 1. Dashboard Header (Top Rows) ---
+        // Row 1: "Last Update" and "Customer Name Title"
+        // Merge Customer Name across center columns
+        
+        wsData.push([
+            { v: `Last Update ${currentDate}`, s: dashboardHeaderStyle }, // A1
+            null, // B1
+            { v: `(${custName}) معرض`, s: { ...dashboardHeaderStyle, font: { name: "Calibri", sz: 16, bold: true } } }, // C1 - Center Title
+            null, null, null, null, null, // Spanning cols
+            { v: "", s: dashboardHeaderStyle } // End span
+        ]);
+        
+        // Merge the title across columns C to H (approx middle)
+        merges.push({ s: { r: 0, c: 2 }, e: { r: 0, c: 7 } });
+        // Merge "Last Update" slightly
+        merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 1 } });
+        
+        // Add empty spacer row
+        // wsData.push([]); 
+
+        // --- 2. Main Table Headers ---
+        // New Order: Material | Sort | Machine | Ordered | Acc | Manufactured | Remaining | ...
         const headers = [
-            "Fabric", 
-            "Req", 
-            "Accessory", 
-            "Manufactured", 
-            "Remaining", 
-            "Receipt", 
-            "Start", 
-            "End", 
-            "Delivered", 
-            "Delivered (Acc)", 
-            "Scrap", 
-            "Others", 
-            "Notes"
+            "الخامة",       // Material
+            "SORT",         // Sort (New Column)
+            "الماكينة",     // Machine
+            "الكمية المطلوبة", // Ordered
+            "الاكسسوار",    // Accessories
+            "ما تم تصنيعه", // Manufactured (Calculated)
+            "المتبقى",      // Remaining
+            "تاريخ استلام", // Recv Date
+            "بداية",        // Start
+            "نهاية",        // End
+            "Others",
+            "ملاحظات"       // Notes
         ];
         
         wsData.push(headers.map(h => ({ v: h, s: headerStyle })));
         
+        // --- 3. Data Rows ---
         orders.forEach(order => {
-             const row = [
-                { v: order.material || '', s: rowStyle },
-                { v: order.requiredQty || 0, s: rowStyle },
-                { v: order.accessory || order.accessoryType || '-', s: rowStyle },
-                { v: order.manufacturedQty || 0, s: rowStyle },
-                { v: order.remainingQty || 0, s: rowStyle },
+            const statusInfo = getExportStatusInfo(order, custName);
+            const remaining = statusInfo.remaining;
+            
+            // Logic for Machine/Status display
+            let machineDisplay = "Not Planned";
+            let sortType = "SINGLE"; // Default sort
+            let fabricStyle = fabricPlannedStyle;
+            
+            // Determine Sort based on basic logic (can be refined)
+            if (order.material && order.material.toLowerCase().includes('double')) sortType = "DOUBLE";
+            else if (order.material && order.material.toLowerCase().includes('rib')) sortType = "RIB";
+            
+            if (statusInfo.active && statusInfo.active.length > 0) {
+              machineDisplay = statusInfo.active.join(", ");
+              fabricStyle = fabricActiveStyle;
+            } else if (statusInfo.planned && statusInfo.planned.length > 0) {
+              machineDisplay = "Planned: " + statusInfo.planned.join(", ");
+              fabricStyle = fabricPlannedStyle;
+            } else if (remaining === 0) {
+                // Check if finished
+               const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+               const targetCustomerName = custName.trim().toLowerCase();
+               const targetFabric = normalize(order.material);
+               const finishedMachines = new Set<string>();
+               
+               machines.forEach(machine => {
+                 if (!machine.dailyLogs) return;
+                 machine.dailyLogs.forEach((log) => {
+                    if (normalize(log.client) === targetCustomerName && normalize(log.fabric) === targetFabric) {
+                         finishedMachines.add(machine.name);
+                    }
+                 });
+               });
+               machineDisplay = finishedMachines.size > 0 ? Array.from(finishedMachines)[0] : "Finished"; 
+               fabricStyle = fabricFinishedStyle;
+            } else if (order.machine) {
+               machineDisplay = order.machine;
+            }
+            
+            const orderedQty = order.requiredQty || 0;
+            const manufactured = orderedQty - remaining;
+
+            const row = [
+                { v: order.material || '', s: fabricStyle }, // Material
+                { v: sortType, s: rowStyle },               // SORT
+                { v: machineDisplay, s: rowStyle },         // Machine
+                { v: orderedQty, s: numberStyle },          // Ordered
+                { v: order.accessory || '-', s: rowStyle }, // Accessory
+                { v: manufactured, s: numberStyle },        // Manufactured
+                { v: remaining, s: numberStyle },           // Remaining
                 { v: order.orderReceiptDate || '', s: rowStyle },
-                { v: order.startDate || '', s: rowStyle },
-                { v: order.endDate || '', s: rowStyle },
-                { v: order.batchDeliveries || 0, s: rowStyle },
-                { v: order.accessoryDeliveries || 0, s: rowStyle },
-                { v: order.scrapQty || 0, s: rowStyle },
-                { v: order.others || '', s: rowStyle },
+                { v: statusInfo.startDate || order.startDate || '', s: rowStyle },
+                { v: statusInfo.endDate || order.endDate || '', s: rowStyle },
+                { v: statusInfo.others || '', s: rowStyle },
                 { v: order.notes || '', s: rowStyle }
              ];
              wsData.push(row);
         });
         
+        // --- 4. Side-by-Side Footer Tables ---
+        // Skip 2 rows
+        wsData.push([]);
+        wsData.push([]);
+        
+        // Calculations
+        const totalOrdered = orders.reduce((sum, o) => sum + (o.requiredQty || 0), 0);
+        const totalRemaining = orders.reduce((sum, o) => {
+          const statusInfo = getExportStatusInfo(o, custName);
+          return sum + statusInfo.remaining;
+        }, 0);
+        const totalProduced = totalOrdered - totalRemaining;
+        
+        // Footer Headers Row
+        wsData.push([
+            { v: "ما تم تشكيله من طلبية العميل", s: footerHeaderStyle }, // Left Table Header
+            null,
+            null,
+            null,
+            null, // Spacer
+            null,
+            null,
+            null, // Spacer
+            { v: "اوردر العميل (خامة+اكسسوار)", s: footerHeaderStyle }, // Right Table Header
+            { v: totalOrdered, s: footerValueStyle } // Right Value 1 
+        ]);
+        
+        // Footer Row 1
+        wsData.push([
+            { v: "المتبقى تشكيله", s: footerHeaderStyle }, // Left Header
+            { v: "-", s: footerValueStyle }, // Left Value (Placeholder/Calc)
+            null,
+            null,
+            null,
+            null, // Spacer
+            null,
+            null,
+            { v: "ما تم تصنيعه", s: footerHeaderStyle }, // Right Header
+            { v: totalProduced, s: footerValueStyle }  // Right Value
+        ]);
+        
+        // Footer Row 2
+        wsData.push([
+            { v: "ما تم تصنيعه من المشكل", s: footerHeaderStyle },
+            { v: totalProduced, s: footerValueStyle }, 
+            null,
+            null,
+            null, 
+            null,
+            null,
+            null,
+            { v: "المتبقى تصنيعه", s: footerHeaderStyle },
+            { v: totalRemaining, s: footerValueStyle }
+        ]);
+
+        // Footer Row 3
+        wsData.push([
+            { v: "ما تم تصنيعه من الغير مشكل", s: footerHeaderStyle },
+            { v: "-", s: footerValueStyle }, 
+            null,
+            null,
+            null, 
+            null,
+            null,
+            null,
+            { v: "اجمالى التسليمات (خامة+اكسسوار)", s: footerHeaderStyle }, // Right Header (Bottom)
+            { v: "-", s: { ...footerValueStyle, font: { bold: true, color: { rgb: "FFFFFF" } } } } // Placeholder
+        ]);
+        
+        // Footer Merges
+        // Merge Header Labels for Left Table (Col 0 and 1 sometimes or just widen col 0)
+        // Let's widen Col 0 instead of complex merging for simplicity, or merge A & B if needed.
+        
         const ws = XLSX.utils.aoa_to_sheet(wsData);
+        ws['!views'] = [{ RTL: true, zoom: 85 }]; // Set Zoom and RTL
+        ws['!merges'] = merges;
         
         // Column Widths
         ws['!cols'] = [
-            { wch: 25 }, // Fabric
-            { wch: 10 }, // Req
-            { wch: 15 }, // Acc
-            { wch: 12 }, // Man
-            { wch: 12 }, // Rem
-            { wch: 15 }, // Rec
-            { wch: 15 }, // Sta
-            { wch: 15 }, // End
-            { wch: 12 }, // Del
-            { wch: 15 }, // DelAcc
-            { wch: 10 }, // Scr
-            { wch: 15 }, // Oth
-            { wch: 30 }  // Not
+            { wch: 30 }, // A: Material / Left Table Header
+            { wch: 15 }, // B: SORT / Left Table Value
+            { wch: 20 }, // C: Machine
+            { wch: 15 }, // D: Ordered
+            { wch: 20 }, // E: Accessory
+            { wch: 15 }, // F: Manufactured
+            { wch: 15 }, // G: Remaining
+            { wch: 15 }, // H: Date / Right Table Header
+            { wch: 20 }, // I: Start / Right Table Value
+            { wch: 15 }, // J: End
+            { wch: 15 }, // K: Others
+            { wch: 25 }  // L: Notes
         ];
 
         // Sanitize sheet name
@@ -5707,7 +6752,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                 <div className="h-4 w-px bg-slate-300 mx-1"></div>
 
                 <button 
-                    onClick={exportStyledOrders}
+                    onClick={() => setShowExportModal(true)}
                     className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 text-slate-600 hover:text-green-600 hover:border-green-200 text-xs font-medium rounded-md shadow-sm transition-all whitespace-nowrap"
                 >
                     <FileText className="w-3.5 h-3.5" />
@@ -5839,6 +6884,14 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                     >
                         <Trash2 className="w-3.5 h-3.5" />
                         <span className="hidden lg:inline">Delete Client</span>
+                    </button>
+
+                    <button 
+                        onClick={() => setShowDebug(true)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 hover:text-purple-600 hover:bg-purple-50 border border-transparent hover:border-purple-100 rounded-md transition-colors text-xs font-medium"
+                        title="Debug Active Status"
+                    >
+                        <Bug className="w-3.5 h-3.5" />
                     </button>
 
                     <button 
@@ -6002,8 +7055,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             <div className="flex-1 p-4 bg-slate-50">
               {!showYarnRequirements ? (
                 <>
-                  <div className="bg-white rounded-lg shadow border border-slate-200 overflow-x-auto mb-4">
-                    <table className="w-full text-sm border-collapse whitespace-nowrap">
+                  <div className="sm:bg-white sm:rounded-lg sm:shadow sm:border sm:border-slate-200 overflow-x-auto mb-4">
+                    <table className="w-full text-sm border-collapse whitespace-nowrap sm:table block">
                       <thead className="bg-slate-100 text-slate-600 font-semibold shadow-sm text-xs uppercase tracking-wider table-view hidden sm:table-header-group">
                         <tr>
                           <th className="p-3 w-10 border-b border-r border-slate-200 text-center">
@@ -6038,6 +7091,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                               <th className="p-3 text-center border-b border-r border-slate-200 w-28">Status</th>
                               <th className="p-3 text-center border-b border-r border-slate-200 w-32 bg-indigo-50">Dyehouse Plan</th>
                               <th className="p-3 text-right border-b border-r border-slate-200 w-20">Ordered</th>
+                              <th className="p-3 text-right border-b border-r border-slate-200 w-20 bg-emerald-50 text-emerald-700">Produced</th>
                               <th className="p-3 text-right border-b border-r border-slate-200 w-20 bg-slate-50">Remaining</th>
                               <th className="p-3 text-center border-b border-r border-slate-200 w-24">Receive Date</th>
                               <th className="p-3 text-center border-b border-r border-slate-200 w-24">Start Date</th>
@@ -6053,7 +7107,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                           <th className="p-3 w-10 border-b border-slate-200"></th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
+                      <tbody className="sm:table-row-group grid grid-cols-2 gap-4 p-4 sm:p-0 sm:contents">
                         {filteredOrders.map((row) => {
                           const statusInfo = row.material ? statsMap.get(row.material) : null;
                           // If we have active machines, override the remaining qty
@@ -6085,6 +7139,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                 order, 
                                 customerName: selectedCustomer.name 
                               })}
+                              onOpenDyehousePlan={(order) => setDyehousePlanningModal({ isOpen: true, order })}
                               dyehouses={dyehouses}
                               handleCreateDyehouse={handleCreateDyehouse}
                               machines={machines}
@@ -6115,6 +7170,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                               visibleColumns={manageColorsVisibleColumns}
                               onToggleColumnVisibility={handleToggleColumnVisibility}
                               onUploadFabricImage={handleUploadFabricImage}
+                              inventory={inventory}
                             />
                           );
                         })}
@@ -6944,6 +8000,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                         </button>
                         <button 
                             onClick={async () => {
+                                // Add New Season Logic
                                 if (!newSeasonName.trim()) return;
                                 const id = newSeasonName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
                                 const newSeason: Season = {
@@ -7042,6 +8099,13 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
           />
         )}
 
+        {/* Export Clients Modal */}
+        <ExportClientsModal
+          isOpen={showExportModal}
+          onClose={() => setShowExportModal(false)}
+          onExport={(selected) => exportStyledOrders(selected)}
+        />
+
         {/* Fabric Dyehouse Modal */}
         {fabricDyehouseModal.isOpen && fabricDyehouseModal.order && (
           <FabricDyehouseModal
@@ -7084,6 +8148,20 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             order={selectedOrderForHistory}
             clientName={selectedCustomer?.name || ''}
             machines={machines}
+          />
+        )}
+
+        {/* Dyehouse Planning Modal */}
+        {dyehousePlanningModal.isOpen && dyehousePlanningModal.order && (
+          <DyehousePlanningModal
+            show={dyehousePlanningModal.isOpen}
+            onClose={() => setDyehousePlanningModal({ isOpen: false, order: null })}
+            row={dyehousePlanningModal.order}
+            dyehouses={dyehouses}
+            allOrders={flatOrders}
+            handleUpdateOrder={handleUpdateOrder}
+            fabrics={fabrics}
+            selectedCustomerName={selectedCustomer?.name || ''}
           />
         )}
 
@@ -7299,6 +8377,131 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         {/* Import Preview Modal */}
 
       </div>
+
+      {showDebug && (
+        createPortal(
+            <div className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center p-4">
+                <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
+                    <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                        <h2 className="text-lg font-bold flex items-center gap-2">
+                            <Bug className="text-purple-600" />
+                            Debug Active Status
+                        </h2>
+                        <button onClick={() => setShowDebug(false)} className="p-2 hover:bg-slate-200 rounded-full">
+                            <X size={20} />
+                        </button>
+                    </div>
+                    
+                    <div className="p-4 overflow-auto">
+                        <div className="mb-4 bg-blue-50 p-3 rounded text-sm text-blue-800 border border-blue-200">
+                             <strong>Current Client:</strong> {selectedCustomer?.name} <br/>
+                             <strong>Logic (MATCHING FETCH DATA):</strong> Scanning all {machines.length} machines. 
+                             If a Daily Log exists for {activeDay}, it is used (Effective Status/Client). <br/>
+                             If NO log exists, it creates a "Virtual Log" from the last known state (Effective Status/Client). <br/>
+                             <strong>Active Day (Global):</strong> {activeDay}
+                        </div>
+                        <table className="w-full text-xs border-collapse">
+                            <thead className="bg-slate-100 sticky top-0">
+                                <tr>
+                                    <th className="p-2 border text-left">Machine</th>
+                                    <th className="p-2 border text-left">Log Date (Used)</th>
+                                    <th className="p-2 border text-left">Effective Status</th>
+                                    <th className="p-2 border text-left">Effective Client</th>
+                                    <th className="p-2 border text-left">Effective Fabric</th>
+                                    <th className="p-2 border text-center">Is Active State?</th>
+                                    <th className="p-2 border text-center">Matches Client?</th>
+                                    <th className="p-2 border text-center">Result</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {machines.map(m => {
+                                    const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+                                    const normCurrentClient = selectedCustomer ? normalize(selectedCustomer.name) : '';
+                                    
+                                    // REPLICATE EXACT LOGIC FROM statsMap calculation
+                                    let effectiveStatus = '';
+                                    let effectiveClient = '';
+                                    let effectiveFabric = '';
+                                    let source = 'NONE';
+                                    let logDate = '-';
+
+                                    const activeLog = m.dailyLogs?.find(l => l.date === activeDay);
+
+                                    if (activeLog) {
+                                        // Case 1: Real Log Exists for Today
+                                        effectiveStatus = activeLog.status || '';
+                                        effectiveClient = activeLog.client || '';
+                                        effectiveFabric = activeLog.fabric || '';
+                                        source = 'REAL_LOG';
+                                        logDate = activeLog.date;
+                                    } else {
+                                        // Case 2: No Log -> Check "Virtual Log" (Carry over from last known state)
+                                        const sortedLogs = (m.dailyLogs || []).filter(l => l.date < activeDay).sort((a,b) => b.date.localeCompare(a.date));
+                                        const lastLog = sortedLogs[0];
+                                        
+                                        effectiveStatus = lastLog ? lastLog.status : (m.status || '');
+                                        effectiveClient = lastLog ? lastLog.client : (m.client || '');
+                                        effectiveFabric = lastLog ? lastLog.fabric : (m.material || '');
+                                        source = lastLog ? 'VIRTUAL (Last Log)' : 'VIRTUAL (Machine State)';
+                                        logDate = lastLog ? lastLog.date : 'NO LOGS';
+                                    }
+
+                                    // Normalize
+                                    const normEffectiveClient = normalize(effectiveClient);
+                                    const normEffectiveStatus = (effectiveStatus || '').trim().toLowerCase();
+                                    
+                                    // Define what considers as "Active"
+                                    const isActiveState = ['working', 'active', 'under operation', 'تعمل', 'تشغيل', 'تحت التشغيل'].includes(normEffectiveStatus);
+                                    // Define "Finished" state
+                                    const isFinishedState = ['finished', 'completed', 'done', 'منتهي'].includes(normEffectiveStatus);
+                                    
+                                    const clientMatch = normEffectiveClient === normCurrentClient;
+                                    const isIncluded = (isActiveState || isFinishedState) && clientMatch;
+
+                                    return (
+                                        <tr key={m.id} className={`border-b hover:bg-slate-50 ${isActiveState && clientMatch ? 'bg-green-50' : isFinishedState && clientMatch ? 'bg-blue-50' : ''}`}>
+                                            <td className="p-2 border font-medium">{m.name}</td>
+                                            <td className="p-2 border">
+                                                <div className="flex flex-col">
+                                                    <span className="font-bold">{source}</span>
+                                                    <span className="text-xs text-slate-500">{logDate}</span>
+                                                </div>
+                                            </td>
+                                            <td className="p-2 border">
+                                                <span className={`px-2 py-0.5 rounded-full ${isActiveState ? 'bg-green-100 text-green-700' : isFinishedState ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>
+                                                    {effectiveStatus || 'Blank'}
+                                                </span>
+                                            </td>
+                                            <td className="p-2 border font-mono">{effectiveClient || '-'}</td>
+                                            <td className="p-2 border font-mono text-emerald-600">{effectiveFabric || '-'}</td>
+                                            <td className="p-2 border text-center font-bold">
+                                                {isActiveState ? 'YES' : isFinishedState ? 'FINISHED' : 'NO'}
+                                            </td>
+                                            <td className="p-2 border text-center">
+                                                {clientMatch ? (
+                                                    <span className="text-green-600 font-bold">MATCH</span>
+                                                ) : (
+                                                    <span className="text-slate-300">-</span>
+                                                )}
+                                            </td>
+                                            <td className="p-2 border text-center">
+                                                {isIncluded ? (
+                                                    <span className="font-bold text-green-700">INCLUDED</span>
+                                                ) : (
+                                                    <span className="text-slate-400">SKIPPED</span>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>,
+            document.body
+        )
+      )}
     </div>
   );
 };

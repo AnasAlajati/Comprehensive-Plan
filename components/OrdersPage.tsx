@@ -164,6 +164,41 @@ export const OrdersPage: React.FC<OrdersPageProps> = ({ userRole }) => {
     }
   };
 
+  // Add new order row at the bottom
+  const handleAddRow = async () => {
+    if (!selectedCustomerId || !selectedCustomer) return;
+
+    const newRow: OrderRow = {
+      id: crypto.randomUUID(),
+      material: '',
+      machine: '',
+      requiredQty: 0,
+      accessory: '',
+      manufacturedQty: 0,
+      remainingQty: 0,
+      orderReceiptDate: '',
+      startDate: '',
+      endDate: '',
+      scrapQty: 0,
+      others: '',
+      notes: '',
+      batchDeliveries: '',
+      accessoryDeliveries: ''
+    };
+
+    // Append to the end of orders array to ensure it stays at the bottom
+    const updatedOrders = [...selectedCustomer.orders, newRow];
+    
+    try {
+      await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), {
+        orders: updatedOrders
+      });
+    } catch (error) {
+      console.error("Error adding order row:", error);
+      alert("Failed to add order row");
+    }
+  };
+
   // --- EXCEL IMPORT LOGIC ---
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     
@@ -253,6 +288,9 @@ export const OrdersPage: React.FC<OrdersPageProps> = ({ userRole }) => {
   const filteredCustomers = customers.filter(c => 
     c.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  // Get the currently selected customer
+  const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
 
   return (
     <div className="flex h-[calc(100vh-100px)] bg-slate-50 rounded-xl overflow-hidden border border-slate-200 shadow-sm">
