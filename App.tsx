@@ -15,8 +15,9 @@ import {
   where,
   serverTimestamp
 } from 'firebase/firestore';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { onAuthStateChanged, User, signInWithCustomToken } from 'firebase/auth';
 import { db, auth } from './services/firebase';
+import { serverLogout, verifyToken, hasStoredAuth, clearTokens } from './services/authService';
 import { DataService } from './services/dataService';
 import { ActivityService } from './services/activityService';
 import { MachineRow } from './types';
@@ -133,7 +134,7 @@ const App: React.FC = () => {
   // External Production State
   const [externalProduction, setExternalProduction] = useState<number>(0);
 
-  // 0. Auth Listener & Role Check
+  // 0. Auth Listener & Role Check (Server-Side Auth)
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
@@ -150,53 +151,33 @@ const App: React.FC = () => {
              return;
           }
 
-          // Check if ANY users exist (Bootstrap first admin)
-          const usersRef = collection(db, 'users');
-          const snapshot = await getDocs(query(usersRef, limit(1)));
+          // Verify token with server
+          const serverUser = await verifyToken();
           
-          if (snapshot.empty) {
-            // First user ever! Make them Admin.
-            const name = currentUser.displayName || email.split('@')[0];
-            await setDoc(doc(db, 'users', email), {
-              email: email,
-              displayName: name,
-              role: 'admin',
-              createdAt: serverTimestamp()
-            });
-            setUserRole('admin');
-            setUserName(name);
-            setIsAuthorized(true);
+          if (serverUser) {
+            if (serverUser.role === 'pending') {
+              setIsAuthorized(false);
+            } else {
+              setUserRole(serverUser.role as any);
+              setUserName(serverUser.displayName || email.split('@')[0]);
+              setIsAuthorized(true);
+            }
           } else {
-            // Check if THIS user is authorized
+            // Server verification failed - check Firestore directly as fallback
+            const usersRef = collection(db, 'users');
             const q = query(usersRef, where('email', '==', email));
             const userSnap = await getDocs(q);
             
             if (!userSnap.empty) {
               const userData = userSnap.docs[0].data();
-              // If role is 'pending', they are NOT authorized yet
               if (userData.role === 'pending') {
                 setIsAuthorized(false);
               } else {
                 setUserRole(userData.role);
                 setUserName(userData.displayName || email.split('@')[0]);
                 setIsAuthorized(true);
-                
-                // Update presence on login
-                await setDoc(doc(db, 'users', email), {
-                  isOnline: true,
-                  lastSeen: serverTimestamp()
-                }, { merge: true });
               }
             } else {
-              // User signed up but is not in the list.
-              // Create a 'pending' entry for them so Admin can see them.
-              const name = currentUser.displayName || email.split('@')[0];
-              await setDoc(doc(db, 'users', email), {
-                email: email,
-                displayName: name,
-                role: 'pending',
-                createdAt: serverTimestamp()
-              });
               setIsAuthorized(false);
             }
           }
@@ -205,9 +186,26 @@ const App: React.FC = () => {
           setIsAuthorized(false);
         }
       } else {
-        setUserRole(null);
-        setUserName('');
-        setIsAuthorized(null);
+        // No Firebase user - check if we have stored server tokens
+        if (hasStoredAuth()) {
+          const serverUser = await verifyToken();
+          if (serverUser && serverUser.role !== 'pending') {
+            // We have valid server auth but no Firebase client auth
+            // This can happen on page reload - user data is from server
+            setUserRole(serverUser.role as any);
+            setUserName(serverUser.displayName || '');
+            setIsAuthorized(true);
+          } else {
+            clearTokens();
+            setUserRole(null);
+            setUserName('');
+            setIsAuthorized(null);
+          }
+        } else {
+          setUserRole(null);
+          setUserName('');
+          setIsAuthorized(null);
+        }
       }
 
       setAuthLoading(false);
@@ -366,6 +364,8 @@ const App: React.FC = () => {
 
   // 2. Setup Real-time Listeners with error recovery
   useEffect(() => {
+    // Don't set up listeners until user is authenticated
+    if (!user) return;
     // REMOVED: if (isConnected === false) return; 
     // We want listeners to run even if offline so we get cached data.
 
@@ -435,7 +435,7 @@ const App: React.FC = () => {
       unsubscribeLogs();
       unsubscribeStats();
     };
-  }, [isConnected, selectedDate]); // Added selectedDate dependency so logs re-fetch when date changes
+  }, [user, selectedDate]); // Added user dependency so listeners wait for auth
 
   // 3. Process Machines based on Selected Date
   useEffect(() => {
@@ -702,7 +702,7 @@ const App: React.FC = () => {
             An administrator has been notified and will review your access request shortly.
           </p>
           <button
-            onClick={() => auth.signOut()}
+            onClick={() => { serverLogout(); auth.signOut(); }}
             className="px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-900 transition-colors"
           >
             Sign Out
@@ -750,7 +750,7 @@ const App: React.FC = () => {
                     <span className="text-[10px] text-slate-400">{user?.email}</span>
                 </div>
                 <button
-                  onClick={() => auth.signOut()}
+                  onClick={() => { serverLogout(); auth.signOut(); }}
                   className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                   title="Sign Out"
                 >

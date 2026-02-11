@@ -16,6 +16,7 @@ import {
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, firebaseConfig, auth } from '../services/firebase';
+import { serverCreateUser } from '../services/authService';
 import { ActivityService, ActivityLog } from '../services/activityService';
 import { Trash2, UserPlus, Shield, ShieldAlert, Mail, User as UserIcon, Copy, Check, Key, Circle, Clock, Activity, MapPin, Edit3, Plus, X, ChevronDown, ChevronUp } from 'lucide-react';
 
@@ -140,9 +141,6 @@ export const UserManagementPage: React.FC = () => {
     setError('');
     setCreatedUserCreds(null);
 
-    // 1. Generate Random Password (8 chars: 4 random + 4 random)
-    const password = Math.random().toString(36).slice(-4) + Math.random().toString(36).slice(-4) + "!";
-
     try {
       // Check if user already exists in our list
       const existingUser = users.find(u => u.email.toLowerCase() === newUserEmail.toLowerCase());
@@ -152,46 +150,11 @@ export const UserManagementPage: React.FC = () => {
         return;
       }
 
-      // 2. Create User in Firebase Auth (Secondary App Trick)
-      // We use a secondary app instance so we don't log out the current admin
-      const secondaryApp = initializeApp(firebaseConfig, "Secondary");
-      const secondaryAuth = getAuth(secondaryApp);
-      
-      let uid = '';
-      try {
-        const userCredential = await createUserWithEmailAndPassword(secondaryAuth, newUserEmail, password);
-        uid = userCredential.user.uid;
-        await signOut(secondaryAuth);
-      } catch (authErr: any) {
-        if (authErr.code === 'auth/email-already-in-use') {
-           // If they exist in Auth but not in our list, we just add them to the list
-           // But we can't give the admin the password since we didn't create it.
-           setError("This user already has an account. Added to list, but cannot generate new password.");
-           // We proceed to add to Firestore anyway so they can access
-        } else {
-           throw authErr;
-        }
-      } finally {
-        // Cleanup
-        // deleteApp(secondaryApp).catch(console.error); // Optional cleanup
-      }
+      // Create user via server (Firebase Admin SDK handles Auth + Firestore)
+      const result = await serverCreateUser(newUserEmail, newUserName || newUserEmail.split('@')[0], newUserRole);
 
-      // 3. Add to Firestore
-      const userId = newUserEmail.toLowerCase();
-      await setDoc(doc(db, 'users', userId), {
-        email: newUserEmail.toLowerCase(),
-        displayName: newUserName || newUserEmail.split('@')[0],
-        role: newUserRole,
-        isOnline: false, // Default to offline on creation
-        createdAt: serverTimestamp(),
-        uid: uid || null,
-        password: password // Storing password as requested
-      });
-
-      // 4. Show Credentials (only if we created the auth user)
-      if (uid) {
-        setCreatedUserCreds({ email: newUserEmail, password });
-      }
+      // Show Credentials
+      setCreatedUserCreds({ email: result.email, password: result.password });
 
       setNewUserEmail('');
       setNewUserName('');
