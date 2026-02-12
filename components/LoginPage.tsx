@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
-import { signInWithCustomToken } from 'firebase/auth';
+import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../services/firebase';
-import { serverLogin } from '../services/authService';
 import { Lock, AlertCircle, ShieldCheck, Mail, Key } from 'lucide-react';
 
 export const LoginPage: React.FC = () => {
@@ -16,15 +15,11 @@ export const LoginPage: React.FC = () => {
     setError('');
     
     try {
-      // Authenticate through the backend server (Firebase Admin SDK)
-      const result = await serverLogin(email, password);
-      
-      // Use the custom token to sign into the Firebase client SDK
-      // This allows Firestore onSnapshot listeners to work with proper auth
-      await signInWithCustomToken(auth, result.customToken);
+      await signInWithEmailAndPassword(auth, email, password);
     } catch (err: any) {
       console.error("Auth failed", err);
-      const msg = err.message || "Authentication failed";
+      let msg = "Authentication failed";
+      if (err.code === 'auth/invalid-credential') msg = "Invalid email or password.";
       setError(msg);
     } finally {
       setLoading(false);
@@ -109,7 +104,7 @@ export const LoginPage: React.FC = () => {
           <div className="mt-6 pt-6 border-t border-slate-100">
             <div className="flex items-center justify-center gap-2 text-xs text-slate-400">
               <ShieldCheck className="w-4 h-4 text-emerald-500" />
-              <span>Server-Side Authentication</span>
+              <span>Protected by Firebase Security</span>
             </div>
           </div>
         </div>
