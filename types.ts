@@ -207,6 +207,25 @@ export interface SentEvent {
   notes?: string;
 }
 
+export interface DeliveryEvent {
+  id: string;
+  date: string;                // Date delivered to customer
+  quantityColorDelivered: number;  // كمية اللون المسلمة للعميل
+  accessoryDeliveries?: Record<string, number>; // accessoryId -> quantity delivered
+  deliveredBy?: string;        // Who recorded the delivery
+  notes?: string;
+}
+
+export interface ReturnEvent {
+  id: string;
+  date: string;                // Date returned from customer
+  quantityColorReturned: number;  // كمية اللون المرتجعة من العميل
+  accessoryReturns?: Record<string, number>; // accessoryId -> quantity returned
+  returnedBy?: string;         // Who recorded the return
+  notes?: string;
+  reason?: string;             // Reason for return
+}
+
 export interface ColorApproval {
   id: string;
   dyehouseName: string;
@@ -223,6 +242,8 @@ export interface DyeingAccessory {
   sent?: number;            // مرسل اكسسوار
   received?: number;        // مستلم اكسسوار
   remaining?: number;       // متبقي اكسسوار (اختياري لو اختلف عن المحسوب)
+  dispatchNumber?: string;  // رقم الازن للاكسسوار
+  formationDate?: string;   // تاريخ التشكيل للاكسسوار
   notes?: string;
 }
 
@@ -245,14 +266,22 @@ export interface DyeingBatch {
   quantitySentRaw?: number;     // مرسل خام
   quantitySentAccessory?: number; // مرسل اكسسوار
   accessoryType?: string;       // نوع الاكسسوار
+  accessoryDispatchNumber?: string; // رقم ازن الاكسسوار
+  accessoryDateSent?: string;       // تاريخ ارسال الاكسسوار
+  accessoryFormationDate?: string;  // تاريخ تشكيل الاكسسوار
   sentEvents?: SentEvent[];     // NEW: Multiple sent events
   batchGroupId?: string;        // NEW: ID for grouping multiple batches into one machine load
   colorGroupId?: string;        // NEW: ID for visual color grouping
-
   
   // Receive events array (multiple receives over time)
   receiveEvents?: ReceiveEvent[];
   receivedQuantity?: number;    // Legacy: المستلم (for backward compatibility)
+  
+  // Delivery events array (customer deliveries)
+  deliveryEvents?: DeliveryEvent[];
+  
+  // Return events array (customer returns)
+  returnEvents?: ReturnEvent[];
   
   // Scrap tracking (calculated when batch is complete)
   isComplete?: boolean;         // Batch fully received
@@ -361,6 +390,7 @@ export interface OrderRow {
   lastPrintedBy?: string; // NEW: User who printed the order
   lastPrintedAt?: string; // NEW: Date when the order was last printed
   seasonId?: string; // NEW: Season ID
+  noMachineDataNote?: string; // NEW: User explanation when finished but no machine data found
   
   // Audit Info
   lastUpdatedBy?: string;

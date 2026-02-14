@@ -445,21 +445,78 @@ export const FabricDyehouseModal: React.FC<FabricDyehouseModalProps> = ({
                             </div>
                             <div>
                                 <label className="text-[10px] text-slate-500 font-medium block">Machine Cap</label>
-                                <div className="flex items-center gap-2 mt-0.5">
-                                     <span className="font-mono text-xs font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">{batch.plannedCapacity || '-'}</span>
-                                     <input 
-                                        type="text" 
-                                        value={batch.accessoryType || ''}
-                                        onChange={(e) => {
-                                            const newPlan = [...batches];
-                                            newPlan[idx] = { ...batch, accessoryType: e.target.value };
-                                            onUpdateOrder(order.id, { dyeingPlan: newPlan });
-                                        }}
-                                        className="w-14 text-[10px] bg-transparent border-b border-slate-200 outline-none focus:border-indigo-500 text-center text-slate-600"
-                                        placeholder="Type..."
-                                     />
-                                </div>
+                                <span className="font-mono text-xs font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">{batch.plannedCapacity || '-'}</span>
                             </div>
+
+                            {/* Accessory Details Section */}
+                            {batch.accessoryType && (
+                                <div className="mt-4 pt-3 border-t border-slate-200">
+                                    <div className="flex items-center gap-1.5 mb-2">
+                                        <div className="flex items-center gap-1 px-1.5 py-0.5 bg-indigo-50 border border-indigo-200 rounded text-[10px] font-bold text-indigo-600">
+                                            <Package size={12} />
+                                            <span>Accessory Details</span>
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-50 border border-slate-200 rounded p-2.5 space-y-3">
+                                        <div>
+                                            <label className="text-[9px] text-slate-500 font-bold uppercase block mb-0.5">Accessory Type</label>
+                                            <input 
+                                                type="text" 
+                                                value={batch.accessoryType || ''}
+                                                onChange={(e) => {
+                                                    const newPlan = [...batches];
+                                                    newPlan[idx] = { ...batch, accessoryType: e.target.value };
+                                                    onUpdateOrder(order.id, { dyeingPlan: newPlan });
+                                                }}
+                                                className="w-full text-[11px] bg-white border border-slate-200 outline-none focus:border-indigo-400 rounded px-2 py-1.5 text-slate-700"
+                                                placeholder="e.g., Rib, Collar..."
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-[9px] text-slate-500 font-bold uppercase block mb-0.5">Accessory Dispatch #</label>
+                                            <input 
+                                                type="text" 
+                                                value={batch.accessoryDispatchNumber || ''}
+                                                onChange={(e) => {
+                                                    const newPlan = [...batches];
+                                                    newPlan[idx] = { ...batch, accessoryDispatchNumber: e.target.value };
+                                                    onUpdateOrder(order.id, { dyeingPlan: newPlan });
+                                                }}
+                                                className="w-full text-[11px] bg-white border border-slate-200 rounded px-2 py-1.5 text-slate-700 focus:border-indigo-400 outline-none font-mono"
+                                                placeholder="Enter dispatch #..."
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="text-[9px] text-slate-500 font-bold uppercase block mb-0.5">Sent Date</label>
+                                                <input 
+                                                    type="date" 
+                                                    value={batch.accessoryDateSent || ''}
+                                                    onChange={(e) => {
+                                                        const newPlan = [...batches];
+                                                        newPlan[idx] = { ...batch, accessoryDateSent: e.target.value };
+                                                        onUpdateOrder(order.id, { dyeingPlan: newPlan });
+                                                    }}
+                                                    className="w-full text-[11px] bg-white border border-slate-200 rounded px-2 py-1.5 text-slate-700 focus:border-indigo-400 outline-none cursor-pointer"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-[9px] text-slate-500 font-bold uppercase block mb-0.5">Formation Date</label>
+                                                <input 
+                                                    type="date" 
+                                                    value={batch.accessoryFormationDate || ''}
+                                                    onChange={(e) => {
+                                                        const newPlan = [...batches];
+                                                        newPlan[idx] = { ...batch, accessoryFormationDate: e.target.value };
+                                                        onUpdateOrder(order.id, { dyeingPlan: newPlan });
+                                                    }}
+                                                    className="w-full text-[11px] bg-white border border-slate-200 rounded px-2 py-1.5 text-slate-700 focus:border-indigo-400 outline-none cursor-pointer"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         {/* 2. Timeline */}

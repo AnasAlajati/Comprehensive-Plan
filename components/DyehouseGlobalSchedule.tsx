@@ -13,7 +13,10 @@ import {
   Droplets,
   Factory,
   User,
-  ArrowRight
+  ArrowRight,
+  X,
+  Package,
+  Plus
 } from 'lucide-react';
 import XLSX from 'xlsx-js-style';
 import { DyehouseImportModal } from './DyehouseImportModal';
@@ -44,6 +47,7 @@ interface GlobalBatchItem {
   rawStatus?: 'draft' | 'pending' | 'sent' | 'received';
   notes?: string;
   accessoryType?: string;
+  receiveEvents?: Array<{ id: string; date: string; quantityRaw: number; quantityAccessory: number }>;
 }
 
 export const DyehouseGlobalSchedule: React.FC = () => {
@@ -59,6 +63,9 @@ export const DyehouseGlobalSchedule: React.FC = () => {
   const [includeDrafts, setIncludeDrafts] = useState(false);
   
   const [showImportModal, setShowImportModal] = useState(false);
+  
+  // Receive Modal State
+  const [receiveModal, setReceiveModal] = useState<{ isOpen: boolean; batch: GlobalBatchItem | null }>({ isOpen: false, batch: null });
 
   useEffect(() => {
     fetchGlobalData();
@@ -160,7 +167,8 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                         batchStatus === 'pending' ? 'Pending' : 'Draft' as any,
                 notes: batch.notes,
                 rawStatus: batchStatus, // Keep original status for filtering
-                accessoryType: batch.accessoryType
+                accessoryType: batch.accessoryType,
+                receiveEvents: receiveEvents
               });
             });
           }
@@ -284,7 +292,8 @@ export const DyehouseGlobalSchedule: React.FC = () => {
         // Columns Order (Adjusted for RTL - Column A is First in Array):
         // Dispatch | Date Sent | Days Raw | Formation Date | Days Form | Item | Color | Client | Quantity | Received | Remaining | Wastage | Machines...
 
-        const dataRows = batches.map(batch => {
+        const dataRows: any[][] = [];
+        batches.forEach(batch => {
             const sentQty = batch.quantitySent || 0;
             const receivedQty = batch.receivedQuantity || 0;
             const remaining = sentQty - receivedQty;
@@ -318,7 +327,41 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                row.push({ v: batch.machine === m ? 1 : '', s: machineAssignedStyle }); 
             });
 
-            return row;
+            dataRows.push(row);
+
+            // Add Accessory Rows if any
+            if (batch.accessories && batch.accessories.length > 0) {
+                batch.accessories.forEach(acc => {
+                    const accRow: any[] = [];
+                    
+                    const accDaysRaw = acc.dateSent 
+                        ? Math.floor((new Date().getTime() - new Date(acc.dateSent).getTime()) / (1000 * 3600 * 24)) 
+                        : '';
+                    const accDaysFormation = acc.formationDate
+                        ? Math.floor((new Date().getTime() - new Date(acc.formationDate).getTime()) / (1000 * 3600 * 24))
+                        : '';
+
+                    accRow.push({ v: acc.dispatchNumber || '', s: yellowStyle }); // Dispatch #
+                    accRow.push({ v: extractDate(acc.dateSent), s: whiteStyle }); // Date Sent
+                    accRow.push({ v: accDaysRaw, s: whiteStyle }); // Days Raw
+                    accRow.push({ v: extractDate(acc.formationDate), s: whiteStyle }); // Formation Date
+                    accRow.push({ v: accDaysFormation, s: whiteStyle }); // Days Formation
+                    accRow.push({ v: `  └ ${acc.name}`, s: { ...whiteStyle, alignment: { horizontal: "right", vertical: "center" } } }); // Item
+                    accRow.push({ v: batch.color, s: whiteStyle }); // Color
+                    accRow.push({ v: batch.clientName, s: whiteStyle }); // Client
+                    accRow.push({ v: '-', s: whiteStyle }); // Quantity
+                    accRow.push({ v: '-', s: lightGreenStyle }); // Received
+                    accRow.push({ v: '-', s: lightBlueStyle }); // Remaining
+                    accRow.push({ v: '-', s: pinkStyle }); // Wastage
+
+                    // Spacers for machines
+                    sortedMachines.forEach(() => {
+                        accRow.push({ v: '', s: whiteStyle });
+                    });
+
+                    dataRows.push(accRow);
+                });
+            }
         });
 
         // 3. Calculate Totals for Header
@@ -634,7 +677,16 @@ export const DyehouseGlobalSchedule: React.FC = () => {
                                     {/* Data Columns */}
                                     <td className="px-4 py-3 text-center text-slate-400">-</td>
                                     <td className="px-4 py-3 text-center font-mono text-slate-600">{remaining > 0 ? remaining.toLocaleString() : '-'}</td>
-                                    <td className="px-4 py-3 text-center font-mono text-emerald-600">{receivedQty > 0 ? receivedQty.toLocaleString() : '-'}</td>
+                                    <td className="px-4 py-3 text-center relative group/receive">
+                                        <button
+                                          onClick={() => setReceiveModal({ isOpen: true, batch })}
+                                          className="w-full px-3 py-2 text-center font-mono text-emerald-600 hover:bg-emerald-50 rounded transition-colors relative"
+                                          title="Click to add/view receives"
+                                        >
+                                          {receivedQty > 0 ? receivedQty.toLocaleString() : '-'}
+                                          <Plus size={8} className="absolute left-1 top-1 text-slate-300 opacity-0 group-hover/receive:opacity-100 transition-opacity" />
+                                        </button>
+                                    </td>
                                     <td className="px-4 py-3 text-center font-mono font-bold text-blue-600">{sentQty > 0 ? sentQty.toLocaleString() : '-'}</td>
                                     <td className="px-4 py-3 font-medium text-slate-700 text-right">{batch.clientName}</td>
                                     <td className="px-4 py-3 text-right">
@@ -691,6 +743,69 @@ export const DyehouseGlobalSchedule: React.FC = () => {
             fetchGlobalData();
         }}
       />
+
+      {/* Receive Modal */}
+      {receiveModal.isOpen && receiveModal.batch && (
+        <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4" onClick={() => setReceiveModal({ isOpen: false, batch: null })}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="p-4 border-b border-slate-200 bg-gradient-to-r from-emerald-50 to-slate-50">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="bg-emerald-100 p-2 rounded-lg text-emerald-600">
+                    <Package size={20} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-800 text-lg">المستلم</h3>
+                    <div className="text-sm text-slate-500">
+                      {receiveModal.batch.color} • {receiveModal.batch.dyehouse}
+                    </div>
+                  </div>
+                </div>
+                <button onClick={() => setReceiveModal({ isOpen: false, batch: null })} className="p-2 hover:bg-slate-100 rounded-full">
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Summary Stats */}
+            <div className="p-6 bg-slate-50" dir="rtl">
+              {(() => {
+                const batch = receiveModal.batch;
+                const rEvents = batch?.receiveEvents || [];
+                
+                const totalReceivedRaw = rEvents.reduce((s, e) => s + (Number(e.quantityRaw) || 0), 0) + (Number(batch?.receivedQuantity) || 0);
+                const totalReceivedAccessory = rEvents.reduce((s, e) => s + (Number(e.quantityAccessory) || 0), 0);
+                
+                return (
+                  <div className="space-y-4">
+                    <div className="bg-white rounded-lg p-4 border border-slate-200">
+                      <div className="text-slate-500 text-sm mb-2">إجمالي المستلم (خام)</div>
+                      <div className="text-3xl font-bold text-emerald-600">{totalReceivedRaw} <span className="text-sm font-normal text-slate-400">kg</span></div>
+                    </div>
+                    {totalReceivedAccessory > 0 && (
+                      <div className="bg-white rounded-lg p-4 border border-slate-200">
+                        <div className="text-slate-500 text-sm mb-2">إجمالي المستلم (اكسسوار)</div>
+                        <div className="text-3xl font-bold text-purple-600">{totalReceivedAccessory} <span className="text-sm font-normal text-slate-400">kg</span></div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Close Button */}
+            <div className="p-4 border-t border-slate-200 bg-slate-50 flex justify-end">
+              <button
+                onClick={() => setReceiveModal({ isOpen: false, batch: null })}
+                className="px-4 py-2 text-slate-700 bg-slate-200 rounded-lg hover:bg-slate-300 transition-colors"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -8,6 +8,7 @@ import { LinkOrderModal } from './LinkOrderModal';
 import { toJpeg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
 import { CheckCircle, Send, Link, Truck, Layout, Factory, X, Check, Sparkles, Edit, ArrowRight, History, Plus, Search, Calendar, FileText, Book, Trash2 } from 'lucide-react';
+import { ProfessionalDatePicker } from './ProfessionalDatePicker';
 import { ExternalProductionSheet } from './ExternalProductionSheet'; // New Component - Force Refresh
 import { StandaloneFabricEditor } from './FabricEditor';
 import { FabricDirectoryModal } from './FabricDirectoryModal';
@@ -312,6 +313,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const isReadOnly = userRole === 'viewer';
   
   const [selectedDate, setSelectedDate] = useState<string>(propSelectedDate || new Date().toISOString().split('T')[0]);
+  const [reportDates, setReportDates] = useState<string[]>([]);
   const [activeDay, setActiveDay] = useState<string>('');
   const [isDownloading, setIsDownloading] = useState(false);
   const [isSendingReport, setIsSendingReport] = useState(false);
@@ -446,6 +448,27 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       }
     };
     fetchActiveDay();
+  }, []);
+
+  // Fetch all days that have reports for the calendar highlighting
+  useEffect(() => {
+    const fetchReportDates = async () => {
+      try {
+        const machines = await DataService.getMachinesFromMachineSS();
+        const dates = new Set<string>();
+        machines.forEach(m => {
+          if (m.dailyLogs) {
+            m.dailyLogs.forEach((log: any) => {
+              if (log.date) dates.add(log.date);
+            });
+          }
+        });
+        setReportDates(Array.from(dates));
+      } catch (error) {
+        console.error("Error fetching report dates:", error);
+      }
+    };
+    fetchReportDates();
   }, []);
 
   // Load machines, fabrics, and clients on mount
@@ -1826,19 +1849,16 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 <label className="block text-sm font-medium text-slate-700">
                   Source Date:
                 </label>
-                <div className="relative">
-                  <input 
-                    type="date" 
-                    value={fetchSourceDate}
-                    onChange={(e) => setFetchSourceDate(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                <div className="flex justify-center">
+                  <ProfessionalDatePicker 
+                    selectedDate={fetchSourceDate}
+                    onChange={(date) => setFetchSourceDate(date)}
+                    highlightedDates={reportDates}
+                    activeDay={activeDay}
                   />
-                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
-                    <History size={18} />
-                  </div>
                 </div>
-                <p className="text-xs text-slate-500">
-                  This will copy machine status, fabric, and client from the selected date and calculate the new remaining quantity.
+                <p className="text-xs text-slate-500 text-center">
+                  Dates marked with a <span className="text-emerald-500 font-bold">green dot</span> have existing report data.
                 </p>
               </div>
 
@@ -1870,19 +1890,16 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
             
             <div className="flex items-center justify-between w-full md:w-auto">
                {/* Date Selection */}
-               <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
-                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider hidden xs:inline">Date:</span>
-                  <input
-                    type="date"
-                    value={selectedDate}
-                    onChange={(e) => {
-                      isUserDateSelection.current = true; // Mark as user interaction
-                      setSelectedDate(e.target.value);
-                      handleFetchLogs(e.target.value);
-                    }}
-                    className="bg-transparent text-slate-700 text-sm font-medium outline-none cursor-pointer"
-                  />
-               </div>
+               <ProfessionalDatePicker 
+                 selectedDate={selectedDate}
+                 onChange={(date) => {
+                  isUserDateSelection.current = true;
+                  setSelectedDate(date);
+                  handleFetchLogs(date);
+                 }}
+                 highlightedDates={reportDates}
+                 activeDay={activeDay}
+               />
 
                {/* Mobile Active Day Indicator/Toggle */}
                <div className="md:hidden">
@@ -3560,6 +3577,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         onClose={() => setHistoryModalOpen(prev => ({ ...prev, isOpen: false }))}
         machineId={historyModalOpen.machineId}
         machineName={historyModalOpen.machineName}
+        userRole={userRole}
       />
 
       <DailySummaryModal 

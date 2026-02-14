@@ -20,11 +20,12 @@ import {
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, auth, storage } from '../services/firebase';
 import { DataService } from '../services/dataService';
-import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem, FabricDefinition, Dyehouse, DyehouseMachine, Season, ReceiveEvent, DyeingBatch, ExternalPlanAssignment } from '../types';
+import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem, FabricDefinition, Dyehouse, DyehouseMachine, Season, ReceiveEvent, DyeingBatch, DeliveryEvent, ExternalPlanAssignment } from '../types';
 import { FabricDetailsModal } from './FabricDetailsModal';
 import { FabricDyehouseModal } from './FabricDyehouseModal';
 import { ColorApprovalModal } from './ColorApprovalModal';
 import { DyehouseTrackingModal } from './DyehouseTrackingModal';
+import { CustomerDeliveryModal } from './CustomerDeliveryModal';
 import { StandaloneFabricEditor } from './FabricEditor';
 import { CreatePlanModal } from './CreatePlanModal';
 import { FabricProductionOrderModal } from './FabricProductionOrderModal';
@@ -1123,10 +1124,12 @@ const MemoizedOrderRow = React.memo(({
   onOpenFabricDyehouse,
   onOpenColorApproval,
   onOpenDyehouseTracking,
+  onOpenDelivery,
   visibleColumns,
   onToggleColumnVisibility,
   onUploadFabricImage,
-  inventory
+  inventory,
+  setNoMachineDataModal
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -1158,10 +1161,12 @@ const MemoizedOrderRow = React.memo(({
   onOpenFabricDyehouse: (order: OrderRow) => void;
   onOpenColorApproval: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
   onOpenDyehouseTracking: (data: { isOpen: boolean; orderId: string; batchIdx: number; batch: DyeingBatch }) => void;
+  onOpenDelivery: (orderId: string, batchIdx: number, batch: DyeingBatch | null) => void;
   visibleColumns: Record<string, boolean>;
   onToggleColumnVisibility: (columnId: string) => void;
   onUploadFabricImage: (fabricId: string, file: File) => void;
   inventory: YarnInventoryItem[];
+  setNoMachineDataModal: React.Dispatch<React.SetStateAction<{isOpen: boolean; orderId: string; currentNote: string}>>;
 }) => {
   // Viewer role is read-only
   const isReadOnly = userRole === 'viewer';
@@ -1762,30 +1767,56 @@ const MemoizedOrderRow = React.memo(({
             <div className="flex items-center justify-between gap-2">
               <div className="flex flex-col gap-1 flex-1 min-w-0">
                 {(() => {
+                  // Check if requiredQty is 0 first
+                  if (row.requiredQty === 0 || !row.requiredQty) {
+                    return (
+                      <span className="text-[10px] text-slate-400 font-medium bg-slate-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit">
+                        No Order Quantity
+                      </span>
+                    );
+                  }
+
                   if (!hasAnyPlan) {
                      if ((displayRemaining || 0) <= 0) {
-                        return (
+                        // Finished - check if we have production history
+                        if (finishedDetails && finishedDetails.uniqueMachines.length > 0) {
+                          // Has production history - show machine names
+                          return (
                             <div className="group/finished relative">
                                 <span className="text-[10px] text-slate-500 font-medium bg-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit cursor-help">
-                                  {finishedDetails && finishedDetails.uniqueMachines.length > 0 ? `Finished in ${finishedDetails.uniqueMachines.join(', ')}` : 'Finished'}
+                                  {`Finished in ${finishedDetails.uniqueMachines.join(', ')}`}
                                 </span>
-                                {finishedDetails && (
-                                    <div className="hidden group-hover/finished:block absolute z-50 bg-white text-slate-700 text-[10px] p-2 rounded shadow-xl border border-slate-200 -mt-10 left-1/2 -translate-x-1/2 min-w-[200px]">
-                                        <div className="font-bold border-b border-slate-100 mb-1 pb-1 text-slate-900">Finished Audit</div>
-                                        <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
-                                            <span className="text-slate-500">Last Date:</span>
-                                            <span className="font-mono">{finishedDetails.lastDate}</span>
-                                            
-                                            <span className="text-slate-500">Machines:</span>
-                                            <div className="flex flex-wrap gap-1">
-                                                {finishedDetails.uniqueMachines.map(m => (
-                                                    <span key={m} className="bg-slate-100 px-1 rounded border border-slate-200">{m}</span>
-                                                ))}
-                                            </div>
+                                <div className="hidden group-hover/finished:block absolute z-50 bg-white text-slate-700 text-[10px] p-2 rounded shadow-xl border border-slate-200 -mt-10 left-1/2 -translate-x-1/2 min-w-[200px]">
+                                    <div className="font-bold border-b border-slate-100 mb-1 pb-1 text-slate-900">Finished Audit</div>
+                                    <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
+                                        <span className="text-slate-500">Last Date:</span>
+                                        <span className="font-mono">{finishedDetails.lastDate}</span>
+                                        
+                                        <span className="text-slate-500">Machines:</span>
+                                        <div className="flex flex-wrap gap-1">
+                                            {finishedDetails.uniqueMachines.map(m => (
+                                                <span key={m} className="bg-slate-100 px-1 rounded border border-slate-200">{m}</span>
+                                            ))}
                                         </div>
                                     </div>
-                                )}
+                                </div>
                             </div>
+                          );
+                        }
+                        
+                        // No production history - let user add note
+                        return (
+                            <button
+                              onClick={() => setNoMachineDataModal({isOpen: true, orderId: row.id, currentNote: row.noMachineDataNote || ''})}
+                              className={`text-[10px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap border w-fit transition-colors ${
+                                row.noMachineDataNote 
+                                  ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100' 
+                                  : 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100 cursor-help'
+                              }`}
+                              title={row.noMachineDataNote ? 'Click to edit note' : 'Click to add note'}
+                            >
+                              {row.noMachineDataNote || 'Finished'}
+                            </button>
                         );
                      }
                      return (
@@ -2048,6 +2079,41 @@ const MemoizedOrderRow = React.memo(({
           {/* Others (Auto) */}
           <td className="p-2 text-left border-r border-slate-200 text-xs text-slate-500 truncate max-w-[100px]" title={statusInfo?.others}>
             {statusInfo?.others || '-'}
+          </td>
+
+          {/* Delivery */}
+          <td className="p-0 border-r border-slate-200">
+            {(() => {
+              // Count all deliveries across all colors in this order
+              const allDeliveries = (row.dyeingPlan || []).flatMap(b => b.deliveryEvents || []);
+              const totalDelivered = allDeliveries.reduce((s, e) => s + (Number(e.quantityColorDelivered) || 0), 0);
+              const totalAccDelivered = allDeliveries.reduce((s, e) => {
+                return s + Object.values(e.accessoryDeliveries || {}).reduce((a, b) => a + (b || 0), 0);
+              }, 0);
+              
+              // Count all returns across all colors in this order
+              const allReturns = (row.dyeingPlan || []).flatMap(b => b.returnEvents || []);
+              const totalReturned = allReturns.reduce((s, e) => s + (Number(e.quantityColorReturned) || 0), 0);
+              const totalAccReturned = allReturns.reduce((s, e) => {
+                return s + Object.values(e.accessoryReturns || {}).reduce((a, b) => a + (b || 0), 0);
+              }, 0);
+              
+              // Net = Delivered - Returned
+              const netQty = totalDelivered - totalReturned;
+              const netAcc = totalAccDelivered - totalAccReturned;
+              
+              return (
+                <button
+                  onClick={() => onOpenDelivery(row.id, 0, null)}
+                  className="w-full h-full px-2 py-2 text-center bg-transparent hover:bg-blue-50 transition-colors group/delivery flex flex-col items-center justify-center min-h-[40px]"
+                  title="Click to manage deliveries and returns"
+                >
+                  <span className={`font-mono font-bold text-xs ${netQty !== 0 ? 'text-blue-600' : 'text-slate-300'}`}>
+                    {netQty !== 0 ? netQty.toFixed(0) : '-'}{netAcc !== 0 && ` (${netAcc.toFixed(0)} Acc)`}
+                  </span>
+                </button>
+              );
+            })()}
           </td>
 
           {/* Notes */}
@@ -2724,7 +2790,7 @@ const MemoizedOrderRow = React.memo(({
                                     onClick={() => {
                                       // Reset all columns to visible
                                       const resetState: Record<string, boolean> = {};
-                                      ['colorApproval', 'dispatchNumber', 'formationDate', 'daysAfterFormation', 'dateSent', 'daysAfterSent', 'dyehouse', 'quantity', 'machine', 'accessory', 'sent', 'received', 'remaining', 'status', 'dyehouseStatus', 'notes'].forEach(id => {
+                                      ['colorApproval', 'dispatchNumber', 'formationDate', 'daysAfterFormation', 'dateSent', 'daysAfterSent', 'dyehouse', 'quantity', 'machine', 'accessory', 'sent', 'received', 'remaining', 'delivery', 'status', 'dyehouseStatus', 'notes'].forEach(id => {
                                         resetState[id] = true;
                                       });
                                       onToggleColumnVisibility('__RESET__');
@@ -2757,6 +2823,7 @@ const MemoizedOrderRow = React.memo(({
                                 { id: 'sent', label: 'مرسل' },
                                 { id: 'received', label: 'مستلم' },
                                 { id: 'remaining', label: 'متبقي' },
+                                { id: 'delivery', label: 'التسليم' },
                                 { id: 'status', label: 'الحالة' },
                                 { id: 'dyehouseStatus', label: 'وضع جوا المصبغة' },
                                 { id: 'notes', label: 'ملاحظات' },
@@ -2792,6 +2859,7 @@ const MemoizedOrderRow = React.memo(({
                     {visibleColumns['sent'] !== false && <th className="px-3 py-2 text-center w-20" title="Sent">مرسل</th>}
                     {visibleColumns['received'] !== false && <th className="px-3 py-2 text-center w-24" title="Click to add receive">مستلم</th>}
                     {visibleColumns['remaining'] !== false && <th className="px-3 py-2 text-center w-20" title="Sent - Received">متبقي</th>}
+                    {visibleColumns['delivery'] !== false && <th className="px-3 py-2 text-center w-24" title="Customer Delivery">التسليم</th>}
                     {visibleColumns['status'] !== false && <th className="px-3 py-2 text-center w-20">الحالة</th>}
                     {visibleColumns['dyehouseStatus'] !== false && <th className="px-3 py-2 text-center w-36">وضع جوا المصبغة</th>}
                     {visibleColumns['notes'] !== false && <th className="px-3 py-2 text-right">ملاحظات</th>}
@@ -3382,7 +3450,7 @@ const MemoizedOrderRow = React.memo(({
                            );
                         })()}
                       </td>
-                      )}
+                      )}  
                       {visibleColumns['status'] !== false && (
                       <td className="p-0 text-center align-middle relative group/status">
                         {(() => {
@@ -3580,7 +3648,9 @@ const MemoizedOrderRow = React.memo(({
                           name: '',
                           sent: 0,
                           received: 0,
-                          dateSent: ''
+                          dateSent: '',
+                          dispatchNumber: '',
+                          formationDate: ''
                         });
                         newPlan[idx] = { ...batch, accessories };
                         updatePlanWithAccessories(newPlan);
@@ -3621,122 +3691,152 @@ const MemoizedOrderRow = React.memo(({
                         accessories.forEach((acc, accIdx) => {
                           const remaining = (Number(acc.sent) || 0) - (Number(acc.received) || 0);
                           
-                          // Calculate colspan for the "Details" middle section
-                          // Spanning from 'colorApproval' to 'accessory'
-                          let middleCols = [
-                            'colorApproval', 'dispatchNumber', 'formationDate', 'daysAfterFormation',
-                            'dateSent', 'daysAfterSent', 'dyehouse', 'quantity', 'machine', 'accessory'
-                          ];
-                          let middleSpan = middleCols.reduce((count, col) => 
-                            visibleColumns[col] !== false ? count + 1 : count, 0);
+                          // Helper to update accessory data
+                          const updateAcc = (updates: Partial<typeof acc>) => {
+                            const newPlan = [...(row.dyeingPlan || [])];
+                            const updatedAccessories = [...(batch.accessories || [])];
+                            updatedAccessories[accIdx] = { ...acc, ...updates };
+                            newPlan[idx] = { ...batch, accessories: updatedAccessories };
+                            updatePlanWithAccessories(newPlan);
+                          };
+
+                          const accSentDays = acc.dateSent ? Math.floor((new Date().getTime() - new Date(acc.dateSent).getTime()) / (1000 * 3600 * 24)) : null;
+                          const accFormaDays = acc.formationDate ? Math.floor((new Date().getTime() - new Date(acc.formationDate).getTime()) / (1000 * 3600 * 24)) : null;
 
                           elements.push(
-                            <tr key={`acc-${batch.id || idx}-${acc.id || accIdx}`} className="bg-white hover:bg-indigo-50/30 hover:shadow-md hover:z-10 transition-all duration-200 group/acc text-xs relative">
-                              {/* 1. Tree Connector & Label (Color Column) */}
-                              <td className="p-0 border-r border-slate-100 relative">
+                            <tr key={`acc-${batch.id || idx}-${acc.id || accIdx}`} className="bg-white hover:bg-slate-50 transition-colors group/acc text-xs">
+                              {/* 1. Tree Connector & Accessory Name (Most Right Column/Color Column) */}
+                              <td className="p-0 border-r border-slate-100 relative group/acc-name">
                                   <div className="h-full w-full flex items-center pr-2">
                                       {/* Connector Line */}
-                                      <div className="w-8 h-full flex flex-col items-center justify-start ml-4">
-                                          <div className="w-px h-1/2 bg-slate-200 group-last/acc:h-1/2"></div>
+                                      <div className="w-8 h-full flex flex-col items-center justify-start ml-4 shrink-0">
+                                          <div className="w-px h-1/2 bg-slate-200"></div>
                                           <div className="w-full h-px bg-slate-200"></div>
                                       </div>
-                                      <span className="text-[10px] text-slate-400 font-medium bg-slate-100/50 px-1.5 py-0.5 rounded border border-slate-100 select-none">
+                                      {/* Independent Accessory Name Input */}
+                                      <input
+                                          type="text"
+                                          className="flex-1 px-1 py-1.5 bg-transparent border-none outline-none focus:bg-blue-50 text-right text-[10px] font-bold text-slate-700 placeholder:font-normal placeholder:text-slate-300"
+                                          placeholder="اسم الاكسسوار..."
+                                          value={acc.name || ''}
+                                          onChange={(e) => updateAcc({ name: e.target.value })}
+                                      />
+                                      <span className="text-[7px] text-slate-300 font-bold bg-slate-50 px-1 py-0.5 rounded border border-slate-100 uppercase tracking-tighter ml-1 opacity-0 group-hover/acc-name:opacity-100 transition-opacity">
                                         Acc
                                       </span>
                                   </div>
                               </td>
 
-                              {/* 2. Middle Section: Name & Date (Spanning multiple columns) */}
-                              {middleSpan > 0 && (
-                                <td colSpan={middleSpan} className="p-1 border-r border-slate-100">
-                                    <div className="flex items-center gap-2 px-1">
-                                        <input
-                                            type="text"
-                                            className="flex-1 bg-transparent border-b border-transparent hover:border-slate-200 focus:border-blue-400 focus:bg-blue-50/50 outline-none px-2 py-1 text-slate-700 placeholder-slate-300 text-xs transition-colors"
-                                            placeholder="Accessory Name..."
-                                            value={acc.name || ''}
-                                            onChange={(e) => {
-                                                const newPlan = [...(row.dyeingPlan || [])];
-                                                const updatedAccessories = [...(batch.accessories || [])];
-                                                updatedAccessories[accIdx] = { ...acc, name: e.target.value };
-                                                newPlan[idx] = { ...batch, accessories: updatedAccessories };
-                                                updatePlanWithAccessories(newPlan);
-                                            }}
-                                        />
-                                        
-                                        {/* Date Field - only show if there's enough room or if logically relevant */}
-                                        <div className="flex items-center gap-1 border-l border-slate-100 pl-2">
-                                            <span className="text-[9px] text-slate-400">Date</span>
-                                            <input
-                                                type="date"
-                                                className="w-24 bg-transparent border-none outline-none text-[10px] text-slate-500 hover:text-blue-600 focus:text-blue-700 cursor-pointer"
-                                                value={acc.dateSent || ''}
-                                                onChange={(e) => {
-                                                    const newPlan = [...(row.dyeingPlan || [])];
-                                                    const updatedAccessories = [...(batch.accessories || [])];
-                                                    updatedAccessories[accIdx] = { ...acc, dateSent: e.target.value };
-                                                    newPlan[idx] = { ...batch, accessories: updatedAccessories };
-                                                    updatePlanWithAccessories(newPlan);
-                                                }}
-                                            />
-                                        </div>
-                                    </div>
+                              {/* 2. Color Approval (Spacer) */}
+                              {visibleColumns['colorApproval'] !== false && <td className="p-0 border-r border-slate-50"></td>}
+                              
+                              {/* رقم الازن - Dispatch # */}
+                              {visibleColumns['dispatchNumber'] !== false && (
+                                <td className="p-0 border-r border-slate-100">
+                                    <input
+                                        type="text"
+                                        className="w-full px-1 py-1.5 bg-transparent border-none outline-none focus:bg-blue-50 text-center font-mono text-[10px] text-slate-600"
+                                        placeholder="-"
+                                        value={acc.dispatchNumber || ''}
+                                        onChange={(e) => updateAcc({ dispatchNumber: e.target.value })}
+                                    />
                                 </td>
                               )}
 
-                              {/* 3. Sent (Column Aligned) */}
+                              {/* تاريخ التشكيل - Formation Date */}
+                              {visibleColumns['formationDate'] !== false && (
+                                <td className="p-0 border-r border-slate-100">
+                                    <input
+                                        type="date"
+                                        className="w-full h-full px-1 py-1 bg-transparent border-none outline-none focus:bg-blue-50 text-[10px] text-slate-600 cursor-pointer"
+                                        value={acc.formationDate || ''}
+                                        onChange={(e) => updateAcc({ formationDate: e.target.value })}
+                                    />
+                                </td>
+                              )}
+
+                              {/* ايام بعد التشكيل - Days After Formation */}
+                              {visibleColumns['daysAfterFormation'] !== false && (
+                                <td className="p-0 border-r border-slate-100 text-center">
+                                    {accFormaDays !== null && (
+                                        <span className="font-mono text-[10px] text-amber-600 font-bold">{accFormaDays}d</span>
+                                    )}
+                                </td>
+                              )}
+
+                              {/* تاريخ الارسال - Sent Date */}
+                              {visibleColumns['dateSent'] !== false && (
+                                <td className="p-0 border-r border-slate-100">
+                                    <input
+                                        type="date"
+                                        className="w-full h-full px-1 py-1 bg-transparent border-none outline-none focus:bg-blue-50 text-[10px] text-slate-600 cursor-pointer"
+                                        value={acc.dateSent || ''}
+                                        onChange={(e) => updateAcc({ dateSent: e.target.value })}
+                                    />
+                                </td>
+                              )}
+
+                              {/* ايام بعد الارسال - Days After Sent */}
+                              {visibleColumns['daysAfterSent'] !== false && (
+                                <td className="p-0 border-r border-slate-100 text-center">
+                                    {accSentDays !== null && (
+                                        <span className="font-mono text-[10px] text-indigo-600 font-bold">{accSentDays}d</span>
+                                    )}
+                                </td>
+                              )}
+
+                              {/* Dyehouse / Quantity / Machine (Spacers) */}
+                              {visibleColumns['dyehouse'] !== false && <td className="p-0 border-r border-slate-50"></td>}
+                              {visibleColumns['quantity'] !== false && <td className="p-0 border-r border-slate-50"></td>}
+                              {visibleColumns['machine'] !== false && <td className="p-0 border-r border-slate-50"></td>}
+
+                              {/* Accessory Column (Now acts as a spacer) */}
+                              {visibleColumns['accessory'] !== false && (
+                                <td className="p-0 border-r border-slate-100 text-center text-[9px] font-bold text-slate-200">
+                                    ACC
+                                </td>
+                              )}
+
+                              {/* Sent Qty */}
                               {visibleColumns['sent'] !== false && (
                                 <td className="p-0 border-r border-slate-100">
                                     <input
                                         type="number"
-                                        className="w-full h-full text-center bg-transparent outline-none focus:bg-blue-50 text-blue-600 font-mono font-medium placeholder-slate-200 text-xs"
-                                        placeholder="-"
+                                        className="w-full py-1.5 text-center bg-transparent outline-none focus:bg-blue-50 text-blue-500 font-mono text-[10px]"
+                                        placeholder="0"
                                         value={acc.sent ?? ''}
-                                        onChange={(e) => {
-                                            const newPlan = [...(row.dyeingPlan || [])];
-                                            const updatedAccessories = [...(batch.accessories || [])];
-                                            updatedAccessories[accIdx] = { ...acc, sent: Number(e.target.value) };
-                                            newPlan[idx] = { ...batch, accessories: updatedAccessories };
-                                            updatePlanWithAccessories(newPlan);
-                                        }}
+                                        onChange={(e) => updateAcc({ sent: Number(e.target.value) })}
                                     />
                                 </td>
                               )}
 
-                              {/* 4. Received (Column Aligned) */}
+                              {/* Received Qty */}
                               {visibleColumns['received'] !== false && (
                                 <td className="p-0 border-r border-slate-100">
                                     <input
                                         type="number"
-                                        className="w-full h-full text-center bg-transparent outline-none focus:bg-emerald-50 text-emerald-600 font-mono font-medium placeholder-slate-200 text-xs"
-                                        placeholder="-"
+                                        className="w-full py-1.5 text-center bg-transparent outline-none focus:bg-emerald-50 text-emerald-500 font-mono text-[10px]"
+                                        placeholder="0"
                                         value={acc.received ?? ''}
-                                        onChange={(e) => {
-                                            const newPlan = [...(row.dyeingPlan || [])];
-                                            const updatedAccessories = [...(batch.accessories || [])];
-                                            updatedAccessories[accIdx] = { ...acc, received: Number(e.target.value) };
-                                            newPlan[idx] = { ...batch, accessories: updatedAccessories };
-                                            updatePlanWithAccessories(newPlan);
-                                        }}
+                                        onChange={(e) => updateAcc({ received: Number(e.target.value) })}
                                     />
                                 </td>
                               )}
 
-                              {/* 5. Remaining (Column Aligned) */}
+                              {/* Remaining Qty */}
                               {visibleColumns['remaining'] !== false && (
                                 <td className="p-0 border-r border-slate-100 text-center">
-                                    <span className={`font-mono font-medium text-xs ${remaining > 0 ? 'text-amber-500' : 'text-slate-300'}`}>
+                                    <span className={`font-mono text-[10px] ${remaining > 0 ? 'text-amber-500 font-bold' : 'text-slate-300'}`}>
                                         {remaining > 0 ? remaining : '-'}
                                     </span>
                                 </td>
                               )}
                               
-                              {/* 6. Spacers for Status/Notes */}
-                              {visibleColumns['status'] !== false && <td className="p-0 border-r border-slate-100 bg-slate-50/20"></td>}
-                              {visibleColumns['dyehouseStatus'] !== false && <td className="p-0 border-r border-slate-100 bg-slate-50/20"></td>}
-                              {visibleColumns['notes'] !== false && <td className="p-0 border-r border-slate-100 bg-slate-50/20"></td>}
+                              {/* Spacers for trailing columns */}
+                              {visibleColumns['status'] !== false && <td className="p-0 border-r border-slate-50"></td>}
+                              {visibleColumns['dyehouseStatus'] !== false && <td className="p-0 border-r border-slate-50"></td>}
+                              {visibleColumns['notes'] !== false && <td className="p-0 border-r border-slate-50"></td>}
                               
-                              {/* 7. Action: Delete */}
                               <td className="p-0 text-center">
                                   <button
                                     onClick={() => {
@@ -3747,8 +3847,7 @@ const MemoizedOrderRow = React.memo(({
                                             updatePlanWithAccessories(newPlan);
                                         }
                                     }}
-                                    className="p-1.5 text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover/acc:opacity-100"
-                                    title="Remove Accessory"
+                                    className="p-1 px-2 text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover/acc:opacity-100"
                                   >
                                       <X size={10} />
                                   </button>
@@ -4005,6 +4104,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const [selectedYarnDetails, setSelectedYarnDetails] = useState<any>(null);
   const [showDyehouse, setShowDyehouse] = useState(userRole === 'dyehouse_manager');
   const [dyehousePlanningModal, setDyehousePlanningModal] = useState<{isOpen: boolean, order: OrderRow | null}>({isOpen: false, order: null});
+  const [noMachineDataModal, setNoMachineDataModal] = useState<{isOpen: boolean; orderId: string; currentNote: string}>({isOpen: false, orderId: '', currentNote: ''});
 //   const [showDyehouseImport, setShowDyehouseImport] = useState(false);
   // const [showRemainingWork, setShowRemainingWork] = useState(false); // Removed
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
@@ -4230,9 +4330,13 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     notes: string;
   }>({ date: new Date().toISOString().split('T')[0], quantity: 0, accessorySent: 0, notes: '' });
 
-
-
-  // Import/Export State - REMOVED
+  // Delivery Modal State
+  const [deliveryModal, setDeliveryModal] = useState<{
+    isOpen: boolean;
+    customerId: string;
+    orderId: string;
+    batches: DyeingBatch[] | null;
+  }>({ isOpen: false, customerId: '', orderId: '', batches: null });
 
   // Fetch Data
   useEffect(() => {
@@ -5961,6 +6065,30 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
            ];
            wsData.push(row);
            currentRow++;
+
+           // Add Accessory Rows if any (Professional Export)
+           if (batch.accessories && batch.accessories.length > 0) {
+               batch.accessories.forEach(acc => {
+                   const accRow = [
+                       { v: `  └ ${acc.name}`, s: colorCellStyle }, // Indented accessory name with same background
+                       { v: '-', s: cellStyle }, // Color Approval
+                       { v: acc.dispatchNumber || '', s: cellStyle }, 
+                       { v: acc.formationDate || '', s: cellStyle },
+                       { v: acc.dateSent || '', s: cellStyle },
+                       { v: batch.dyehouse || order.dyehouse || '', s: cellStyle },
+                       { v: '-', s: cellStyle }, // Machine
+                       { v: '-', s: cellStyle }, // Qty
+                       { v: 'اكسسوار', s: cellStyle }, // "Accessory" label
+                       { v: '-', s: cellStyle }, // Sent
+                       { v: '-', s: cellStyle }, // Received
+                       { v: '-', s: cellStyle }, // Remaining
+                       { v: batch.status || 'Pending', s: cellStyle },
+                       { v: '', s: cellStyle } // Notes
+                   ];
+                   wsData.push(accRow);
+                   currentRow++;
+               });
+           }
        });
        
        // Empty spacer row
@@ -7098,6 +7226,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                               <th className="p-3 text-center border-b border-r border-slate-200 w-24">End Date</th>
                               <th className="p-3 text-right border-b border-r border-slate-200 w-20">Scrap</th>
                               <th className="p-3 text-left border-b border-r border-slate-200 min-w-[100px]">Others</th>
+                              <th className="p-3 text-center border-b border-r border-slate-200 w-24">Delivery</th>
                               <th className="p-3 text-left border-b border-r border-slate-200 w-32">Notes</th>
                             </>
                           )}
@@ -7167,10 +7296,15 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                 setNewSent({ date: new Date().toISOString().split('T')[0], quantity: 0, notes: '' });
                               }}
                               onOpenDyehouseTracking={(data) => setDyehouseTrackingModal(data)}
+                              onOpenDelivery={(orderId, batchIdx, batch) => {
+                                const order = flatOrders.find(o => o.id === orderId);
+                                if (order) setDeliveryModal({ isOpen: true, customerId: selectedCustomer.id, orderId, batches: order.dyeingPlan || [] });
+                              }}
                               visibleColumns={manageColorsVisibleColumns}
                               onToggleColumnVisibility={handleToggleColumnVisibility}
                               onUploadFabricImage={handleUploadFabricImage}
                               inventory={inventory}
+                              setNoMachineDataModal={setNoMachineDataModal}
                             />
                           );
                         })}
@@ -7978,6 +8112,47 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
           />
         )}
 
+        {/* No Machine Data Note Modal */}
+        {noMachineDataModal.isOpen && (
+          <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
+            <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md animate-in fade-in zoom-in-95">
+              <h3 className="text-lg font-bold text-slate-800 mb-2">Finished - No Machine Data</h3>
+              <p className="text-sm text-slate-500 mb-4">
+                Add a note to explain why the system couldn't find machine production data for this order.
+              </p>
+              <textarea
+                autoFocus
+                placeholder="e.g., Order was completed externally, manually processed, transferred from old system..."
+                value={noMachineDataModal.currentNote}
+                onChange={(e) => setNoMachineDataModal(prev => ({ ...prev, currentNote: e.target.value }))}
+                className="w-full px-4 py-2 border border-slate-300 rounded-lg mb-4 focus:ring-2 focus:ring-indigo-500 outline-none resize-none"
+                rows={4}
+              />
+              <div className="flex justify-end gap-2">
+                <button 
+                  onClick={() => setNoMachineDataModal({ isOpen: false, orderId: '', currentNote: '' })}
+                  className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={async () => {
+                    if (noMachineDataModal.orderId) {
+                      await handleUpdateOrder(noMachineDataModal.orderId, { 
+                        noMachineDataNote: noMachineDataModal.currentNote.trim() || null 
+                      });
+                      setNoMachineDataModal({ isOpen: false, orderId: '', currentNote: '' });
+                    }
+                  }}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium transition-colors"
+                >
+                  Save Note
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Add Season Modal */}
         {showAddSeason && (
              <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
@@ -8196,6 +8371,17 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         )}
 
 
+
+        {/* Customer Delivery Modal */}
+        {deliveryModal.isOpen && deliveryModal.batches && (
+          <CustomerDeliveryModal
+            isOpen={deliveryModal.isOpen}
+            onClose={() => setDeliveryModal({ ...deliveryModal, isOpen: false, batches: null })}
+            customerId={deliveryModal.customerId}
+            orderId={deliveryModal.orderId}
+            batches={deliveryModal.batches}
+          />
+        )}
 
         {/* Inventory View Modal */}
         {inventoryViewModal.isOpen && (

@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { collection, getDocs, query, orderBy } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { X, Calendar, Package, User, Activity, ArrowRight, PauseCircle, Clock } from 'lucide-react';
+import { X, Calendar, Package, User, Activity, ArrowRight, PauseCircle, Clock, ChevronDown } from 'lucide-react';
 
 interface MachineHistoryModalProps {
   isOpen: boolean;
   onClose: () => void;
   machineId: string;
   machineName: string;
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager' | null;
 }
 
 interface DailyLog {
@@ -30,6 +31,7 @@ interface ProductionRun {
   avgProduction: number;
   status: string;
   type: 'ACTIVE' | 'INACTIVE';
+  logs?: DailyLog[];
 }
 
 export const MachineHistoryModal: React.FC<MachineHistoryModalProps> = ({
@@ -37,9 +39,12 @@ export const MachineHistoryModal: React.FC<MachineHistoryModalProps> = ({
   onClose,
   machineId,
   machineName,
+  userRole,
 }) => {
   const [loading, setLoading] = useState(false);
   const [runs, setRuns] = useState<ProductionRun[]>([]);
+  const [expandedDebug, setExpandedDebug] = useState<string | null>(null);
+  const isAdmin = userRole === 'admin';
 
   useEffect(() => {
     if (isOpen && machineId) {
@@ -64,21 +69,15 @@ export const MachineHistoryModal: React.FC<MachineHistoryModalProps> = ({
       let currentRun: ProductionRun | null = null;
 
       logs.forEach((log) => {
-        const clientRaw = (log.client || '').trim();
-        const fabricRaw = (log.fabric || '').trim();
+        // Use EXACT values from the report - no trimming or normalization
+        const client = log.client || 'Unknown';
+        const fabric = log.fabric || 'Unknown';
         const production = Number(log.dayProduction || log.production || 0);
 
-        // Check for inactivity
-        // Consider inactive if both Client and Fabric are missing or "Unknown"
-        // Also if production is 0 and no client assigned, it's inactive.
-        const isClientUnknown = !clientRaw || clientRaw.toLowerCase() === 'unknown';
-        const isFabricUnknown = !fabricRaw || fabricRaw.toLowerCase() === 'unknown';
-        
-        const isInactive = isClientUnknown && isFabricUnknown;
-
-        const runType = isInactive ? 'INACTIVE' : 'ACTIVE';
-        const client = isInactive ? 'Inactive' : (clientRaw || 'Unknown');
-        const fabric = isInactive ? '-' : (fabricRaw || 'Unknown');
+        // Determine if this is an inactive day (no real client/fabric data)
+        const isInactiveDay = (!log.client || log.client === '' || log.client === 'Unknown') && 
+                              (!log.fabric || log.fabric === '' || log.fabric === 'Unknown');
+        const runType = isInactiveDay ? 'INACTIVE' : 'ACTIVE';
 
         if (!currentRun) {
           currentRun = {
@@ -90,20 +89,23 @@ export const MachineHistoryModal: React.FC<MachineHistoryModalProps> = ({
             totalProduction: production,
             daysCount: 1,
             avgProduction: production,
-            status: isInactive ? 'Idle' : 'Ongoing',
-            type: runType
+            status: isInactiveDay ? 'Idle' : 'Ongoing',
+            type: runType,
+            logs: [log]
           };
         } else {
-          // Check if matches current run type and attributes
+          // Group if: same type AND (same client/fabric OR both inactive)
           const isSameType = currentRun.type === runType;
           const isSameClient = currentRun.client === client;
           const isSameFabric = currentRun.fabric === fabric;
+          const shouldGroup = isSameType && (runType === 'INACTIVE' || (isSameClient && isSameFabric));
 
-          if (isSameType && (runType === 'INACTIVE' || (isSameClient && isSameFabric))) {
+          if (shouldGroup) {
             currentRun.endDate = log.date;
             currentRun.totalProduction += production;
             currentRun.daysCount += 1;
             currentRun.avgProduction = currentRun.totalProduction / currentRun.daysCount;
+            currentRun.logs?.push(log);
           } else {
             groupedRuns.push(currentRun);
             currentRun = {
@@ -115,8 +117,9 @@ export const MachineHistoryModal: React.FC<MachineHistoryModalProps> = ({
               totalProduction: production,
               daysCount: 1,
               avgProduction: production,
-              status: isInactive ? 'Idle' : 'Ongoing',
-              type: runType
+              status: isInactiveDay ? 'Idle' : 'Ongoing',
+              type: runType,
+              logs: [log]
             };
           }
         }
@@ -263,6 +266,52 @@ export const MachineHistoryModal: React.FC<MachineHistoryModalProps> = ({
                               </div>
                             </div>
                           </div>
+
+                          {/* Admin Debug: Show days breakdown (collapsible) */}
+                          {isAdmin && run.logs && run.logs.length > 0 && (
+                            <div className="col-span-2 pt-3 mt-3 border-t border-amber-200">
+                              <button
+                                onClick={() => setExpandedDebug(expandedDebug === run.id ? null : run.id)}
+                                className="flex items-center gap-1 text-xs font-medium text-amber-900 hover:text-amber-600 transition-colors"
+                              >
+                                <ChevronDown
+                                  size={14}
+                                  className={`transition-transform ${expandedDebug === run.id ? 'rotate-180' : ''}`}
+                                />
+                                📊 Debug
+                              </button>
+                              {expandedDebug === run.id && (
+                                <div className="bg-amber-50/50 -mx-4 -mb-4 px-4 py-3 rounded-b mt-2">
+                                  <div className="text-xs text-amber-800 space-y-1">
+                                    <div className="flex items-start gap-2 mb-1">
+                                      <span className="font-mono text-[11px]">{run.logs.map((log, i) => {
+                                        const dateStr = log.date;
+                                        let formatted = dateStr;
+                                        try {
+                                          const date = new Date(dateStr + 'T00:00:00Z');
+                                          if (!isNaN(date.getTime())) {
+                                            formatted = date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+                                          }
+                                        } catch (e) {
+                                          // fallback to original date string
+                                        }
+                                        return (
+                                          <span key={i}>
+                                            {formatted}
+                                            <span className="text-amber-600"> ({Number(log.dayProduction || 0).toFixed(1)}kg)</span>
+                                            {i < run.logs!.length - 1 ? ' | ' : ''}
+                                          </span>
+                                        );
+                                      })}</span>
+                                    </div>
+                                    <div className="text-[10px] text-amber-700 italic">
+                                      (Slight name variations are not a problem - same client/fabric = same run)
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                     )}
                   </div>
