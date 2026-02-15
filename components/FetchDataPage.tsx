@@ -299,7 +299,7 @@ interface FetchDataPageProps {
   machines?: any[];
   onNavigateToPlanning?: (mode: 'INTERNAL' | 'EXTERNAL') => void;
   onNavigateToOrder?: (client: string, fabric?: string) => void;
-  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | null;
 }
 
 const FetchDataPage: React.FC<FetchDataPageProps> = ({ 
@@ -615,6 +615,11 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   };
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
+    // Only admin can drag and reorder rows
+    if (userRole !== 'admin') {
+      e.preventDefault();
+      return;
+    }
     const target = e.target as HTMLElement;
     // Prevent drag if interacting with inputs
     if (['INPUT', 'SELECT', 'BUTTON', 'TEXTAREA'].includes(target.tagName)) {
@@ -632,6 +637,13 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
   const handleDrop = async (e: React.DragEvent, targetIndex: number) => {
     e.preventDefault();
+    
+    // Only admin can drop and reorder rows
+    if (userRole !== 'admin') {
+      alert('صلاحية غير كافية. فقط المسؤول يمكنه إعادة ترتيب الصفوف.');
+      return;
+    }
+    
     if (draggedRowIndex === null || draggedRowIndex === targetIndex) return;
 
     // Note: Drag and drop only works on the filtered view currently
@@ -643,7 +655,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     if (!searchTerm && filterType === 'ALL' && !filterClient && !filterFabric) {
         setAllLogs(newLogs); 
     } else {
-        alert("Drag and drop is only available when no filters are active.");
+        alert("محادثة السحب والإفلات متاحة فقط عند عدم تطبيق أي مرشحات.");
         return;
     }
 
@@ -1897,6 +1909,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                   setSelectedDate(date);
                   handleFetchLogs(date);
                  }}
+                 disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
                  highlightedDates={reportDates}
                  activeDay={activeDay}
                />
@@ -1982,7 +1995,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
             <div className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0 no-scrollbar -mx-2 px-2 md:mx-0 md:px-0">
               <button
                 onClick={() => setIsFabricModalOpen(true)}
-                className="shrink-0 px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 transition-colors flex items-center gap-2 shadow-sm"
+                disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
+                className="shrink-0 px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-blue-400"
               >
                 <Plus size={16} />
                 <span className="hidden xs:inline">Add Fabric</span>
@@ -1991,7 +2005,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
               <button
                 onClick={() => setIsFabricDirectoryOpen(true)}
-                className="shrink-0 px-3 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center gap-2 shadow-sm"
+                disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
+                className="shrink-0 px-3 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-slate-100"
               >
                 <Book size={16} />
                 <span className="hidden xs:inline">Directory</span>
@@ -2004,7 +2019,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                   setFetchSourceDate(dateObj.toISOString().split('T')[0]);
                   setFetchModalOpen(true);
                 }}
-                className="shrink-0 px-3 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center gap-2 shadow-sm"
+                disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
+                className="shrink-0 px-3 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-slate-100"
               >
                 <span>↺</span> 
                 <span className="hidden xs:inline">Fetch Data</span>
@@ -2257,14 +2273,18 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                     return (
                       <tr
                         key={`${log.machineId}-${log.id}-${idx}`}
-                        draggable={true}
+                        draggable={userRole === 'admin'}
                         onDragStart={(e) => handleDragStart(e, idx)}
                         onDragOver={(e) => handleDragOver(e, idx)}
                         onDrop={(e) => handleDrop(e, idx)}
-                        className={`hover:bg-blue-50/50 transition-colors align-middle ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'}`}
+                        className={`${userRole === 'admin' ? 'hover:bg-blue-50/50' : ''} transition-colors align-middle ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'}`}
                       >
-                        {/* Drag Handle */}
-                        <td className="border border-slate-200 p-0 text-slate-400 cursor-move text-lg select-none hidden md:table-cell">⋮⋮</td>
+                        {/* Drag Handle - Only visible to admin */}
+                        {userRole === 'admin' ? (
+                          <td className="border border-slate-200 p-0 text-slate-400 cursor-move text-lg select-none hidden md:table-cell">⋮⋮</td>
+                        ) : (
+                          <td className="border border-slate-200 p-0 text-slate-200 text-lg select-none hidden md:table-cell"></td>
+                        )}
 
                         {/* Index */}
                         <td className="border border-slate-200 p-2 font-semibold text-slate-500 hidden md:table-cell">{idx + 1}</td>
@@ -2314,8 +2334,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                               }}
                               onChange={(e) => handleBlur(e, log.machineId, log.id, 'status')}
                               onKeyDown={(e) => handleKeyDown(e, idx, 'status')}
-                              disabled={isReadOnly}
-                              className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none appearance-none font-bold text-[10px] ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
+                              disabled={isReadOnly || (userRole !== 'admin' && userRole !== 'daily_planner')}
+                              className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none appearance-none font-bold text-[10px] ${isReadOnly || (userRole !== 'admin' && userRole !== 'daily_planner') ? 'cursor-not-allowed opacity-60' : ''}`}
                             >
                               {(Object.values(MachineStatus) as MachineStatus[]).map((status) => (
                                 <option key={status} value={status}>
@@ -2329,8 +2349,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                                 defaultValue={customStatusNote}
                                 placeholder="اكتب الحالة..."
                                 onBlur={(e) => handleBlur({ target: { value: e.target.value, type: 'text' } } as any, log.machineId, log.id, 'customStatusNote')}
-                                disabled={isReadOnly}
-                                className={`w-full border-t border-slate-200 bg-white/70 text-[10px] text-center p-1 outline-none ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
+                                disabled={isReadOnly || (userRole !== 'admin' && userRole !== 'daily_planner')}
+                                className={`w-full border-t border-slate-200 bg-white/70 text-[10px] text-center p-1 outline-none ${isReadOnly || (userRole !== 'admin' && userRole !== 'daily_planner') ? 'cursor-not-allowed opacity-60' : ''}`}
                               />
                             )}
                           </div>
@@ -2350,8 +2370,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             onChange={(e) => handleUpdateLog(log.machineId, log.id, 'avgProduction', e.target.value, true)}
                             onBlur={(e) => handleUpdateLog(log.machineId, log.id, 'avgProduction', Number(e.target.value), false)}
                             onKeyDown={(e) => handleKeyDown(e, idx, 'avgProduction')}
-                            disabled={isReadOnly}
-                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
+                            disabled={isReadOnly || (userRole !== 'admin' && userRole !== 'daily_planner')}
+                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none ${isReadOnly || (userRole !== 'admin' && userRole !== 'daily_planner') ? 'cursor-not-allowed opacity-60' : ''}`}
                           />
                         </td>
 
@@ -2369,8 +2389,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             onChange={(e) => handleUpdateLog(log.machineId, log.id, 'dayProduction', e.target.value, true)}
                             onBlur={(e) => handleUpdateLog(log.machineId, log.id, 'dayProduction', Number(e.target.value), false)}
                             onKeyDown={(e) => handleKeyDown(e, idx, 'dayProduction')}
-                            disabled={isReadOnly}
-                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none font-semibold text-slate-800 ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
+                            disabled={isReadOnly || (userRole !== 'admin' && userRole !== 'daily_planner')}
+                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none font-semibold text-slate-800 ${isReadOnly || (userRole !== 'admin' && userRole !== 'daily_planner') ? 'cursor-not-allowed opacity-60' : ''}`}
                           />
                         </td>
 
@@ -2393,6 +2413,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             value={log.fabric || ''}
                             onChange={(val) => handleBlur({ target: { value: val, type: 'text' } } as any, log.machineId, log.id, 'fabric')}
                             onFocus={() => handleCellFocus(idx, 'fabric')}
+                            disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
                             placeholder="---"
                             strict={true}
                           />
@@ -2406,6 +2427,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             value={log.client || ''}
                             onChange={(val) => handleBlur({ target: { value: val, type: 'text' } } as any, log.machineId, log.id, 'client')}
                             onFocus={() => handleCellFocus(idx, 'client')}
+                            disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
                             placeholder="---"
                             strict={true}
                           />
@@ -2452,8 +2474,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                                 handleUpdateLog(log.machineId, log.id, 'remainingMfg', finalVal, false);
                             }}
                             onKeyDown={(e) => handleKeyDown(e, idx, 'remainingMfg')}
-                            disabled={isReadOnly}
-                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''} ${
+                            disabled={isReadOnly || (userRole !== 'admin' && userRole !== 'daily_planner')}
+                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none ${isReadOnly || (userRole !== 'admin' && userRole !== 'daily_planner') ? 'cursor-not-allowed opacity-60' : ''} ${
                               (Number(log.remainingMfg) || 0) === 0 && (Number(log.dayProduction) || 0) > 0 
                                 ? 'text-green-600 font-bold' 
                                 : (Number(log.remainingMfg) || 0) === 0 && log.status !== 'Working'
@@ -2476,7 +2498,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             }}
                             onBlur={(e) => handleBlur(e, log.machineId, log.id, 'scrap')}
                             onKeyDown={(e) => handleKeyDown(e, idx, 'scrap')}
-                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none font-bold ${log.scrap > 0 ? 'text-red-600' : ''}`}
+                            disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
+                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none font-bold ${userRole !== 'admin' && userRole !== 'daily_planner' ? 'cursor-not-allowed opacity-60' : ''} ${log.scrap > 0 ? 'text-red-600' : ''}`}
                           />
                         </td>
 
@@ -2493,8 +2516,9 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             }}
                             onBlur={(e) => handleBlur(e, log.machineId, log.id, 'reason')}
                             onKeyDown={(e) => handleKeyDown(e, idx, 'reason')}
+                            disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
                             placeholder="السبب..."
-                            className="w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none"
+                            className="w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
                           />
                         </td>
 

@@ -74,7 +74,7 @@ import { MachineStatus } from './types';
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [userName, setUserName] = useState<string>(''); // NEW: Store display name from Firestore
-  const [userRole, setUserRole] = useState<'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null>(null);
+  const [userRole, setUserRole] = useState<'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [rawMachines, setRawMachines] = useState<any[]>([]);

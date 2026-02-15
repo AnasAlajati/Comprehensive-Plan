@@ -23,7 +23,7 @@ interface UserData {
   id: string;
   email: string;
   displayName: string;
-  role: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'pending';
+  role: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | 'pending';
   createdAt: any;
   password?: string;
   isOnline?: boolean;
@@ -45,7 +45,7 @@ export const UserManagementPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserName, setNewUserName] = useState('');
-  const [newUserRole, setNewUserRole] = useState<'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager'>('viewer');
+  const [newUserRole, setNewUserRole] = useState<'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner'>('viewer');
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState('');
   const [createdUserCreds, setCreatedUserCreds] = useState<{email: string, password: string} | null>(null);
@@ -335,6 +335,7 @@ export const UserManagementPage: React.FC = () => {
               <option value="dyehouse_manager">Dyehouse Manager</option>
               <option value="dyehouse_colors_manager">Dyehouse Colors Manager</option>
               <option value="factory_manager">Factory Manager</option>
+              <option value="daily_planner">Daily Planner</option>
               <option value="admin">Admin</option>
             </select>
           </div>
@@ -574,6 +575,7 @@ export const UserManagementPage: React.FC = () => {
                             user.role === 'dyehouse_manager' ? 'bg-cyan-100 text-cyan-800' :
                             user.role === 'dyehouse_colors_manager' ? 'bg-teal-100 text-teal-800' :
                             user.role === 'factory_manager' ? 'bg-orange-100 text-orange-800' :
+                            user.role === 'daily_planner' ? 'bg-green-100 text-green-800' :
                             user.role === 'pending' ? 'bg-yellow-100 text-yellow-800' :
                             'bg-slate-100 text-slate-800'}`}
                       >
@@ -583,6 +585,7 @@ export const UserManagementPage: React.FC = () => {
                         <option value="dyehouse_manager">Dyehouse Manager</option>
                         <option value="dyehouse_colors_manager">Dyehouse Colors Manager</option>
                         <option value="factory_manager">Factory Manager</option>
+                        <option value="daily_planner">Daily Planner</option>
                         <option value="admin">Admin</option>
                       </select>
                     </td>
