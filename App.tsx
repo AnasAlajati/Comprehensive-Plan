@@ -74,7 +74,7 @@ import { MachineStatus } from './types';
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [userName, setUserName] = useState<string>(''); // NEW: Store display name from Firestore
-  const [userRole, setUserRole] = useState<'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager' | null>(null);
+  const [userRole, setUserRole] = useState<'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [rawMachines, setRawMachines] = useState<any[]>([]);
@@ -101,10 +101,10 @@ const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'real-maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'sample-tracking' | 'fabrics' | 'machines' | 'users'>('excel'); 
   const [planningInitialViewMode, setPlanningInitialViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
   
-  // Force dyehouse_manager to only see dyehouse-directory or orders
+  // Force dyehouse_manager and dyehouse_colors_manager to only see dyehouse-directory or orders
   // Force factory_manager to only see real-maintenance or sample-tracking
   useEffect(() => {
-    if (userRole === 'dyehouse_manager' && viewMode !== 'dyehouse-directory' && viewMode !== 'orders') {
+    if ((userRole === 'dyehouse_manager' || userRole === 'dyehouse_colors_manager') && viewMode !== 'dyehouse-directory' && viewMode !== 'orders') {
       setViewMode('dyehouse-directory');
     }
     if (userRole === 'factory_manager' && viewMode !== 'real-maintenance' && viewMode !== 'sample-tracking' && viewMode !== 'recent-prints') {
@@ -772,8 +772,8 @@ const App: React.FC = () => {
              
              {/* Main Tools - Show based on role */}
              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-                {/* Dyehouse Manager only sees Dyehouse Directory and Orders */}
-                {userRole === 'dyehouse_manager' ? (
+                {/* Dyehouse Manager and Dyehouse Colors Manager only see Dyehouse Directory and Orders */}
+                {(userRole === 'dyehouse_manager' || userRole === 'dyehouse_colors_manager') ? (
                   <>
                     <button 
                       onClick={() => { setViewMode('dyehouse-directory'); setIsMenuOpen(false); }}
@@ -887,8 +887,8 @@ const App: React.FC = () => {
                 )}
              </div>
 
-             {/* App Launcher - Hide for Dyehouse Manager and Factory Manager */}
-             {userRole !== 'dyehouse_manager' && userRole !== 'factory_manager' && (
+             {/* App Launcher - Hide for Dyehouse Manager, Dyehouse Colors Manager, and Factory Manager */}
+             {userRole !== 'dyehouse_manager' && userRole !== 'dyehouse_colors_manager' && userRole !== 'factory_manager' && (
              <div className="relative">
                <button 
                  onClick={() => setIsMenuOpen(!isMenuOpen)}

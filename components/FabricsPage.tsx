@@ -17,7 +17,7 @@ const getMachineCategory = (type: string = '') => {
 };
 
 interface FabricsPageProps {
-  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager' | null;
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
 }
 
 export const FabricsPage: React.FC<FabricsPageProps> = ({ userRole }) => {

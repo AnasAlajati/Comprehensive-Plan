@@ -299,7 +299,7 @@ interface FetchDataPageProps {
   machines?: any[];
   onNavigateToPlanning?: (mode: 'INTERNAL' | 'EXTERNAL') => void;
   onNavigateToOrder?: (client: string, fabric?: string) => void;
-  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager' | null;
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
 }
 
 const FetchDataPage: React.FC<FetchDataPageProps> = ({ 

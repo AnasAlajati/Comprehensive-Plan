@@ -1154,7 +1154,7 @@ const MemoizedOrderRow = React.memo(({
   hasHistory: boolean;
   onFilterMachine?: (capacity: string) => void;
   allOrders: OrderRow[];
-  userRole?: 'admin' | 'editor' | 'viewer' | null;
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
   userName?: string;
   onOpenReceiveModal: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
   onOpenSentModal: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
@@ -1170,6 +1170,9 @@ const MemoizedOrderRow = React.memo(({
 }) => {
   // Viewer role is read-only
   const isReadOnly = userRole === 'viewer';
+  
+  // Only Admin and Dyehouse Colors Manager can edit color data
+  const canEditColors = userRole === 'admin' || userRole === 'dyehouse_colors_manager';
   
   const [isGroupingMode, setIsGroupingMode] = React.useState(false);
   const [selectedForGroup, setSelectedForGroup] = React.useState<number[]>([]);
@@ -2978,7 +2981,7 @@ const MemoizedOrderRow = React.memo(({
                                       </div>
                                     </div>
                                     <div className="flex items-center gap-1 opacity-100">
-                                      {editingGroupId !== currentGroupId && (
+                                      {editingGroupId !== currentGroupId && canEditColors && (
                                       <button
                                         onClick={() => {
                                           setEditingGroupId(currentGroupId);
@@ -2990,6 +2993,7 @@ const MemoizedOrderRow = React.memo(({
                                         <Edit2 size={12} />
                                       </button>
                                       )}
+                                      {canEditColors && (
                                       <button
                                         onClick={() => {
                                           if (confirm('هل تريد فك تجميع هذه الألوان؟')) {
@@ -3005,6 +3009,7 @@ const MemoizedOrderRow = React.memo(({
                                       >
                                         <Unlink size={12} />
                                       </button>
+                                      )}
                                     </div>
                                 </div>
                             </td>
@@ -3024,7 +3029,8 @@ const MemoizedOrderRow = React.memo(({
                       const idx = originalIdx;
                       // Determine if batch is locked (not draft)
                       const batchStatus = batch.status || 'pending';
-                      const isLocked = false; 
+                      // Lock color editing if user doesn't have permission
+                      const isLocked = !canEditColors; 
                       
                       // Using hover:shadow-md and hover:bg-slate-50 for clearer row focus
                       let rowBgClass = 'hover:bg-slate-50 hover:shadow-md hover:z-10 relative transition-all duration-200';
@@ -3043,7 +3049,7 @@ const MemoizedOrderRow = React.memo(({
                       <td className="p-0 relative">
                         <div className="flex items-center h-full pl-2">
                             {/* Checkbox for grouping */}
-                            {isGroupingMode && (
+                            {isGroupingMode && canEditColors && (
                                 <div className="absolute left-0 top-0 bottom-0 z-50 flex items-center justify-center bg-white/90 w-8 border-r border-indigo-100">
                                     <input 
                                         type="checkbox"
@@ -3113,12 +3119,14 @@ const MemoizedOrderRow = React.memo(({
                       {visibleColumns['colorApproval'] !== false && (
                       <td className="p-0 relative bg-transparent">
                         <button
-                             className="w-full h-full min-h-[48px] cursor-pointer hover:bg-indigo-50 transition-colors flex flex-col items-center justify-center px-1 py-1 relative group/approval"
+                             className={`w-full h-full min-h-[48px] transition-colors flex flex-col items-center justify-center px-1 py-1 relative group/approval ${
+                               canEditColors ? 'cursor-pointer hover:bg-indigo-50' : 'cursor-not-allowed opacity-60'
+                             }`}
                              onClick={() => {
-                                 // Allow editing color approvals regardless of batch status
+                                 if (!canEditColors) return;
                                  onOpenColorApproval(row.id, idx, batch);
                              }}
-                             title="Click to manage color approvals"
+                             title={canEditColors ? "Click to manage color approvals" : "يتطلب صلاحية مدير ألوان المصبغة"}
                         >
                              <span className={`font-medium text-xs truncate max-w-full ${batch.colorApproval ? 'text-indigo-800' : 'text-slate-300'}`}>
                                 {batch.colorApproval || '...'}
@@ -3139,9 +3147,13 @@ const MemoizedOrderRow = React.memo(({
                       <td className="p-0">
                         <input
                           type="text"
-                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right"
+                          disabled={!canEditColors}
+                          className={`w-full px-3 py-2 bg-transparent outline-none text-right ${
+                            canEditColors ? 'focus:bg-blue-50' : 'cursor-not-allowed opacity-60'
+                          }`}
                           value={batch.dispatchNumber || ''}
                           onChange={(e) => {
+                            if (!canEditColors) return;
                             const newPlan = [...(row.dyeingPlan || [])];
                             newPlan[idx] = { ...batch, dispatchNumber: e.target.value };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
@@ -3154,9 +3166,13 @@ const MemoizedOrderRow = React.memo(({
                       <td className="p-0 relative group/date">
                         <input
                             type="date"
-                            className="w-full h-full px-2 py-2 bg-transparent outline-none focus:bg-blue-50 text-center text-[10px] font-mono text-slate-700 cursor-pointer"
+                            disabled={!canEditColors}
+                            className={`w-full h-full px-2 py-2 bg-transparent outline-none text-center text-[10px] font-mono text-slate-700 ${
+                              canEditColors ? 'focus:bg-blue-50 cursor-pointer' : 'cursor-not-allowed opacity-60'
+                            }`}
                             value={batch.formationDate || ''}
                             onChange={(e) => {
+                                if (!canEditColors) return;
                                 const newPlan = [...(row.dyeingPlan || [])];
                                 newPlan[idx] = { ...batch, formationDate: e.target.value };
                                 handleUpdateOrder(row.id, { dyeingPlan: newPlan });
@@ -3177,9 +3193,13 @@ const MemoizedOrderRow = React.memo(({
                       <td className="p-0 relative group/date">
                         <input
                             type="date"
-                            className="w-full h-full px-2 py-2 bg-transparent outline-none focus:bg-blue-50 text-center text-[10px] font-mono text-slate-700 cursor-pointer"
+                            disabled={!canEditColors}
+                            className={`w-full h-full px-2 py-2 bg-transparent outline-none text-center text-[10px] font-mono text-slate-700 ${
+                              canEditColors ? 'focus:bg-blue-50 cursor-pointer' : 'cursor-not-allowed opacity-60'
+                            }`}
                             value={batch.dateSent || ''}
                             onChange={(e) => {
+                                if (!canEditColors) return;
                                 const newPlan = [...(row.dyeingPlan || [])];
                                 newPlan[idx] = { ...batch, dateSent: e.target.value };
                                 handleUpdateOrder(row.id, { dyeingPlan: newPlan });
@@ -3220,7 +3240,9 @@ const MemoizedOrderRow = React.memo(({
                               options={dyehouses}
                               value={effectiveDyehouse}
                               title={sourceInfo}
+                              disabled={!canEditColors}
                               onChange={(val) => {
+                                if (!canEditColors) return;
                                 const newPlan = [...(row.dyeingPlan || [])];
                                 // Auto-calculate vessel size if dyehouse is selected
                                 const selectedDh = dyehouses.find((d: any) => d.name === val);
@@ -3259,9 +3281,13 @@ const MemoizedOrderRow = React.memo(({
                       <td className="p-0">
                         <input
                           type="number"
-                          className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600"
+                          disabled={!canEditColors}
+                          className={`w-full px-3 py-2 text-center bg-transparent outline-none font-mono text-slate-600 ${
+                            canEditColors ? 'focus:bg-blue-50' : 'cursor-not-allowed opacity-60'
+                          }`}
                           value={batch.quantity || ''}
                           onChange={(e) => {
+                            if (!canEditColors) return;
                             const newPlan = [...(row.dyeingPlan || [])];
                             newPlan[idx] = { ...batch, quantity: Number(e.target.value) };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
@@ -3282,9 +3308,13 @@ const MemoizedOrderRow = React.memo(({
                                 return (
                                     <div className="relative w-full h-full">
                                         <select
-                                            className="w-full h-full px-1 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono font-bold text-slate-800 text-xs appearance-none cursor-pointer"
+                                            disabled={!canEditColors}
+                                            className={`w-full h-full px-1 py-2 text-center bg-transparent outline-none font-mono font-bold text-slate-800 text-xs appearance-none ${
+                                              canEditColors ? 'focus:bg-blue-50 cursor-pointer' : 'cursor-not-allowed opacity-60'
+                                            }`}
                                             value={batch.plannedCapacity || ''}
                                             onChange={(e) => {
+                                                if (!canEditColors) return;
                                                 const newPlan = [...(row.dyeingPlan || [])];
                                                 newPlan[idx] = { ...batch, plannedCapacity: Number(e.target.value) };
                                                 handleUpdateOrder(row.id, { dyeingPlan: newPlan });
@@ -3309,9 +3339,13 @@ const MemoizedOrderRow = React.memo(({
                             return (
                                 <input
                                   type="number"
-                                  className="w-full px-3 py-2 text-center bg-transparent outline-none focus:bg-blue-50 font-mono font-bold text-slate-800"
+                                  disabled={!canEditColors}
+                                  className={`w-full px-3 py-2 text-center bg-transparent outline-none font-mono font-bold text-slate-800 ${
+                                    canEditColors ? 'focus:bg-blue-50' : 'cursor-not-allowed opacity-60'
+                                  }`}
                                   value={batch.plannedCapacity || ''}
                                   onChange={(e) => {
+                                    if (!canEditColors) return;
                                     const newPlan = [...(row.dyeingPlan || [])];
                                     newPlan[idx] = { ...batch, plannedCapacity: Number(e.target.value) };
                                     handleUpdateOrder(row.id, { dyeingPlan: newPlan });
@@ -3328,9 +3362,13 @@ const MemoizedOrderRow = React.memo(({
                       <td className="p-0">
                         <input
                           type="text"
-                          className="w-full px-2 py-2 text-center bg-transparent outline-none focus:bg-blue-50 text-[10px] text-slate-600"
+                          disabled={!canEditColors}
+                          className={`w-full px-2 py-2 text-center bg-transparent outline-none text-[10px] text-slate-600 ${
+                            canEditColors ? 'focus:bg-blue-50' : 'cursor-not-allowed opacity-60'
+                          }`}
                           value={batch.accessoryType || row.accessory || ''}
                           onChange={(e) => {
+                            if (!canEditColors) return;
                             const newPlan = [...(row.dyeingPlan || [])];
                             newPlan[idx] = { ...batch, accessoryType: e.target.value };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
@@ -3351,9 +3389,18 @@ const MemoizedOrderRow = React.memo(({
                            
                            return (
                                <button
-                                  onClick={() => onOpenSentModal(row.id, idx, batch)}
-                                  className="w-full px-1 py-1 text-center bg-transparent hover:bg-blue-50 transition-colors group/sent"
-                                  title="Click to add/view sent items"
+                                  onClick={() => {
+                                    if (!canEditColors) {
+                                      alert('يتطلب صلاحية مدير ألوان المصبغة');
+                                      return;
+                                    }
+                                    onOpenSentModal(row.id, idx, batch);
+                                  }}
+                                  disabled={!canEditColors}
+                                  className={`w-full px-1 py-1 text-center bg-transparent transition-colors group/sent ${
+                                    canEditColors ? 'hover:bg-blue-50' : 'cursor-not-allowed opacity-60'
+                                  }`}
+                                  title={canEditColors ? "Click to add/view sent items" : "يتطلب صلاحية مدير ألوان المصبغة"}
                                >
                                   <div className="flex flex-col items-center justify-center min-h-[40px]">
                                       <span className={`font-mono font-bold text-xs ${sentRaw > 0 ? 'text-blue-600' : 'text-slate-300'}`}>
@@ -3398,9 +3445,18 @@ const MemoizedOrderRow = React.memo(({
                           
                           return (
                             <button
-                              onClick={() => onOpenReceiveModal(row.id, idx, batch)}
-                              className="w-full px-1 py-1 text-center bg-transparent hover:bg-emerald-50 transition-colors group/receive"
-                              title="Click to add/view receives"
+                              onClick={() => {
+                                if (!canEditColors) {
+                                  alert('يتطلب صلاحية مدير ألوان المصبغة');
+                                  return;
+                                }
+                                onOpenReceiveModal(row.id, idx, batch);
+                              }}
+                              disabled={!canEditColors}
+                              className={`w-full px-1 py-1 text-center bg-transparent transition-colors group/receive ${
+                                canEditColors ? 'hover:bg-emerald-50' : 'cursor-not-allowed opacity-60'
+                              }`}
+                              title={canEditColors ? "Click to add/view receives" : "يتطلب صلاحية مدير ألوان المصبغة"}
                             >
                               <div className="flex flex-col items-center justify-center min-h-[40px]">
                                 <span className={`font-mono font-bold text-xs ${recRaw > 0 ? 'text-emerald-600' : 'text-slate-300'}`}>
@@ -3488,11 +3544,15 @@ const MemoizedOrderRow = React.memo(({
                            };
                            
                            return (
-                               <select 
-                                    className={`appearance-none inline-block w-[calc(100%-8px)] mx-auto text-[10px] py-1 rounded border font-medium outline-none cursor-pointer text-center ${styles[currentStatus as keyof typeof styles] || styles.draft}`}
+                               <select
+                                    disabled={!canEditColors}
+                                    className={`appearance-none inline-block w-[calc(100%-8px)] mx-auto text-[10px] py-1 rounded border font-medium outline-none text-center ${
+                                      canEditColors ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
+                                    } ${styles[currentStatus as keyof typeof styles] || styles.draft}`}
                                     style={{ textAlignLast: 'center' }}
                                     value={currentStatus}
                                     onChange={(e) => {
+                                        if (!canEditColors) return;
                                         const newStatus = e.target.value as 'draft' | 'pending' | 'sent' | 'received';
                                         const newPlan = [...(row.dyeingPlan || [])];
                                         const updates: Partial<typeof batch> = { status: newStatus };
@@ -3522,13 +3582,22 @@ const MemoizedOrderRow = React.memo(({
                       <td className="p-1 min-w-[120px]">
                         <div className="flex flex-col gap-1 w-full group/tracker">
                             <button
-                                onClick={() => onOpenDyehouseTracking({
-                                    isOpen: true,
-                                    orderId: row.id,
-                                    batchIdx: idx,
-                                    batch: batch
-                                })}
-                                className={`w-full text-[10px] py-1 px-1 rounded border outline-none cursor-pointer font-bold text-center flex items-center justify-center gap-1 transition-all ${
+                                onClick={() => {
+                                    if (!canEditColors) {
+                                        alert('يتطلب صلاحية مدير ألوان المصبغة');
+                                        return;
+                                    }
+                                    onOpenDyehouseTracking({
+                                        isOpen: true,
+                                        orderId: row.id,
+                                        batchIdx: idx,
+                                        batch: batch
+                                    });
+                                }}
+                                disabled={!canEditColors}
+                                className={`w-full text-[10px] py-1 px-1 rounded border outline-none font-bold text-center flex items-center justify-center gap-1 transition-all ${
+                                  canEditColors ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
+                                } ${
                                     batch.dyehouseStatus === 'DYEING' ? 'bg-purple-100 text-purple-700 border-purple-200' :
                                     batch.dyehouseStatus === 'FINISHING' ? 'bg-orange-100 text-orange-700 border-orange-200' :
                                     batch.dyehouseStatus === 'STORE_FINISHED' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' :
@@ -3551,13 +3620,21 @@ const MemoizedOrderRow = React.memo(({
                             {/* Date Display (Click to open modal too) */}
                             {batch.dyehouseStatusDate && (
                                 <div 
-                                    onClick={() => onOpenDyehouseTracking({
-                                        isOpen: true,
-                                        orderId: row.id,
-                                        batchIdx: idx,
-                                        batch: batch
-                                    })}
-                                    className="text-[9px] text-slate-500 text-center cursor-pointer hover:text-blue-600 font-mono"
+                                    onClick={() => {
+                                        if (!canEditColors) {
+                                            alert('يتطلب صلاحية مدير ألوان المصبغة');
+                                            return;
+                                        }
+                                        onOpenDyehouseTracking({
+                                            isOpen: true,
+                                            orderId: row.id,
+                                            batchIdx: idx,
+                                            batch: batch
+                                        });
+                                    }}
+                                    className={`text-[9px] text-slate-500 text-center font-mono ${
+                                        canEditColors ? 'cursor-pointer hover:text-blue-600' : 'cursor-not-allowed opacity-60'
+                                    }`}
                                 >
                                     {formatDateShort(batch.dyehouseStatusDate)}
                                 </div>
@@ -3570,9 +3647,13 @@ const MemoizedOrderRow = React.memo(({
                       <td className="p-0">
                         <input
                           type="text"
-                          className="w-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 text-right"
+                          disabled={!canEditColors}
+                          className={`w-full px-3 py-2 bg-transparent outline-none text-right ${
+                            canEditColors ? 'focus:bg-blue-50' : 'cursor-not-allowed opacity-60'
+                          }`}
                           value={batch.notes}
                           onChange={(e) => {
+                            if (!canEditColors) return;
                             const newPlan = [...(row.dyeingPlan || [])];
                             newPlan[idx] = { ...batch, notes: e.target.value };
                             handleUpdateOrder(row.id, { dyeingPlan: newPlan });
@@ -3617,6 +3698,10 @@ const MemoizedOrderRow = React.memo(({
 
                             <button
                             onClick={() => {
+                                if (!canEditColors) {
+                                    alert('يتطلب صلاحية مدير ألوان المصبغة لحذف الألوان');
+                                    return;
+                                }
                                 // Prevent deletion of locked batches
                                 /* Removed check for draft per user request
                                 const batchStatus = batch.status || 'draft';
@@ -3630,7 +3715,13 @@ const MemoizedOrderRow = React.memo(({
                                     handleUpdateOrder(row.id, { dyeingPlan: newPlan });
                                 }
                             }}
-                            className={`p-2 text-slate-400 hover:text-red-500 opacity-0 group-hover/batch:opacity-100 transition-opacity`}
+                            disabled={!canEditColors}
+                            className={`p-2 opacity-0 group-hover/batch:opacity-100 transition-opacity ${
+                                canEditColors 
+                                    ? 'text-slate-400 hover:text-red-500' 
+                                    : 'text-slate-300 cursor-not-allowed'
+                            }`}
+                            title={!canEditColors ? 'يتطلب صلاحية مدير ألوان المصبغة' : ''}
                             >
                             <Trash2 className="w-3 h-3" />
                             </button>
@@ -3677,8 +3768,17 @@ const MemoizedOrderRow = React.memo(({
                               <div className="flex items-center gap-3 px-2 py-1 h-8">
                                 <span className="text-[10px] text-slate-400 italic">No accessories</span>
                                 <button
-                                  onClick={addAccessoryRow}
-                                  className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-blue-600 hover:bg-blue-50 hover:text-blue-700 transition-colors"
+                                  onClick={() => {
+                                    if (!canEditColors) {
+                                      alert('يتطلب صلاحية مدير ألوان المصبغة');
+                                      return;
+                                    }
+                                    addAccessoryRow();
+                                  }}
+                                  disabled={!canEditColors}
+                                  className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+                                    canEditColors ? 'text-blue-600 hover:bg-blue-50 hover:text-blue-700' : 'text-slate-400 cursor-not-allowed opacity-50'
+                                  }`}
                                 >
                                   <Plus size={10} />
                                   Add
@@ -3716,10 +3816,16 @@ const MemoizedOrderRow = React.memo(({
                                       {/* Independent Accessory Name Input */}
                                       <input
                                           type="text"
-                                          className="flex-1 px-1 py-1.5 bg-transparent border-none outline-none focus:bg-blue-50 text-right text-[10px] font-bold text-slate-700 placeholder:font-normal placeholder:text-slate-300"
+                                          disabled={!canEditColors}
+                                          className={`flex-1 px-1 py-1.5 bg-transparent border-none outline-none text-right text-[10px] font-bold text-slate-700 placeholder:font-normal placeholder:text-slate-300 ${
+                                            canEditColors ? 'focus:bg-blue-50' : 'cursor-not-allowed opacity-60'
+                                          }`}
                                           placeholder="اسم الاكسسوار..."
                                           value={acc.name || ''}
-                                          onChange={(e) => updateAcc({ name: e.target.value })}
+                                          onChange={(e) => {
+                                            if (!canEditColors) return;
+                                            updateAcc({ name: e.target.value });
+                                          }}
                                       />
                                       <span className="text-[7px] text-slate-300 font-bold bg-slate-50 px-1 py-0.5 rounded border border-slate-100 uppercase tracking-tighter ml-1 opacity-0 group-hover/acc-name:opacity-100 transition-opacity">
                                         Acc
@@ -3735,10 +3841,16 @@ const MemoizedOrderRow = React.memo(({
                                 <td className="p-0 border-r border-slate-100">
                                     <input
                                         type="text"
-                                        className="w-full px-1 py-1.5 bg-transparent border-none outline-none focus:bg-blue-50 text-center font-mono text-[10px] text-slate-600"
+                                        disabled={!canEditColors}
+                                        className={`w-full px-1 py-1.5 bg-transparent border-none outline-none text-center font-mono text-[10px] text-slate-600 ${
+                                          canEditColors ? 'focus:bg-blue-50' : 'cursor-not-allowed opacity-60'
+                                        }`}
                                         placeholder="-"
                                         value={acc.dispatchNumber || ''}
-                                        onChange={(e) => updateAcc({ dispatchNumber: e.target.value })}
+                                        onChange={(e) => {
+                                          if (!canEditColors) return;
+                                          updateAcc({ dispatchNumber: e.target.value });
+                                        }}
                                     />
                                 </td>
                               )}
@@ -3748,9 +3860,15 @@ const MemoizedOrderRow = React.memo(({
                                 <td className="p-0 border-r border-slate-100">
                                     <input
                                         type="date"
-                                        className="w-full h-full px-1 py-1 bg-transparent border-none outline-none focus:bg-blue-50 text-[10px] text-slate-600 cursor-pointer"
+                                        disabled={!canEditColors}
+                                        className={`w-full h-full px-1 py-1 bg-transparent border-none outline-none text-[10px] text-slate-600 ${
+                                          canEditColors ? 'focus:bg-blue-50 cursor-pointer' : 'cursor-not-allowed opacity-60'
+                                        }`}
                                         value={acc.formationDate || ''}
-                                        onChange={(e) => updateAcc({ formationDate: e.target.value })}
+                                        onChange={(e) => {
+                                          if (!canEditColors) return;
+                                          updateAcc({ formationDate: e.target.value });
+                                        }}
                                     />
                                 </td>
                               )}
@@ -3769,9 +3887,15 @@ const MemoizedOrderRow = React.memo(({
                                 <td className="p-0 border-r border-slate-100">
                                     <input
                                         type="date"
-                                        className="w-full h-full px-1 py-1 bg-transparent border-none outline-none focus:bg-blue-50 text-[10px] text-slate-600 cursor-pointer"
+                                        disabled={!canEditColors}
+                                        className={`w-full h-full px-1 py-1 bg-transparent border-none outline-none text-[10px] text-slate-600 ${
+                                          canEditColors ? 'focus:bg-blue-50 cursor-pointer' : 'cursor-not-allowed opacity-60'
+                                        }`}
                                         value={acc.dateSent || ''}
-                                        onChange={(e) => updateAcc({ dateSent: e.target.value })}
+                                        onChange={(e) => {
+                                          if (!canEditColors) return;
+                                          updateAcc({ dateSent: e.target.value });
+                                        }}
                                     />
                                 </td>
                               )}
@@ -3802,10 +3926,16 @@ const MemoizedOrderRow = React.memo(({
                                 <td className="p-0 border-r border-slate-100">
                                     <input
                                         type="number"
-                                        className="w-full py-1.5 text-center bg-transparent outline-none focus:bg-blue-50 text-blue-500 font-mono text-[10px]"
+                                        disabled={!canEditColors}
+                                        className={`w-full py-1.5 text-center bg-transparent outline-none text-blue-500 font-mono text-[10px] ${
+                                          canEditColors ? 'focus:bg-blue-50' : 'cursor-not-allowed opacity-60'
+                                        }`}
                                         placeholder="0"
                                         value={acc.sent ?? ''}
-                                        onChange={(e) => updateAcc({ sent: Number(e.target.value) })}
+                                        onChange={(e) => {
+                                          if (!canEditColors) return;
+                                          updateAcc({ sent: Number(e.target.value) });
+                                        }}
                                     />
                                 </td>
                               )}
@@ -3815,10 +3945,16 @@ const MemoizedOrderRow = React.memo(({
                                 <td className="p-0 border-r border-slate-100">
                                     <input
                                         type="number"
-                                        className="w-full py-1.5 text-center bg-transparent outline-none focus:bg-emerald-50 text-emerald-500 font-mono text-[10px]"
+                                        disabled={!canEditColors}
+                                        className={`w-full py-1.5 text-center bg-transparent outline-none text-emerald-500 font-mono text-[10px] ${
+                                          canEditColors ? 'focus:bg-emerald-50' : 'cursor-not-allowed opacity-60'
+                                        }`}
                                         placeholder="0"
                                         value={acc.received ?? ''}
-                                        onChange={(e) => updateAcc({ received: Number(e.target.value) })}
+                                        onChange={(e) => {
+                                          if (!canEditColors) return;
+                                          updateAcc({ received: Number(e.target.value) });
+                                        }}
                                     />
                                 </td>
                               )}
@@ -3840,6 +3976,10 @@ const MemoizedOrderRow = React.memo(({
                               <td className="p-0 text-center">
                                   <button
                                     onClick={() => {
+                                        if (!canEditColors) {
+                                            alert('يتطلب صلاحية مدير ألوان المصبغة');
+                                            return;
+                                        }
                                         if (confirm('Delete accessory?')) {
                                             const newPlan = [...(row.dyeingPlan || [])];
                                             const updatedAccessories = [...(batch.accessories || [])].filter((_, i) => i !== accIdx);
@@ -3847,7 +3987,10 @@ const MemoizedOrderRow = React.memo(({
                                             updatePlanWithAccessories(newPlan);
                                         }
                                     }}
-                                    className="p-1 px-2 text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover/acc:opacity-100"
+                                    disabled={!canEditColors}
+                                    className={`p-1 px-2 transition-colors opacity-0 group-hover/acc:opacity-100 ${
+                                      canEditColors ? 'text-slate-300 hover:text-red-500' : 'text-slate-200 cursor-not-allowed'
+                                    }`}
                                   >
                                       <X size={10} />
                                   </button>
@@ -3877,6 +4020,10 @@ const MemoizedOrderRow = React.memo(({
                       <div className="flex items-center gap-3">
                         <button
                           onClick={() => {
+                            if (!canEditColors) {
+                              alert('يتطلب صلاحية مدير ألوان المصبغة لإضافة ألوان');
+                              return;
+                            }
                             const newBatch = {
                               id: crypto.randomUUID(),
                               color: '',
@@ -3890,14 +4037,20 @@ const MemoizedOrderRow = React.memo(({
                               dyeingPlan: [...(row.dyeingPlan || []), newBatch] 
                             });
                           }}
-                          className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50 transition-colors"
+                          disabled={!canEditColors}
+                          className={`flex items-center gap-1 text-xs font-medium px-2 py-1 rounded transition-colors ${
+                            canEditColors 
+                              ? 'text-blue-600 hover:text-blue-700 hover:bg-blue-50' 
+                              : 'text-slate-400 cursor-not-allowed opacity-50'
+                          }`}
+                          title={!canEditColors ? 'يتطلب صلاحية مدير ألوان المصبغة' : ''}
                         >
                           <Plus className="w-3 h-3" />
                           اضافة لون
                         </button>
                         
                         {/* Add Group Button */}
-                        {(row.dyeingPlan || []).length >= 2 && (
+                        {(row.dyeingPlan || []).length >= 2 && canEditColors && (
                           !isGroupingMode ? (
                             <button
                               onClick={() => {
@@ -3986,7 +4139,7 @@ const MemoizedOrderRow = React.memo(({
 });
 
 interface ClientOrdersPageProps {
-  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | null;
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
   highlightTarget?: { client: string; fabric?: string } | null;
   onHighlightComplete?: () => void;
   userName?: string;
@@ -4102,7 +4255,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const [activeDay, setActiveDay] = useState<string>(new Date().toISOString().split('T')[0]);
   const [showYarnRequirements, setShowYarnRequirements] = useState(false);
   const [selectedYarnDetails, setSelectedYarnDetails] = useState<any>(null);
-  const [showDyehouse, setShowDyehouse] = useState(userRole === 'dyehouse_manager');
+  const [showDyehouse, setShowDyehouse] = useState(userRole === 'dyehouse_manager' || userRole === 'dyehouse_colors_manager');
   const [dyehousePlanningModal, setDyehousePlanningModal] = useState<{isOpen: boolean, order: OrderRow | null}>({isOpen: false, order: null});
   const [noMachineDataModal, setNoMachineDataModal] = useState<{isOpen: boolean; orderId: string; currentNote: string}>({isOpen: false, orderId: '', currentNote: ''});
 //   const [showDyehouseImport, setShowDyehouseImport] = useState(false);
@@ -8300,6 +8453,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                onClose={() => setColorApprovalModal({ ...colorApprovalModal, isOpen: false, batch: null })}
                batch={colorApprovalModal.batch}
                dyehouses={dyehouses}
+               userRole={userRole}
                onSave={(updatedBatch) => {
                    const order = flatOrders.find(o => o.id === colorApprovalModal.orderId);
                    if (order) {

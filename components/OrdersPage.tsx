@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+Before Writing code import React, { useState, useEffect, useRef } from 'react';
 import { 
   collection, 
   onSnapshot, 
@@ -36,7 +36,7 @@ const NAVIGABLE_FIELDS: (keyof OrderRow)[] = [
 ];
 
 interface OrdersPageProps {
-  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'factory_manager' | null;
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
 }
 
 export const OrdersPage: React.FC<OrdersPageProps> = ({ userRole }) => {

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Plus, Trash2, Check, AlertCircle } from 'lucide-react';
+import { X, Plus, Trash2, Check, AlertCircle, Lock } from 'lucide-react';
 import { DyeingBatch, ColorApproval } from '../types';
 
 interface ColorApprovalModalProps {
@@ -8,6 +8,7 @@ interface ColorApprovalModalProps {
   batch: DyeingBatch;
   dyehouses: any[]; // List of available dyehouses
   onSave: (updatedBatch: DyeingBatch) => void;
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
 }
 
 export const ColorApprovalModal: React.FC<ColorApprovalModalProps> = ({
@@ -15,8 +16,12 @@ export const ColorApprovalModal: React.FC<ColorApprovalModalProps> = ({
   onClose,
   batch,
   dyehouses,
-  onSave
+  onSave,
+  userRole
 }) => {
+  // Permission check: Only Admin and Dyehouse Colors Manager can edit
+  const canEdit = userRole === 'admin' || userRole === 'dyehouse_colors_manager';
+  
   // Use props directly for the list source of truth (managed by parent via onSave)
   const approvals = batch.colorApprovals || [];
   
@@ -114,6 +119,14 @@ export const ColorApprovalModal: React.FC<ColorApprovalModalProps> = ({
           </button>
         </div>
 
+        {/* Permission Notice */}
+        {!canEdit && (
+          <div className="mx-6 mt-4 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-2 text-amber-800">
+            <Lock size={16} />
+            <span className="text-sm font-medium">وضع العرض فقط - يتطلب صلاحية مدير ألوان المصبغة للتعديل</span>
+          </div>
+        )}
+
         {/* Content */}
         <div className="p-6 max-h-[70vh] overflow-y-auto custom-scrollbar">
           
@@ -129,7 +142,8 @@ export const ColorApprovalModal: React.FC<ColorApprovalModalProps> = ({
                     <select
                         value={newApproval.dyehouseName}
                         onChange={e => setNewApproval({...newApproval, dyehouseName: e.target.value})}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm outline-none focus:border-indigo-500"
+                        disabled={!canEdit}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm outline-none focus:border-indigo-500 disabled:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                         <option value="">اختر مصبغة...</option>
                         {dyehouses.map((d: any) => (
@@ -143,7 +157,8 @@ export const ColorApprovalModal: React.FC<ColorApprovalModalProps> = ({
                         type="text"
                         value={newApproval.approvalCode}
                         onChange={e => setNewApproval({...newApproval, approvalCode: e.target.value})}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm outline-none focus:border-indigo-500"
+                        disabled={!canEdit}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm outline-none focus:border-indigo-500 disabled:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
                         placeholder="K-123..."
                     />
                 </div>
@@ -153,7 +168,8 @@ export const ColorApprovalModal: React.FC<ColorApprovalModalProps> = ({
                         type="text"
                         value={newApproval.dyehouseColor}
                         onChange={e => setNewApproval({...newApproval, dyehouseColor: e.target.value})}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm outline-none focus:border-indigo-500"
+                        disabled={!canEdit}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm outline-none focus:border-indigo-500 disabled:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
                         placeholder="Navy Blue..."
                     />
                 </div>
@@ -163,16 +179,18 @@ export const ColorApprovalModal: React.FC<ColorApprovalModalProps> = ({
                         type="text"
                         value={newApproval.notes}
                         onChange={e => setNewApproval({...newApproval, notes: e.target.value})}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm outline-none focus:border-indigo-500"
+                        disabled={!canEdit}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm outline-none focus:border-indigo-500 disabled:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
                         placeholder="ملاحظات اضافية..."
                     />
                 </div>
             </div>
             <button 
                 onClick={handleAdd}
-                disabled={!newApproval.approvalCode || !newApproval.dyehouseName}
-                className="w-full py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
+                disabled={!canEdit || !newApproval.approvalCode || !newApproval.dyehouseName}
+                className="w-full py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
             >
+                {!canEdit && <Lock size={14} />}
                 اضافة للقائمة
             </button>
           </div>
@@ -231,9 +249,10 @@ export const ColorApprovalModal: React.FC<ColorApprovalModalProps> = ({
                         <div className="flex items-center justify-between pt-2 border-t border-slate-100 opacity-60 group-hover:opacity-100 transition-opacity">
                             {/* Delete Button (Left Side / Start) */}
                              <button 
-                                onClick={(e) => { e.stopPropagation(); handleDelete(app.id); }}
-                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors flex items-center gap-1"
-                                title="حذف"
+                                onClick={(e) => { e.stopPropagation(); if (canEdit) handleDelete(app.id); }}
+                                disabled={!canEdit}
+                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors flex items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed"
+                                title={canEdit ? "حذف" : "يتطلب صلاحية مدير ألوان المصبغة"}
                             >
                                 <Trash2 size={14} />
                                 <span className="text-[10px]">حذف</span>
@@ -242,8 +261,10 @@ export const ColorApprovalModal: React.FC<ColorApprovalModalProps> = ({
                             {/* Select Button (Right Side / End) - Only if not selected */}
                             {batch.colorApproval !== app.approvalCode && (
                                 <button
-                                    onClick={() => handleSelect(app)}
-                                    className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 hover:text-indigo-700 rounded text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5"
+                                    onClick={() => { if (canEdit) handleSelect(app); }}
+                                    disabled={!canEdit}
+                                    className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 hover:text-indigo-700 rounded text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5 disabled:opacity-30 disabled:cursor-not-allowed"
+                                    title={!canEdit ? "يتطلب صلاحية مدير ألوان المصبغة" : ""}
                                 >
                                     <span>تعيين كمعتمد</span>
                                     <Check size={14} />
