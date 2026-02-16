@@ -3877,7 +3877,7 @@ const MemoizedOrderRow = React.memo(({
                               {visibleColumns['daysAfterFormation'] !== false && (
                                 <td className="p-0 border-r border-slate-100 text-center">
                                     {accFormaDays !== null && (
-                                        <span className="font-mono text-[10px] text-amber-600 font-bold">{accFormaDays}d</span>
+                                        <span className="font-mono text-[10px] text-amber-600 font-bold">{accFormaDays}</span>
                                     )}
                                 </td>
                               )}
@@ -3904,7 +3904,7 @@ const MemoizedOrderRow = React.memo(({
                               {visibleColumns['daysAfterSent'] !== false && (
                                 <td className="p-0 border-r border-slate-100 text-center">
                                     {accSentDays !== null && (
-                                        <span className="font-mono text-[10px] text-indigo-600 font-bold">{accSentDays}d</span>
+                                        <span className="font-mono text-[10px] text-indigo-600 font-bold">{accSentDays}</span>
                                     )}
                                 </td>
                               )}
