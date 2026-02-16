@@ -50,6 +50,7 @@ import {
   CheckSquare,
   Square,
   Droplets,
+  Droplet,
   ChevronDown,
   ChevronUp,
   ChevronRight,
@@ -1253,14 +1254,15 @@ const MemoizedOrderRow = React.memo(({
   }, [machines, selectedCustomerName, row.material]);
 
   // Calculate Assigned Machines Summary & Total Capacity
-  const { summary: assignedMachinesSummary, totalCapacity, totalSent, totalReceived, groupedBatches } = useMemo(() => {
-    if (!row.dyeingPlan || row.dyeingPlan.length === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0, groupedBatches: new Map() };
+  const { summary: assignedMachinesSummary, totalCapacity, totalSent, totalReceived, totalDelivered, groupedBatches } = useMemo(() => {
+    if (!row.dyeingPlan || row.dyeingPlan.length === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0, totalDelivered: 0, groupedBatches: new Map() };
     
     const machineCounts = new Map<number, number>();
     const grouped = new Map<number, any[]>();
     let total = 0;
     let sent = 0;
     let received = 0;
+    let delivered = 0;
 
     row.dyeingPlan.forEach(batch => {
       if (batch.plannedCapacity) {
@@ -1284,14 +1286,29 @@ const MemoizedOrderRow = React.memo(({
       const batchReceivedRaw = rEvents.reduce((s, e) => s + (Number(e.quantityRaw) || 0), 0) + (Number(batch.receivedQuantity) || 0);
       const batchReceivedAccessory = rEvents.reduce((s, e) => s + (Number(e.quantityAccessory) || 0), 0);
       received += batchReceivedRaw + batchReceivedAccessory;
+      
+      // Calculate Delivered (Net: Delivered - Returned)
+      const dEvents = batch.deliveryEvents || [];
+      const batchDelivered = dEvents.reduce((s, e) => s + (Number(e.quantityColorDelivered) || 0), 0);
+      const batchDeliveredAcc = dEvents.reduce((s, e) => {
+        return s + Object.values(e.accessoryDeliveries || {}).reduce((a: number, b: any) => a + (Number(b) || 0), 0);
+      }, 0);
+      
+      const returnEvents = batch.returnEvents || [];
+      const batchReturned = returnEvents.reduce((s, e) => s + (Number(e.quantityColorReturned) || 0), 0);
+      const batchReturnedAcc = returnEvents.reduce((s, e) => {
+        return s + Object.values(e.accessoryReturns || {}).reduce((a: number, b: any) => a + (Number(b) || 0), 0);
+      }, 0);
+      
+      delivered += (batchDelivered + batchDeliveredAcc) - (batchReturned + batchReturnedAcc);
     });
 
-    if (machineCounts.size === 0 && total === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0, groupedBatches: new Map() };
+    if (machineCounts.size === 0 && total === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0, totalDelivered: 0, groupedBatches: new Map() };
 
     const summary = Array.from(machineCounts.entries())
       .map(([capacity, count]) => ({ capacity, count }));
       
-    return { summary, totalCapacity: total, totalSent: sent, totalReceived: received, groupedBatches: grouped };
+    return { summary, totalCapacity: total, totalSent: sent, totalReceived: received, totalDelivered: delivered, groupedBatches: grouped };
   }, [row.dyeingPlan]);
 
   // Calculate Finished Details (SIMPLIFIED - no logs)
@@ -1522,6 +1539,12 @@ const MemoizedOrderRow = React.memo(({
           <td className="p-0 border-r border-slate-200 text-right">
              <div className="px-3 py-2 font-mono text-emerald-600 font-medium text-xs">
                 {totalReceived > 0 ? Number(totalReceived).toFixed(2) : '-'}
+             </div>
+          </td>
+          {/* Total Delivered */}
+          <td className="p-0 border-r border-slate-200 text-right">
+             <div className="px-3 py-2 font-mono text-purple-600 font-medium text-xs">
+                {totalDelivered > 0 ? Number(totalDelivered).toFixed(2) : '-'}
              </div>
           </td>
           {/* Expand Button */}
@@ -5058,11 +5081,12 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
   const orderTotals = useMemo(() => {
     if (!selectedCustomer || !selectedCustomer.orders) {
-      return { ordered: 0, manufactured: 0, remaining: 0, progress: 0 };
+      return { ordered: 0, manufactured: 0, remaining: 0, colored: 0, progress: 0 };
     }
 
     let totalOrdered = 0;
     let totalRemaining = 0;
+    let totalColored = 0;
 
     selectedCustomer.orders.forEach(order => {
         const required = order.requiredQty || 0;
@@ -5071,13 +5095,29 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         // Use row remainingQty directly for performance
         const displayRemaining = order.remainingQty ?? (required - (order.producedQty || 0));
         totalRemaining += displayRemaining;
+        
+        // Sum all dyehouse plan batch capacities (colored by customer)
+        // Each batch represents a machine load, so we count plannedCapacity
+        if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
+          let orderColoredTotal = 0;
+          order.dyeingPlan.forEach(batch => {
+            const batchCapacity = Number(batch.plannedCapacity) || 0;
+            orderColoredTotal += batchCapacity;
+            totalColored += batchCapacity;
+          });
+          if (orderColoredTotal > 0) {
+            console.log(`Order ${order.material}: ${order.dyeingPlan.length} batches, total capacity: ${orderColoredTotal}kg`);
+          }
+        }
     });
+
+    console.log(`Total Colored by Customer: ${totalColored}kg from ${selectedCustomer.orders.length} orders`);
 
     // Manufactured = Ordered - Remaining
     const totalManufactured = Math.max(0, totalOrdered - totalRemaining);
     const progress = totalOrdered > 0 ? (totalManufactured / totalOrdered) * 100 : 0;
 
-    return { ordered: totalOrdered, manufactured: totalManufactured, remaining: totalRemaining, progress };
+    return { ordered: totalOrdered, manufactured: totalManufactured, remaining: totalRemaining, colored: totalColored, progress };
   }, [selectedCustomer]);
 
   const totalYarnRequirements = useMemo(() => {
@@ -6650,20 +6690,20 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     const wb = XLSX.utils.book_new();
 
     // 2. Define Styles
-    const THEME_HEADER_GREEN = "1B4824"; // Deep Green
-    const THEME_LIGHT_BG = "EBF1DE"; // Light Green/Beige
+    const THEME_HEADER_GREEN = "D3D3D3"; // Light gray for borders/accents
+    const THEME_LIGHT_BG = "F2F2F2"; // Light gray background
     const THEME_BORDER_COLOR = { auto: 1 };
     
     const dashboardHeaderStyle = {
       font: { name: "Calibri", sz: 14, bold: true, color: { rgb: "000000" } }, // Black text
       alignment: { horizontal: "center", vertical: "center" },
-      fill: { fgColor: { rgb: "FFFFFF" } } // White background for crisp look or THEME_LIGHT_BG
+      fill: { fgColor: { rgb: "FFFFFF" } } // White background
     };
     
-    // Main Headers (Professional Green Theme)
+    // Main Headers (Professional White with Bold Black Text)
     const headerStyle = {
-      font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "FFFFFF" } },
-      fill: { fgColor: { rgb: THEME_HEADER_GREEN } },
+      font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "000000" } },
+      fill: { fgColor: { rgb: "FFFFFF" } },
       alignment: { horizontal: "center", vertical: "center", wrapText: true },
       border: {
         top: { style: "thin", color: THEME_BORDER_COLOR },
@@ -6673,10 +6713,10 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       }
     };
     
-    // Status-based fabric name colors
+    // Status-based fabric name colors - Standard Excel Colors
     const fabricFinishedStyle = {
       font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "FFFFFF" } },
-      fill: { fgColor: { rgb: "10B981" } }, // Green
+      fill: { fgColor: { rgb: "00B050" } }, // Standard Excel Green
       alignment: { horizontal: "center", vertical: "center", wrapText: true },
       border: {
         top: { style: "thin", color: THEME_BORDER_COLOR },
@@ -6688,7 +6728,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     
     const fabricActiveStyle = {
       font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "000000" } },
-      fill: { fgColor: { rgb: "FBBF24" } }, // Yellow/Amber
+      fill: { fgColor: { rgb: "FFC000" } }, // Standard Excel Orange
       alignment: { horizontal: "center", vertical: "center", wrapText: true },
       border: {
         top: { style: "thin", color: THEME_BORDER_COLOR },
@@ -6700,7 +6740,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     
     const fabricPlannedStyle = {
       font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "FFFFFF" } },
-      fill: { fgColor: { rgb: "EF4444" } }, // Red
+      fill: { fgColor: { rgb: "FF0000" } }, // Standard Excel Red
       alignment: { horizontal: "center", vertical: "center", wrapText: true },
       border: {
         top: { style: "thin", color: THEME_BORDER_COLOR },
@@ -6727,8 +6767,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     };
     
     const footerHeaderStyle = {
-      font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "FFFFFF" } },
-      fill: { fgColor: { rgb: THEME_HEADER_GREEN } },
+      font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "000000" } },
+      fill: { fgColor: { rgb: "FFFFFF" } },
       alignment: { horizontal: "center", vertical: "center" },
       border: {
         top: { style: "thin", color: THEME_BORDER_COLOR },
@@ -6848,7 +6888,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         wsData.push([
             { v: `Last Update ${currentDate}`, s: dashboardHeaderStyle }, // A1
             null, // B1
-            { v: `(${custName}) معرض`, s: { ...dashboardHeaderStyle, font: { name: "Calibri", sz: 16, bold: true } } }, // C1 - Center Title
+            { v: custName, s: { ...dashboardHeaderStyle, font: { name: "Calibri", sz: 16, bold: true } } }, // C1 - Center Title
             null, null, null, null, null, // Spanning cols
             { v: "", s: dashboardHeaderStyle } // End span
         ]);
@@ -6862,7 +6902,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         // wsData.push([]); 
 
         // --- 2. Main Table Headers ---
-        // New Order: Material | Sort | Machine | Ordered | Acc | Manufactured | Remaining | ...
+        // New Order: Material | Sort | Machine | Ordered | Acc | Manufactured | Remaining | Recv Date | Start | End | Others | Delivery | Notes
         const headers = [
             "الخامة",       // Material
             "SORT",         // Sort (New Column)
@@ -6875,6 +6915,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             "بداية",        // Start
             "نهاية",        // End
             "Others",
+            "التسليم",      // Delivery
             "ملاحظات"       // Notes
         ];
         
@@ -6924,6 +6965,23 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             const orderedQty = order.requiredQty || 0;
             const manufactured = orderedQty - remaining;
 
+            // Calculate net delivery (delivered - returned) from all dyeing batches
+            const allDeliveries = (order.dyeingPlan || []).flatMap(b => b.deliveryEvents || []);
+            const totalDelivered = allDeliveries.reduce((s, e) => s + (Number(e.quantityColorDelivered) || 0), 0);
+            const totalAccDelivered = allDeliveries.reduce((s, e) => {
+              return s + Object.values(e.accessoryDeliveries || {}).reduce((a, b) => a + (b || 0), 0);
+            }, 0);
+            
+            const allReturns = (order.dyeingPlan || []).flatMap(b => b.returnEvents || []);
+            const totalReturned = allReturns.reduce((s, e) => s + (Number(e.quantityColorReturned) || 0), 0);
+            const totalAccReturned = allReturns.reduce((s, e) => {
+              return s + Object.values(e.accessoryReturns || {}).reduce((a, b) => a + (b || 0), 0);
+            }, 0);
+            
+            const netQty = totalDelivered - totalReturned;
+            const netAcc = totalAccDelivered - totalAccReturned;
+            const deliverySummary = netQty !== 0 ? `${netQty.toFixed(0)}${netAcc !== 0 ? ` (${netAcc.toFixed(0)} Acc)` : ''}` : '-';
+
             const row = [
                 { v: order.material || '', s: fabricStyle }, // Material
                 { v: sortType, s: rowStyle },               // SORT
@@ -6932,11 +6990,12 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                 { v: order.accessory || '-', s: rowStyle }, // Accessory
                 { v: manufactured, s: numberStyle },        // Manufactured
                 { v: remaining, s: numberStyle },           // Remaining
-                { v: order.orderReceiptDate || '', s: rowStyle },
-                { v: statusInfo.startDate || order.startDate || '', s: rowStyle },
-                { v: statusInfo.endDate || order.endDate || '', s: rowStyle },
-                { v: statusInfo.others || '', s: rowStyle },
-                { v: order.notes || '', s: rowStyle }
+                { v: order.orderReceiptDate || '', s: rowStyle }, // Recv Date
+                { v: statusInfo.startDate || order.startDate || '', s: rowStyle }, // Start
+                { v: statusInfo.endDate || order.endDate || '', s: rowStyle }, // End
+                { v: statusInfo.others || '', s: rowStyle }, // Others
+                { v: deliverySummary, s: rowStyle }, // Delivery
+                { v: order.notes || '', s: rowStyle } // Notes
              ];
              wsData.push(row);
         });
@@ -6954,10 +7013,35 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         }, 0);
         const totalProduced = totalOrdered - totalRemaining;
         
+        // Calculate total colored by customer (sum of all plannedCapacity from dyeingPlan)
+        const totalColoredByCustomer = orders.reduce((sum, o) => {
+          const orderTotal = (o.dyeingPlan || []).reduce((batchSum, batch) => {
+            return batchSum + (Number(batch.plannedCapacity) || 0);
+          }, 0);
+          return sum + orderTotal;
+        }, 0);
+        
+        // Calculate total delivered (net: delivered - returned)
+        const totalDelivered = orders.reduce((sum, o) => {
+          const allDeliveries = (o.dyeingPlan || []).flatMap(b => b.deliveryEvents || []);
+          const delivered = allDeliveries.reduce((s, e) => s + (Number(e.quantityColorDelivered) || 0), 0);
+          const accDelivered = allDeliveries.reduce((s, e) => {
+            return s + Object.values(e.accessoryDeliveries || {}).reduce((a, b) => a + (b || 0), 0);
+          }, 0);
+          
+          const allReturns = (o.dyeingPlan || []).flatMap(b => b.returnEvents || []);
+          const returned = allReturns.reduce((s, e) => s + (Number(e.quantityColorReturned) || 0), 0);
+          const accReturned = allReturns.reduce((s, e) => {
+            return s + Object.values(e.accessoryReturns || {}).reduce((a, b) => a + (b || 0), 0);
+          }, 0);
+          
+          return sum + (delivered + accDelivered) - (returned + accReturned);
+        }, 0);
+        
         // Footer Headers Row
         wsData.push([
             { v: "ما تم تشكيله من طلبية العميل", s: footerHeaderStyle }, // Left Table Header
-            null,
+            { v: totalColoredByCustomer, s: footerValueStyle }, // Left Value - Colored by Customer
             null,
             null,
             null, // Spacer
@@ -7007,7 +7091,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             null,
             null,
             { v: "اجمالى التسليمات (خامة+اكسسوار)", s: footerHeaderStyle }, // Right Header (Bottom)
-            { v: "-", s: { ...footerValueStyle, font: { bold: true, color: { rgb: "FFFFFF" } } } } // Placeholder
+            { v: totalDelivered, s: footerValueStyle }
         ]);
         
         // Footer Merges
@@ -7027,11 +7111,12 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             { wch: 20 }, // E: Accessory
             { wch: 15 }, // F: Manufactured
             { wch: 15 }, // G: Remaining
-            { wch: 15 }, // H: Date / Right Table Header
-            { wch: 20 }, // I: Start / Right Table Value
+            { wch: 15 }, // H: Recv Date
+            { wch: 15 }, // I: Start
             { wch: 15 }, // J: End
             { wch: 15 }, // K: Others
-            { wch: 25 }  // L: Notes
+            { wch: 15 }, // L: Delivery
+            { wch: 25 }  // M: Notes
         ];
 
         // Sanitize sheet name
@@ -7533,6 +7618,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                               <th className="p-3 text-right border-b border-r border-slate-200 min-w-[200px]">الماكينات</th>
                               <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي المرسل</th>
                               <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي المستلم</th>
+                              <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي التسليمات</th>
                               <th className="p-3 text-center border-b border-r border-slate-200 w-10"></th>
                             </>
                           ) : (
@@ -7644,7 +7730,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
                   {/* Order Summary Cards */}
                   <div className="mt-4 space-y-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
                         <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
                             <div>
                                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Ordered</p>
@@ -7672,6 +7758,16 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                             </div>
                             <div className="p-3 bg-amber-50 rounded-full">
                                 <AlertCircle className="w-6 h-6 text-amber-600" />
+                            </div>
+                        </div>
+
+                        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
+                            <div>
+                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Colored by Customer</p>
+                                <p className="text-2xl font-bold text-indigo-600 mt-1">{orderTotals.colored.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
+                            </div>
+                            <div className="p-3 bg-indigo-50 rounded-full">
+                                <Droplet className="w-6 h-6 text-indigo-600" />
                             </div>
                         </div>
 
