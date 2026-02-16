@@ -1515,13 +1515,13 @@ const MemoizedOrderRow = React.memo(({
           {/* Total Sent */}
           <td className="p-0 border-r border-slate-200 text-right">
              <div className="px-3 py-2 font-mono text-blue-600 font-medium text-xs">
-                {totalSent > 0 ? totalSent : '-'}
+                {totalSent > 0 ? Number(totalSent).toFixed(2) : '-'}
              </div>
           </td>
           {/* Total Received */}
           <td className="p-0 border-r border-slate-200 text-right">
              <div className="px-3 py-2 font-mono text-emerald-600 font-medium text-xs">
-                {totalReceived > 0 ? totalReceived : '-'}
+                {totalReceived > 0 ? Number(totalReceived).toFixed(2) : '-'}
              </div>
           </td>
           {/* Expand Button */}
@@ -3404,12 +3404,12 @@ const MemoizedOrderRow = React.memo(({
                                >
                                   <div className="flex flex-col items-center justify-center min-h-[40px]">
                                       <span className={`font-mono font-bold text-xs ${sentRaw > 0 ? 'text-blue-600' : 'text-slate-300'}`}>
-                                          {sentRaw > 0 ? sentRaw : '-'}
+                                          {sentRaw > 0 ? Number(sentRaw).toFixed(2) : '-'}
                                       </span>
                                       
                                       {sentAcc > 0 && (
                                         <div className="flex items-center gap-0.5 bg-blue-100 px-1 rounded-sm mt-0.5 border border-blue-200">
-                                            <span className="text-[9px] font-bold text-blue-700">+{sentAcc}</span>
+                                            <span className="text-[9px] font-bold text-blue-700">+{Number(sentAcc).toFixed(2)}</span>
                                             <span className="text-[7px] text-blue-500 uppercase">Acc</span>
                                         </div>
                                       )}
@@ -3460,12 +3460,12 @@ const MemoizedOrderRow = React.memo(({
                             >
                               <div className="flex flex-col items-center justify-center min-h-[40px]">
                                 <span className={`font-mono font-bold text-xs ${recRaw > 0 ? 'text-emerald-600' : 'text-slate-300'}`}>
-                                  {recRaw > 0 ? Math.round(recRaw) : '-'}
+                                  {recRaw > 0 ? Number(recRaw).toFixed(2) : '-'}
                                 </span>
 
                                 {recAcc > 0 && (
                                     <div className="flex items-center gap-0.5 bg-emerald-100 px-1 rounded-sm mt-0.5 border border-emerald-200">
-                                        <span className="text-[9px] font-bold text-emerald-700">+{recAcc}</span>
+                                        <span className="text-[9px] font-bold text-emerald-700">+{Number(recAcc).toFixed(2)}</span>
                                         <span className="text-[7px] text-emerald-500 uppercase">Acc</span>
                                     </div>
                                 )}
@@ -3494,11 +3494,11 @@ const MemoizedOrderRow = React.memo(({
                            return (
                               <div className="w-full h-full flex flex-col items-center justify-center min-h-[40px] px-1 py-1">
                                   <span className={`font-mono font-bold text-xs ${remainingRaw > 0 ? 'text-amber-600' : 'text-slate-300'}`}>
-                                      {remainingRaw > 0 ? Math.round(remainingRaw) : '-'}
+                                      {remainingRaw > 0 ? Number(remainingRaw).toFixed(2) : '-'}
                                   </span>
                                   {remainingAcc > 0 && (
                                     <div className="flex items-center gap-0.5 bg-amber-50 px-1 rounded-sm mt-0.5 border border-amber-200">
-                                        <span className="text-[9px] font-bold text-amber-700">+{remainingAcc}</span>
+                                        <span className="text-[9px] font-bold text-amber-700">+{Number(remainingAcc).toFixed(2)}</span>
                                         <span className="text-[7px] text-amber-500 uppercase">Acc</span>
                                     </div>
                                   )}
@@ -6268,7 +6268,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
            let approvalText = batch.colorApproval || '-';
 
            // Format with max 2 decimals
-           const formatNum = (n: number) => Number.isInteger(n) ? String(n) : n.toFixed(2);
+           const formatNum = (n: number) => n.toFixed(2);
 
            // Sent - Only show total, no dates, max 2 decimals
            const sentTotal = (batch.quantitySent || 0) + (batch.quantitySentAccessory || 0) + 
