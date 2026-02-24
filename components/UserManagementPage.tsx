@@ -11,19 +11,21 @@ import {
   setDoc,
   onSnapshot,
   where,
-  limit
+  limit,
+  writeBatch,
+  updateDoc
 } from 'firebase/firestore';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, firebaseConfig, auth } from '../services/firebase';
 import { ActivityService, ActivityLog } from '../services/activityService';
-import { Trash2, UserPlus, Shield, ShieldAlert, Mail, User as UserIcon, Copy, Check, Key, Circle, Clock, Activity, MapPin, Edit3, Plus, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { Trash2, UserPlus, Shield, ShieldAlert, Mail, User as UserIcon, Copy, Check, Key, Circle, Clock, Activity, MapPin, Edit3, Plus, X, ChevronDown, ChevronUp, AlertTriangle, Database, RefreshCw } from 'lucide-react';
 
 interface UserData {
   id: string;
   email: string;
   displayName: string;
-  role: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | 'pending';
+  role: 'admin' | 'schedule_editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | 'pending';
   createdAt: any;
   password?: string;
   isOnline?: boolean;
@@ -45,7 +47,7 @@ export const UserManagementPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserName, setNewUserName] = useState('');
-  const [newUserRole, setNewUserRole] = useState<'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner'>('viewer');
+  const [newUserRole, setNewUserRole] = useState<'admin' | 'schedule_editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner'>('viewer');
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState('');
   const [createdUserCreds, setCreatedUserCreds] = useState<{email: string, password: string} | null>(null);
@@ -55,6 +57,82 @@ export const UserManagementPage: React.FC = () => {
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
   const [userActivities, setUserActivities] = useState<Record<string, ActivityLog[]>>({});
   const [loadingActivities, setLoadingActivities] = useState<string | null>(null);
+
+  // Season Migration states
+  const [migrationOpen, setMigrationOpen] = useState(false);
+  const [migrationClients, setMigrationClients] = useState<{ id: string; name: string }[] | null>(null);
+  const [migrationScanning, setMigrationScanning] = useState(false);
+  const [migrationSeasons, setMigrationSeasons] = useState<{ id: string; name: string }[]>([]);
+  const [migrationTargetSeasonId, setMigrationTargetSeasonId] = useState('');
+  const [migrationConfirmText, setMigrationConfirmText] = useState('');
+  const [migrationRunning, setMigrationRunning] = useState(false);
+  const [migrationResult, setMigrationResult] = useState<string | null>(null);
+
+  // Season Migration: scan clients without a season
+  const handleScanMigration = async () => {
+    setMigrationScanning(true);
+    setMigrationClients(null);
+    setMigrationResult(null);
+    try {
+      // Load seasons
+      const seasonsSnap = await getDocs(collection(db, 'Seasons'));
+      const seasons = seasonsSnap.docs.map(d => ({ id: d.id, name: (d.data().name as string) || d.id }));
+      setMigrationSeasons(seasons);
+      if (seasons.length > 0 && !migrationTargetSeasonId) {
+        // Default to 2025-summer if it exists, otherwise first
+        const summer = seasons.find(s => s.id === '2025-summer');
+        setMigrationTargetSeasonId(summer ? summer.id : seasons[0].id);
+      }
+
+      // Load clients without createdSeasonId
+      const clientsSnap = await getDocs(collection(db, 'CustomerSheets'));
+      const missing = clientsSnap.docs
+        .filter(d => {
+          const data = d.data();
+          return !data.createdSeasonId || data.createdSeasonId.trim() === '';
+        })
+        .map(d => ({ id: d.id, name: (d.data().name as string) || d.id }));
+      setMigrationClients(missing);
+    } catch (err) {
+      console.error('Migration scan error:', err);
+      setMigrationResult('❌ Error scanning clients. Check console.');
+    }
+    setMigrationScanning(false);
+  };
+
+  const handleRunMigration = async () => {
+    if (!migrationClients || migrationClients.length === 0) return;
+    if (!migrationTargetSeasonId) return;
+    setMigrationRunning(true);
+    setMigrationResult(null);
+    try {
+      const targetSeason = migrationSeasons.find(s => s.id === migrationTargetSeasonId);
+      const seasonName = targetSeason?.name || migrationTargetSeasonId;
+
+      // Batch update in chunks of 500 (Firestore limit)
+      const chunkSize = 500;
+      for (let i = 0; i < migrationClients.length; i += chunkSize) {
+        const chunk = migrationClients.slice(i, i + chunkSize);
+        const batch = writeBatch(db);
+        chunk.forEach(client => {
+          const ref = doc(db, 'CustomerSheets', client.id);
+          batch.update(ref, {
+            createdSeasonId: migrationTargetSeasonId,
+            createdSeasonName: seasonName
+          });
+        });
+        await batch.commit();
+      }
+
+      setMigrationResult(`✅ Successfully updated ${migrationClients.length} clients to season "${seasonName}".`);
+      setMigrationClients([]);
+      setMigrationConfirmText('');
+    } catch (err) {
+      console.error('Migration run error:', err);
+      setMigrationResult('❌ Migration failed. Check console.');
+    }
+    setMigrationRunning(false);
+  };
 
   // Load user activities when expanded
   const loadUserActivities = async (userEmail: string) => {
@@ -230,7 +308,7 @@ export const UserManagementPage: React.FC = () => {
   }
 
   return (
-    <div className="max-w-4xl mx-auto p-6 space-y-8">
+    <div className="max-w-[98%] xl:max-w-[1440px] mx-auto p-4 lg:p-6 space-y-8">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
@@ -331,7 +409,7 @@ export const UserManagementPage: React.FC = () => {
               className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             >
               <option value="viewer">Viewer</option>
-              <option value="editor">Editor</option>
+              <option value="schedule_editor">Schedule Editor</option>
               <option value="dyehouse_manager">Dyehouse Manager</option>
               <option value="dyehouse_colors_manager">Dyehouse Colors Manager</option>
               <option value="factory_manager">Factory Manager</option>
@@ -358,21 +436,20 @@ export const UserManagementPage: React.FC = () => {
       </div>
 
       {/* Users List */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 shadow-md">
+        <table className="w-full text-left font-medium">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
-                <th className="px-6 py-4 font-semibold text-slate-700">User</th>
-                <th className="px-6 py-4 font-semibold text-slate-700">Password</th>
-                <th className="px-6 py-4 font-semibold text-slate-700">Status</th>
-                <th className="px-6 py-4 font-semibold text-slate-700">Current Page</th>
-                <th className="px-6 py-4 font-semibold text-slate-700">Last Modification</th>
-                <th className="px-6 py-4 font-semibold text-slate-700">Role</th>
-                <th className="px-6 py-4 font-semibold text-slate-700 text-right">Actions</th>
+                <th className="px-6 py-5 font-bold text-slate-700 whitespace-nowrap min-w-[220px]">User</th>
+                <th className="px-6 py-5 font-bold text-slate-700 whitespace-nowrap">Password</th>
+                <th className="px-6 py-5 font-bold text-slate-700 whitespace-nowrap">Status</th>
+                <th className="px-6 py-5 font-bold text-slate-700 whitespace-nowrap">Current Page</th>
+                <th className="px-6 py-5 font-bold text-slate-700 whitespace-nowrap">Last Modification</th>
+                <th className="px-6 py-5 font-bold text-slate-700 whitespace-nowrap min-w-[180px]">Role</th>
+                <th className="px-6 py-5 font-bold text-slate-700 text-right whitespace-nowrap px-8">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 text-sm">
               {users.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-6 py-8 text-center text-slate-500">
@@ -571,7 +648,7 @@ export const UserManagementPage: React.FC = () => {
                         onChange={(e) => handleUpdateRole(user.id, e.target.value)}
                         className={`text-xs font-medium px-2.5 py-1 rounded-full border-0 cursor-pointer focus:ring-2 focus:ring-indigo-500
                           ${user.role === 'admin' ? 'bg-purple-100 text-purple-800' : 
-                            user.role === 'editor' ? 'bg-blue-100 text-blue-800' : 
+                            user.role === 'schedule_editor' ? 'bg-blue-100 text-blue-800' : 
                             user.role === 'dyehouse_manager' ? 'bg-cyan-100 text-cyan-800' :
                             user.role === 'dyehouse_colors_manager' ? 'bg-teal-100 text-teal-800' :
                             user.role === 'factory_manager' ? 'bg-orange-100 text-orange-800' :
@@ -581,7 +658,7 @@ export const UserManagementPage: React.FC = () => {
                       >
                         <option value="pending">Pending</option>
                         <option value="viewer">Viewer</option>
-                        <option value="editor">Editor</option>
+                        <option value="schedule_editor">Schedule Editor</option>
                         <option value="dyehouse_manager">Dyehouse Manager</option>
                         <option value="dyehouse_colors_manager">Dyehouse Colors Manager</option>
                         <option value="factory_manager">Factory Manager</option>
@@ -696,7 +773,124 @@ export const UserManagementPage: React.FC = () => {
               )}
             </tbody>
           </table>
-        </div>
+      </div>
+
+      {/* ── Data Maintenance ─────────────────────────────────────── */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <button
+          onClick={() => { setMigrationOpen(v => !v); setMigrationClients(null); setMigrationResult(null); setMigrationConfirmText(''); }}
+          className="w-full flex items-center justify-between px-6 py-4 hover:bg-slate-50 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-amber-100 rounded-lg">
+              <Database size={18} className="text-amber-600" />
+            </div>
+            <div className="text-left">
+              <p className="font-semibold text-slate-800 text-sm">Data Maintenance</p>
+              <p className="text-xs text-slate-500">Fix clients missing a season assignment</p>
+            </div>
+          </div>
+          {migrationOpen ? <ChevronUp size={18} className="text-slate-400" /> : <ChevronDown size={18} className="text-slate-400" />}
+        </button>
+
+        {migrationOpen && (
+          <div className="border-t border-slate-200 px-6 py-5 space-y-5">
+
+            {/* Step 1: Scan */}
+            <div>
+              <p className="text-sm font-medium text-slate-700 mb-1">Step 1 — Scan for clients without a season</p>
+              <p className="text-xs text-slate-500 mb-3">This will check all clients in <code className="bg-slate-100 px-1 rounded">CustomerSheets</code> and list those that have no <code className="bg-slate-100 px-1 rounded">createdSeasonId</code>.</p>
+              <button
+                onClick={handleScanMigration}
+                disabled={migrationScanning}
+                className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-60"
+              >
+                {migrationScanning
+                  ? <><RefreshCw size={14} className="animate-spin" /> Scanning...</>
+                  : <><RefreshCw size={14} /> Scan Clients</>}
+              </button>
+            </div>
+
+            {/* Results list */}
+            {migrationClients !== null && (
+              <div>
+                {migrationClients.length === 0 ? (
+                  <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
+                    <Check size={16} /> All clients already have a season assigned. Nothing to migrate.
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg mb-3">
+                      <AlertTriangle size={16} className="text-amber-600 mt-0.5 shrink-0" />
+                      <p className="text-sm text-amber-800">
+                        <span className="font-bold">{migrationClients.length} client{migrationClients.length !== 1 ? 's' : ''}</span> found without a season. They will all be assigned the season you choose below.
+                      </p>
+                    </div>
+
+                    {/* Client list */}
+                    <div className="border border-slate-200 rounded-lg overflow-hidden mb-4">
+                      <div className="bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-600 uppercase tracking-wide border-b border-slate-200">
+                        Clients to be updated ({migrationClients.length})
+                      </div>
+                      <div className="max-h-48 overflow-y-auto divide-y divide-slate-100">
+                        {migrationClients.map(c => (
+                          <div key={c.id} className="flex items-center gap-3 px-4 py-2.5">
+                            <UserIcon size={14} className="text-slate-400 shrink-0" />
+                            <span className="text-sm text-slate-800 font-medium">{c.name}</span>
+                            <span className="text-xs text-slate-400 ml-auto font-mono">{c.id}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Step 2: Pick season */}
+                    <div className="mb-4">
+                      <p className="text-sm font-medium text-slate-700 mb-2">Step 2 — Choose the season to assign</p>
+                      <select
+                        value={migrationTargetSeasonId}
+                        onChange={e => setMigrationTargetSeasonId(e.target.value)}
+                        className="w-full max-w-xs px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                      >
+                        {migrationSeasons.map(s => (
+                          <option key={s.id} value={s.id}>{s.name} ({s.id})</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Step 3: Confirm */}
+                    <div className="mb-4">
+                      <p className="text-sm font-medium text-slate-700 mb-1">Step 3 — Type <span className="font-mono bg-slate-100 px-1 rounded">CONFIRM</span> to proceed</p>
+                      <input
+                        type="text"
+                        value={migrationConfirmText}
+                        onChange={e => setMigrationConfirmText(e.target.value)}
+                        placeholder="Type CONFIRM"
+                        className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500 w-40"
+                      />
+                    </div>
+
+                    <button
+                      onClick={handleRunMigration}
+                      disabled={migrationConfirmText !== 'CONFIRM' || migrationRunning || !migrationTargetSeasonId}
+                      className="flex items-center gap-2 px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {migrationRunning
+                        ? <><RefreshCw size={14} className="animate-spin" /> Migrating...</>
+                        : <><Database size={14} /> Run Migration ({migrationClients.length} clients)</>}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Result message */}
+            {migrationResult && (
+              <div className={`p-3 rounded-lg text-sm font-medium ${migrationResult.startsWith('✅') ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'}`}>
+                {migrationResult}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

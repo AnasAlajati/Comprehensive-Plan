@@ -29,6 +29,10 @@ import {
   X
 } from 'lucide-react';
 
+interface DyehouseActiveWorkPageProps {
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
+}
+
 // Status Configuration - Clean professional colors
 const DYEHOUSE_STEPS = [
   { id: 'STORE_RAW', label: 'مخزن مصبغة', shortLabel: 'مخزن', icon: Box, color: '#64748b' },
@@ -99,7 +103,10 @@ interface FabricGroup {
   plannedCapacity?: number;
 }
 
-export const DyehouseActiveWorkPage: React.FC = () => {
+export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ userRole }) => {
+  // Allowed roles to edit: admin, dyehouse_manager, dyehouse_colors_manager
+  const canEdit = userRole && ['admin', 'dyehouse_manager', 'dyehouse_colors_manager'].includes(userRole);
+  
   const [items, setItems] = useState<ActiveWorkItem[]>([]);
   const [allDyehouses, setAllDyehouses] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -743,20 +750,36 @@ export const DyehouseActiveWorkPage: React.FC = () => {
               return (
                 <button
                   key={step.id}
-                  onClick={() => openStatusDatePicker(item, step.id)}
-                  className="flex flex-col items-center group w-14"
+                  onClick={() => canEdit && openStatusDatePicker(item, step.id)}
+                  disabled={!canEdit}
+                  className={`flex flex-col items-center group w-14 ${!canEdit ? 'cursor-not-allowed' : ''}`}
+                  title={!canEdit ? 'You do not have permission to edit' : ''}
                 >
                   <div className="relative">
                     <div 
                       className={`
                         w-12 h-12 rounded-full flex items-center justify-center border-2 transition-all duration-300 z-10
-                        ${isActive 
+                        ${!canEdit
+                          ? 'bg-slate-100 border-slate-300 text-slate-400 opacity-60'
+                          : isActive 
                           ? 'bg-white border-indigo-500 text-indigo-600 ring-4 ring-indigo-50 scale-110' 
                           : isCompleted || isPast
                             ? 'bg-indigo-500 border-indigo-500 text-white' 
                             : 'bg-white border-slate-200 text-slate-300 hover:border-slate-300 hover:text-slate-400'
                         }
                       `}
+                      onMouseEnter={(e) => {
+                        if (!canEdit) {
+                          e.currentTarget.classList.add('ring-2', 'ring-red-400', 'border-red-400');
+                          e.currentTarget.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2732%27 height=%2732%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2710%27 fill=%27%23ef4444%27/%3E%3C/svg%3E") 16 16, auto';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!canEdit) {
+                          e.currentTarget.classList.remove('ring-2', 'ring-red-400', 'border-red-400');
+                          e.currentTarget.style.cursor = 'not-allowed';
+                        }
+                      }}
                     >
                       {/* Always show the icon */}
                       <Icon size={20} strokeWidth={1.5} />
@@ -1310,8 +1333,10 @@ export const DyehouseActiveWorkPage: React.FC = () => {
                               {item.dyehouseStatus && ['STORE_RAW', 'DYEING', 'FINISHING'].includes(item.dyehouseStatus) && (
                                 <div className="px-4 py-1.5 border-t border-slate-100 flex justify-end">
                                   <button
-                                    onClick={() => setPartialModal({ item, quantity: '', note: '' })}
-                                    className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-violet-600 hover:bg-violet-50 rounded transition-colors"
+                                    onClick={() => canEdit && setPartialModal({ item, quantity: '', note: '' })}
+                                    disabled={!canEdit}
+                                    className={`flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors ${!canEdit ? 'text-slate-300 cursor-not-allowed opacity-50' : 'text-slate-400 hover:text-violet-600 hover:bg-violet-50'}`}
+                                    title={!canEdit ? 'You do not have permission to add partials' : ''}
                                   >
                                     <FlaskConical size={12} />
                                     <span>جزء تجريبي</span>
@@ -1342,9 +1367,10 @@ export const DyehouseActiveWorkPage: React.FC = () => {
                                               <span className="text-xs text-violet-500">جزء تجريبي</span>
                                             </div>
                                             <button
-                                              onClick={() => handleDeletePartial(item, partial.id)}
-                                              className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                                              title="حذف"
+                                              onClick={() => canEdit && handleDeletePartial(item, partial.id)}
+                                              disabled={!canEdit}
+                                              className={`p-1 rounded transition-colors ${!canEdit ? 'text-slate-300 cursor-not-allowed opacity-50' : 'text-slate-400 hover:text-red-500 hover:bg-red-50'}`}
+                                              title={!canEdit ? 'You do not have permission to delete' : 'حذف'}
                                             >
                                               <Trash2 size={14} />
                                             </button>
@@ -1378,20 +1404,36 @@ export const DyehouseActiveWorkPage: React.FC = () => {
                                                   return (
                                                     <button
                                                       key={step.id}
-                                                      onClick={() => openStatusDatePicker(item, step.id, partial.id)}
-                                                      className="flex flex-col items-center group w-10"
+                                                      onClick={() => canEdit && openStatusDatePicker(item, step.id, partial.id)}
+                                                      disabled={!canEdit}
+                                                      className={`flex flex-col items-center group w-10 ${!canEdit ? 'cursor-not-allowed' : ''}`}
+                                                      title={!canEdit ? 'You do not have permission to edit' : ''}
                                                     >
                                                       <div className="relative">
                                                         <div 
                                                           className={`
                                                             w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all duration-300 z-10
-                                                            ${isActive 
+                                                            ${!canEdit
+                                                              ? 'bg-slate-100 border-slate-300 text-slate-400 opacity-60'
+                                                              : isActive 
                                                               ? 'bg-white border-violet-500 text-violet-600 ring-2 ring-violet-100 scale-110' 
                                                               : isCompleted || isPast
                                                                 ? 'bg-violet-500 border-violet-500 text-white' 
                                                                 : 'bg-white border-slate-200 text-slate-300 hover:border-slate-300'
                                                             }
                                                           `}
+                                                          onMouseEnter={(e) => {
+                                                            if (!canEdit) {
+                                                              e.currentTarget.classList.add('ring-2', 'ring-red-400', 'border-red-400');
+                                                              e.currentTarget.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2732%27 height=%2732%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2710%27 fill=%27%23ef4444%27/%3E%3C/svg%3E") 16 16, auto';
+                                                            }
+                                                          }}
+                                                          onMouseLeave={(e) => {
+                                                            if (!canEdit) {
+                                                              e.currentTarget.classList.remove('ring-2', 'ring-red-400', 'border-red-400');
+                                                              e.currentTarget.style.cursor = 'not-allowed';
+                                                            }
+                                                          }}
                                                         >
                                                           <Icon size={14} strokeWidth={1.5} />
                                                         </div>

@@ -17,16 +17,20 @@ import {
   ChevronDown,
   ChevronUp,
   Flame,
-  Eye
+  Eye,
+  Box,
+  PenBox,
+  Ship,
+  Check
 } from 'lucide-react';
 
 // Status Configuration
 const DYEHOUSE_STEPS = [
-  { id: 'STORE_RAW', label: 'مخزن مصبغة', shortLabel: 'مخزن' },
-  { id: 'DYEING', label: 'صباغة', shortLabel: 'صباغة' },
-  { id: 'FINISHING', label: 'تجهيز', shortLabel: 'تجهيز' },
-  { id: 'STORE_FINISHED', label: 'منتهي مخزن', shortLabel: 'منتهي' },
-  { id: 'RECEIVED', label: 'مستلم', shortLabel: 'مستلم' }
+  { id: 'STORE_RAW', label: 'مخزن مصبغة', shortLabel: 'مخزن', icon: Box, color: '#64748b' },
+  { id: 'DYEING', label: 'صباغة', shortLabel: 'صباغة', icon: PenBox, color: '#7c3aed' },
+  { id: 'FINISHING', label: 'تجهيز', shortLabel: 'تجهيز', icon: Factory, color: '#f59e0b' },
+  { id: 'STORE_FINISHED', label: 'منتهي مخزن', shortLabel: 'منتهي', icon: Ship, color: '#10b981' },
+  { id: 'RECEIVED', label: 'مستلم', shortLabel: 'مستلم', icon: Check, color: '#3b82f6' }
 ] as const;
 
 type DyehouseStatusType = 'STORE_RAW' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
@@ -51,6 +55,7 @@ interface LateWorkItem {
   dateSent?: string;
   formationDate?: string;
   dyehouseStatus?: DyehouseStatusType;
+  dyehouseHistory?: any[];
   daysAfterFormation: number;
   urgencyLevel: 'attention' | 'urgent';
 }
@@ -143,6 +148,7 @@ export const DyehouseLateWorkPage: React.FC = () => {
               dateSent: batch.dateSent,
               formationDate: batch.formationDate,
               dyehouseStatus: dyehouseStatus as DyehouseStatusType,
+              dyehouseHistory: batch.dyehouseHistory || [],
               daysAfterFormation: daysAfterFormation,
               urgencyLevel: daysAfterFormation >= 20 ? 'urgent' : 'attention'
             });
@@ -197,6 +203,112 @@ export const DyehouseLateWorkPage: React.FC = () => {
     const avgDays = total > 0 ? Math.round(filteredItems.reduce((sum, i) => sum + i.daysAfterFormation, 0) / total) : 0;
     return { total, attention, urgent, avgDays };
   }, [filteredItems]);
+
+  const getStatusIndex = (status?: string) => {
+    if (!status) return -1;
+    return DYEHOUSE_STEPS.findIndex(s => s.id === status);
+  };
+
+  const TimelineStatus = ({ item }: { item: LateWorkItem }) => {
+    const activeIndex = getStatusIndex(item.dyehouseStatus);
+    const historyMap = new Map((item.dyehouseHistory || []).map(h => [h.status, h]));
+    
+    // Get the most recent history entry for "last modified by" info
+    const lastHistoryEntry = (item.dyehouseHistory || [])
+      .filter(h => h.updatedBy || h.modifiedBy)
+      .sort((a, b) => {
+        const dateA = new Date(a.lastModified || a.enteredAt || a.date);
+        const dateB = new Date(b.lastModified || b.enteredAt || b.date);
+        return dateB.getTime() - dateA.getTime();
+      })[0];
+    
+    const lastModifiedBy = lastHistoryEntry?.modifiedBy || lastHistoryEntry?.updatedBy;
+    const lastModifiedDate = lastHistoryEntry?.lastModified || lastHistoryEntry?.enteredAt;
+    
+    return (
+      <div className="py-4 px-3">
+        {/* Progress Line Background */}
+        <div className="relative">
+          <div className="absolute top-6 left-8 right-8 h-0.5 bg-slate-200 rounded-full" />
+          
+          {/* Progress Line Active */}
+          <div 
+            className="absolute top-6 left-8 h-0.5 bg-indigo-500 rounded-full transition-all duration-500" 
+            style={{ 
+              width: activeIndex >= 0 ? `calc(${(activeIndex / (DYEHOUSE_STEPS.length - 1)) * 100}% - 32px)` : '0%' 
+            }}
+          />
+          
+          <div className="relative flex justify-between items-start">
+            {DYEHOUSE_STEPS.map((step, idx) => {
+              const Icon = step.icon;
+              const isActive = item.dyehouseStatus === step.id;
+              const isCompleted = historyMap.has(step.id);
+              const isPast = activeIndex > idx;
+              
+              return (
+                <div
+                  key={step.id}
+                  className="flex flex-col items-center group w-14"
+                >
+                  <div className="relative">
+                    <div 
+                      className={`
+                        w-12 h-12 rounded-full flex items-center justify-center border-2 transition-all duration-300 z-10
+                        ${isActive 
+                          ? 'bg-white border-indigo-500 text-indigo-600 ring-4 ring-indigo-50 scale-110' 
+                          : isCompleted || isPast
+                            ? 'bg-indigo-500 border-indigo-500 text-white' 
+                            : 'bg-white border-slate-200 text-slate-300'
+                        }
+                      `}
+                    >
+                      {/* Always show the icon */}
+                      <Icon size={20} strokeWidth={1.5} />
+                    </div>
+                    
+                    {/* Small checkmark badge for completed steps */}
+                    {(isCompleted || isPast) && !isActive && (
+                      <div className="absolute -top-1 -right-1 w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center border-2 border-white shadow-sm">
+                        <Check strokeWidth={3} size={12} className="text-white" />
+                      </div>
+                    )}
+                  </div>
+                  
+                  <span className={`mt-2 text-[10px] font-semibold text-center leading-tight ${
+                    isActive ? 'text-indigo-700' : isCompleted ? 'text-slate-700' : 'text-slate-400'
+                  }`}>
+                    {step.shortLabel}
+                  </span>
+                  
+                  {historyMap.has(step.id) && (
+                    <span className="text-[9px] text-slate-400 font-mono mt-0.5">
+                      {formatDate(historyMap.get(step.id)?.date).slice(0, 5)}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        
+        {/* Last Modified By Info */}
+        {lastModifiedBy && (
+          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-center gap-2 text-[9px] text-slate-400">
+            <User size={10} />
+            <span>آخر تعديل:</span>
+            <span className="font-medium text-slate-500">{lastModifiedBy.split('@')[0]}</span>
+            {lastModifiedDate && (
+              <>
+                <span>•</span>
+                <span className="font-mono">{formatDate(lastModifiedDate)}</span>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const toggleExpand = (id: string) => {
     setExpandedItems(prev => {
@@ -346,12 +458,12 @@ export const DyehouseLateWorkPage: React.FC = () => {
       {/* Legend */}
       <div className="flex items-center gap-6 px-2 text-sm">
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded bg-amber-100 border-2 border-amber-400"></div>
-          <span className="text-slate-600">يحتاج متابعة (15-19 يوم)</span>
+          <div className="w-3 h-3 rounded-full bg-amber-500"></div>
+          <span className="text-slate-600 font-medium">يحتاج متابعة (15-19 يوم)</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded bg-red-100 border-2 border-red-400"></div>
-          <span className="text-slate-600">عاجل جداً (20+ يوم)</span>
+          <div className="w-3 h-3 rounded-full bg-red-500"></div>
+          <span className="text-slate-600 font-medium">عاجل جداً (20+ يوم)</span>
         </div>
       </div>
 
@@ -369,71 +481,78 @@ export const DyehouseLateWorkPage: React.FC = () => {
           {filteredItems.map(item => (
             <div
               key={item.id}
-              className={`bg-white rounded-xl border-2 shadow-sm overflow-hidden transition-all ${
+              className={`bg-white rounded-xl border shadow-sm hover:shadow-md overflow-hidden transition-all relative ${
                 item.urgencyLevel === 'urgent' 
-                  ? 'border-red-300 bg-gradient-to-r from-red-50/50 to-white' 
-                  : 'border-amber-300 bg-gradient-to-r from-amber-50/50 to-white'
+                  ? 'border-slate-200 hover:border-red-200' 
+                  : 'border-slate-200 hover:border-amber-200'
               }`}
             >
+              {/* Accent Border */}
+              <div className={`absolute top-0 bottom-0 right-0 w-1.5 ${
+                item.urgencyLevel === 'urgent' ? 'bg-red-500' : 'bg-amber-500'
+              }`} />
+
               {/* Main Row */}
               <div 
-                className="p-4 cursor-pointer"
+                className="p-4 cursor-pointer pr-6"
                 onClick={() => toggleExpand(item.id)}
               >
                 <div className="flex items-center gap-4">
                   {/* Urgency Indicator */}
-                  <div className={`flex-shrink-0 w-16 h-16 rounded-xl flex flex-col items-center justify-center ${
+                  <div className={`flex-shrink-0 w-14 h-14 rounded-xl flex flex-col items-center justify-center border ${
                     item.urgencyLevel === 'urgent' 
-                      ? 'bg-red-100 text-red-700' 
-                      : 'bg-amber-100 text-amber-700'
+                      ? 'bg-red-50 border-red-100 text-red-600' 
+                      : 'bg-amber-50 border-amber-100 text-amber-600'
                   }`}>
                     {item.urgencyLevel === 'urgent' ? (
-                      <Flame className="animate-pulse" size={24} />
+                      <Flame size={18} className="mb-0.5" />
                     ) : (
-                      <AlertTriangle size={24} />
+                      <AlertTriangle size={18} className="mb-0.5" />
                     )}
-                    <span className="text-lg font-bold mt-1">{item.daysAfterFormation}</span>
-                    <span className="text-[10px]">يوم</span>
+                    <div className="flex items-baseline gap-0.5">
+                      <span className="text-lg font-bold leading-none">{item.daysAfterFormation}</span>
+                      <span className="text-[10px] font-medium">يوم</span>
+                    </div>
                   </div>
 
                   {/* Main Info */}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
+                    <div className="flex items-center gap-2 mb-1.5">
                       {/* Color Swatch */}
                       {item.colorHex && (
                         <div 
-                          className="w-4 h-4 rounded-full border border-slate-300 flex-shrink-0"
+                          className="w-3.5 h-3.5 rounded-full border border-slate-200 flex-shrink-0 shadow-sm"
                           style={{ backgroundColor: item.colorHex }}
                         />
                       )}
-                      <h3 className="font-bold text-slate-800 truncate">
+                      <h3 className="font-bold text-slate-800 truncate text-base">
                         {item.fabricShortName || item.fabric}
                       </h3>
-                      <span className="text-slate-500">-</span>
-                      <span className="text-slate-700">{item.color}</span>
+                      <span className="text-slate-400 font-medium">-</span>
+                      <span className="text-slate-600 font-medium">{item.color}</span>
                     </div>
                     
-                    <div className="flex items-center gap-4 text-sm text-slate-600">
-                      <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-5 text-sm text-slate-500">
+                      <div className="flex items-center gap-1.5">
                         <User size={14} className="text-slate-400" />
-                        <span>{item.clientName}</span>
+                        <span className="font-medium">{item.clientName}</span>
                       </div>
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1.5">
                         <Package size={14} className="text-slate-400" />
-                        <span>{item.quantitySent} كجم</span>
+                        <span className="font-medium">{item.quantitySent} كجم</span>
                       </div>
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1.5">
                         <Factory size={14} className="text-slate-400" />
-                        <span>{item.dyehouse}</span>
+                        <span className="font-medium">{item.dyehouse}</span>
                       </div>
                     </div>
                   </div>
 
                   {/* Status Badge */}
-                  <div className={`px-3 py-1.5 rounded-lg text-sm font-medium ${
+                  <div className={`px-3 py-1 rounded-full text-xs font-bold border ${
                     item.urgencyLevel === 'urgent'
-                      ? 'bg-red-100 text-red-800'
-                      : 'bg-amber-100 text-amber-800'
+                      ? 'bg-red-50 text-red-600 border-red-100'
+                      : 'bg-amber-50 text-amber-600 border-amber-100'
                   }`}>
                     {item.urgencyLevel === 'urgent' ? 'عاجل جداً!' : 'يحتاج متابعة'}
                   </div>
@@ -485,26 +604,7 @@ export const DyehouseLateWorkPage: React.FC = () => {
 
                   {/* Timeline indicator */}
                   <div className="mt-4 pt-3 border-t border-slate-100">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-slate-500">التقدم:</span>
-                      <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
-                        {(() => {
-                          const statusIndex = DYEHOUSE_STEPS.findIndex(s => s.id === item.dyehouseStatus);
-                          const progress = statusIndex >= 0 ? ((statusIndex + 1) / DYEHOUSE_STEPS.length) * 100 : 0;
-                          return (
-                            <div 
-                              className={`h-full rounded-full transition-all ${
-                                item.urgencyLevel === 'urgent' ? 'bg-red-500' : 'bg-amber-500'
-                              }`}
-                              style={{ width: `${progress}%` }}
-                            />
-                          );
-                        })()}
-                      </div>
-                      <span className="text-sm font-medium text-slate-700">
-                        {getStatusLabel(item.dyehouseStatus)}
-                      </span>
-                    </div>
+                    <TimelineStatus item={item} />
                   </div>
                 </div>
               )}

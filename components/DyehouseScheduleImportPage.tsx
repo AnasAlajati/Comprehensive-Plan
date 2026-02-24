@@ -49,8 +49,8 @@ export const DyehouseScheduleImportPage: React.FC<DyehouseScheduleImportPageProp
             const row = jsonSheet[i];
             if (!row || !Array.isArray(row)) continue;
             
-            const hasClient = row.some(c => String(c).trim() === 'ÇáÚãíá' || String(c).toLowerCase().trim() === 'client');
-            const hasDispatch = row.some(c => String(c).trim() === 'ÇáÑÓÇáÉ' || String(c).trim() === 'ÇáÑÓÇáå' || String(c).toLowerCase().trim() === 'dispatch');
+            const hasClient = row.some(c => String(c).trim() === 'Ø§Ù„Ø¹Ù…ÙŠÙ„' || String(c).toLowerCase().trim() === 'client');
+            const hasDispatch = row.some(c => String(c).trim() === 'Ø§Ù„Ø±Ø³Ø§Ù„Ø©' || String(c).trim() === 'Ø§Ù„Ø±Ø³Ø§Ù„Ù‡' || String(c).toLowerCase().trim() === 'dispatch');
             
             if (hasClient || hasDispatch) {
                 headerRowIdx = i;
@@ -72,16 +72,16 @@ export const DyehouseScheduleImportPage: React.FC<DyehouseScheduleImportPageProp
         
         // Define known columns to EXCLUDE from being machines
         const knownKeywords = {
-            client: ['ÇáÚãíá', 'client', 'customer'],
-            color: ['Çááæä', 'color', 'col'],
-            quantity: ['ÇáßãíÉ', 'Çáßãíå', 'quantity', 'qty', 'kg'], 
-            dispatch: ['ÇáÑÓÇáÉ', 'ÇáÑÓÇáå', 'dispatch', 'id'],
-            sentDate: ['ÇáÊÇÑíÎ', 'date', 'sent'],
-            formationDate: ['ÇáÊÔßíá', 'formation'],
-            item: ['ÇáÕäÝ', 'item', 'fabric', 'design'],
-            received: ['ÇáãÓÊáã', 'received', 'rec'],
-            remaining: ['ÇáãÊÈÞí', 'remaining', 'balance'],
-            waste: ['äÓÈÉ ÇáåÇáß', 'waste', 'wastage']
+            client: ['Ø§Ù„Ø¹Ù…ÙŠÙ„', 'client', 'customer'],
+            color: ['Ø§Ù„Ù„ÙˆÙ†', 'color', 'col'],
+            quantity: ['Ø§Ù„ÙƒÙ…ÙŠØ©', 'Ø§Ù„ÙƒÙ…ÙŠÙ‡', 'quantity', 'qty', 'kg'], 
+            dispatch: ['Ø§Ù„Ø±Ø³Ø§Ù„Ø©', 'Ø§Ù„Ø±Ø³Ø§Ù„Ù‡', 'dispatch', 'id'],
+            sentDate: ['Ø§Ù„ØªØ§Ø±ÙŠØ®', 'date', 'sent'],
+            formationDate: ['Ø§Ù„ØªØ´ÙƒÙŠÙ„', 'formation'],
+            item: ['Ø§Ù„ØµÙ†Ù', 'item', 'fabric', 'design'],
+            received: ['Ø§Ù„Ù…Ø³ØªÙ„Ù…', 'received', 'rec'],
+            remaining: ['Ø§Ù„Ù…ØªØ¨Ù‚ÙŠ', 'remaining', 'balance'],
+            waste: ['Ù†Ø³Ø¨Ø© Ø§Ù„Ù‡Ø§Ù„Ùƒ', 'waste', 'wastage']
         };
 
         const usedIndices = new Set<number>();

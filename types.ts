@@ -109,6 +109,8 @@ export interface CustomerOrder {
   lastUpdated?: string;
   lastPrintedAt?: string; // ISO String
   lastPrintedBy?: string; // User Name
+  seasonId?: string;     // Season this order belongs to
+  seasonName?: string;   // Season display name (e.g. "Summer 2026")
 }
 
 export interface DailyLogEntry {
@@ -122,6 +124,7 @@ export interface DailyLogEntry {
   reason?: string;
   fabric?: string;
   client?: string;
+  clientSeason?: string;   // Season label shown under client name in cell (e.g. "Summer 2026")
   orderReference?: string; // NEW: Linked Order Reference
   orderId?: string;        // NEW: Linked Order ID
   customStatusNote?: string;
@@ -358,6 +361,7 @@ export interface OrderRow {
   manufacturedQty: number; // ما تم تصنيعه
   remainingQty: number;    // المتبقى
   orderReceiptDate: string;// تاريخ استلام الاوردر
+  promisedDeliveryDate?: string; // تاريخ التسليم الموعود
   startDate: string;       // بداية
   endDate: string;         // نهاية
   scrapQty: number;        // كمية السقط
@@ -389,7 +393,8 @@ export interface OrderRow {
   printedAt?: string; // NEW: Date when the order was printed
   lastPrintedBy?: string; // NEW: User who printed the order
   lastPrintedAt?: string; // NEW: Date when the order was last printed
-  seasonId?: string; // NEW: Season ID
+  seasonId?: string;   // Season ID this order row belongs to
+  seasonName?: string; // Season display name (e.g. "Summer 2026")
   noMachineDataNote?: string; // NEW: User explanation when finished but no machine data found
   
   // Audit Info
@@ -425,7 +430,8 @@ export interface CustomerSheet {
   id: string;
   name: string;
   orders: OrderRow[];
-  createdSeasonId?: string; // NEW: Season where client was created
+  createdSeasonId?: string;   // Season ID where client was created
+  createdSeasonName?: string; // Season display name where client was created
 }
 
 // --- NEW ADVANCED STRUCTURE TYPES ---

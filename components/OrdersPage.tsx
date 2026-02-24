@@ -1,4 +1,4 @@
-Before Writing code import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   collection, 
   onSnapshot, 
@@ -11,7 +11,7 @@ import {
   where
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { CustomerSheet, OrderRow, YarnInventoryItem, FabricDefinition } from '../types';
+import { CustomerSheet, OrderRow, YarnInventoryItem, FabricDefinition, Season } from '../types';
 import { 
   Plus, 
   Trash2, 
@@ -48,6 +48,12 @@ export const OrdersPage: React.FC<OrdersPageProps> = ({ userRole }) => {
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Season State
+  const [seasons, setSeasons] = useState<Season[]>([]);
+  const [selectedSeasonId, setSelectedSeasonId] = useState<string | null>(() => {
+    return localStorage.getItem('selectedSeasonId') || null;
+  });
   
   // Inventory & Fabric Data
   const [yarnInventory, setYarnInventory] = useState<YarnInventoryItem[]>([]);
@@ -62,6 +68,32 @@ export const OrdersPage: React.FC<OrdersPageProps> = ({ userRole }) => {
 
   // Refs for keyboard navigation
   const tableRef = useRef<HTMLTableElement>(null);
+
+  // Fetch Seasons (mirrors ClientOrdersPage logic)
+  useEffect(() => {
+    const unsubSeasons = onSnapshot(collection(db, 'Seasons'), async (snapshot) => {
+      const loadedSeasons = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Season));
+      if (loadedSeasons.length === 0) {
+        const defaultSeason: Season = {
+          id: '2025-summer',
+          name: '2025 Summer Season',
+          startDate: '2025-01-01',
+          endDate: '2025-06-30',
+          isActive: true
+        };
+        await setDoc(doc(db, 'Seasons', defaultSeason.id), defaultSeason);
+        setSeasons([defaultSeason]);
+        setSelectedSeasonId(defaultSeason.id);
+      } else {
+        setSeasons(loadedSeasons);
+        if (!selectedSeasonId || !loadedSeasons.find(s => s.id === selectedSeasonId)) {
+          const active = loadedSeasons.find(s => s.isActive);
+          setSelectedSeasonId(active ? active.id : loadedSeasons[0].id);
+        }
+      }
+    });
+    return () => unsubSeasons();
+  }, []);
 
   // 1. Fetch Customers
   useEffect(() => {
@@ -129,9 +161,12 @@ export const OrdersPage: React.FC<OrdersPageProps> = ({ userRole }) => {
   const handleAddCustomer = async () => {
     if (!newCustomerName.trim()) return;
     try {
+      const activeSeason = seasons.find(s => s.id === selectedSeasonId);
       await addDoc(collection(db, 'CustomerSheets'), {
         name: newCustomerName.trim(),
-        orders: []
+        orders: [],
+        createdSeasonId: selectedSeasonId || '2025-summer',
+        createdSeasonName: activeSeason?.name || ''
       });
       setNewCustomerName('');
       setIsAddingCustomer(false);
@@ -168,6 +203,7 @@ export const OrdersPage: React.FC<OrdersPageProps> = ({ userRole }) => {
   const handleAddRow = async () => {
     if (!selectedCustomerId || !selectedCustomer) return;
 
+    const activeSeason = seasons.find(s => s.id === selectedSeasonId);
     const newRow: OrderRow = {
       id: crypto.randomUUID(),
       material: '',
@@ -183,7 +219,9 @@ export const OrdersPage: React.FC<OrdersPageProps> = ({ userRole }) => {
       others: '',
       notes: '',
       batchDeliveries: '',
-      accessoryDeliveries: ''
+      accessoryDeliveries: '',
+      seasonId: selectedSeasonId || '2025-summer',
+      seasonName: activeSeason?.name || ''
     };
 
     // Append to the end of orders array to ensure it stays at the bottom

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import * as XLSX from 'xlsx-js-style';
 import { createPortal } from 'react-dom';
+import { toJpeg } from 'html-to-image';
+import { jsPDF } from 'jspdf';
 import { 
   collection, 
   onSnapshot, 
@@ -78,8 +80,15 @@ import {
   Unlink,
   Image as ImageIcon,
   Camera,
-  Send
+  Send,
+  CreditCard,
+  CreditCard as CreditCardIcon,
+  LayoutGrid,
+  List,
+  Printer,
+  ArrowUpDown
 } from 'lucide-react';
+import { OrderSummaryCard } from './OrderSummaryCard';
 
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
 const ALL_REMAINING_WORK_ID = 'ALL_REMAINING_WORK';
@@ -1130,7 +1139,10 @@ const MemoizedOrderRow = React.memo(({
   onToggleColumnVisibility,
   onUploadFabricImage,
   inventory,
-  setNoMachineDataModal
+  setNoMachineDataModal,
+  selectedCustomerSeasonId,
+  selectedCustomerSeasonName,
+  ordersColVis
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -1168,6 +1180,9 @@ const MemoizedOrderRow = React.memo(({
   onUploadFabricImage: (fabricId: string, file: File) => void;
   inventory: YarnInventoryItem[];
   setNoMachineDataModal: React.Dispatch<React.SetStateAction<{isOpen: boolean; orderId: string; currentNote: string}>>;
+  selectedCustomerSeasonId?: string;
+  selectedCustomerSeasonName?: string;
+  ordersColVis?: Record<string, boolean>;
 }) => {
   // Viewer role is read-only
   const isReadOnly = userRole === 'viewer';
@@ -1186,6 +1201,7 @@ const MemoizedOrderRow = React.memo(({
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [showDyehouseModal, setShowDyehouseModal] = useState(false);
   const [showYarnModal, setShowYarnModal] = useState(false);
+  const [showOrderDebug, setShowOrderDebug] = useState(false);
   const [selectedBatchForDetails, setSelectedBatchForDetails] = useState<number>(-1);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const refCode = row.material ? `${selectedCustomerName}-${row.material}` : '-';
@@ -1230,6 +1246,19 @@ const MemoizedOrderRow = React.memo(({
     const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
     const targetClient = normalize(selectedCustomerName);
     const targetFabric = normalize(row.material);
+    const combinedIdTarget = selectedCustomerSeasonId ? normalize(`${selectedCustomerName}-${selectedCustomerSeasonId}`) : '';
+    const combinedNameTarget = selectedCustomerSeasonName ? normalize(`${selectedCustomerName}-${selectedCustomerSeasonName}`) : '';
+    const clientOk = (lc: string) => {
+      const n = normalize(lc);
+      return n === targetClient
+        || (combinedIdTarget && n === combinedIdTarget)
+        || (combinedNameTarget && n === combinedNameTarget);
+    };
+    const logSeasonOk = (log: any) => {
+      if (!selectedCustomerSeasonId && !selectedCustomerSeasonName) return true; // customer has no season → match all
+      if (!log.clientSeason) return false; // season selected but log has no tag → exclude (cross-season)
+      return log.clientSeason === selectedCustomerSeasonId || log.clientSeason === selectedCustomerSeasonName;
+    };
     
     let total = 0;
     
@@ -1238,11 +1267,9 @@ const MemoizedOrderRow = React.memo(({
       if (!machine.dailyLogs || !Array.isArray(machine.dailyLogs)) return;
       
       machine.dailyLogs.forEach((log) => {
-        const logClient = normalize(log.client);
         const logFabric = normalize(log.fabric);
         
-        const isMatch = (logClient === targetClient && logFabric === targetFabric) ||
-                        (log.client === selectedCustomerName && log.fabric === row.material);
+        const isMatch = clientOk(log.client) && logFabric === targetFabric && logSeasonOk(log);
         
         if (isMatch) {
           total += Number(log.dayProduction) || 0;
@@ -1251,7 +1278,7 @@ const MemoizedOrderRow = React.memo(({
     });
     
     return total;
-  }, [machines, selectedCustomerName, row.material]);
+  }, [machines, selectedCustomerName, row.material, selectedCustomerSeasonId, selectedCustomerSeasonName]);
 
   // Calculate Assigned Machines Summary & Total Capacity
   const { summary: assignedMachinesSummary, totalCapacity, totalSent, totalReceived, totalDelivered, groupedBatches } = useMemo(() => {
@@ -1328,11 +1355,19 @@ const MemoizedOrderRow = React.memo(({
         if (!machine.dailyLogs || !Array.isArray(machine.dailyLogs)) return;
         
         machine.dailyLogs.forEach((log) => {
-          const logClient = normalize(log.client);
-          const logFabric = normalize(log.fabric);
+        const logFabric = normalize(log.fabric);
+        const normLogClient = normalize(log.client);
+          const combinedIdFin = selectedCustomerSeasonId ? normalize(`${selectedCustomerName}-${selectedCustomerSeasonId}`) : '';
+          const combinedNameFin = selectedCustomerSeasonName ? normalize(`${selectedCustomerName}-${selectedCustomerSeasonName}`) : '';
+          const clientMatchFin = normLogClient === targetClient
+            || (combinedIdFin && normLogClient === combinedIdFin)
+            || (combinedNameFin && normLogClient === combinedNameFin);
+          const logSeasonOk = !log.clientSeason ||
+            (!selectedCustomerSeasonId && !selectedCustomerSeasonName) ||
+            log.clientSeason === selectedCustomerSeasonId ||
+            log.clientSeason === selectedCustomerSeasonName;
           
-          const isMatch = (logClient === targetClient && logFabric === targetFabric) ||
-                          (log.client === selectedCustomerName && log.fabric === row.material);
+          const isMatch = clientMatchFin && logFabric === targetFabric && logSeasonOk;
 
           if (isMatch) {
             finishedMachines.add(machine.name);
@@ -1380,6 +1415,173 @@ const MemoizedOrderRow = React.memo(({
     return { internalActive, internalPlanned, externalMatches, directMachine, hasAnyPlan };
   }, [statusInfo, row.machine, machines]);
 
+  // When !hasAnyPlan but remaining > 0, scan logs to find any prior production outside active day
+  const historyFallback = useMemo(() => {
+    if (hasAnyPlan) return null; // active/planned already covers it
+    if ((row.remainingQty || 0) <= 0) return null; // finished branch handles this
+
+    const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+    const targetClient = normalize(selectedCustomerName);
+    const targetFabric = normalize(row.material);
+
+    const logSeasonOk = (log: any) => {
+      if (!selectedCustomerSeasonId && !selectedCustomerSeasonName) return true; // no season filter → everything matches
+      if (!log.clientSeason) return false; // season selected but log has no season tag → exclude (treat as cross-season)
+      return log.clientSeason === selectedCustomerSeasonId || log.clientSeason === selectedCustomerSeasonName;
+    };
+
+    const machineNames = new Set<string>();
+    let latestDate = '';
+    let latestRemaining: number | null = null;
+
+    machines.forEach(machine => {
+      if (!machine.dailyLogs || !Array.isArray(machine.dailyLogs)) return;
+      machine.dailyLogs.forEach((log: any) => {
+        const isMatch =
+          normalize(log.client) === targetClient &&
+          normalize(log.fabric) === targetFabric &&
+          logSeasonOk(log);
+        if (!isMatch) return;
+        machineNames.add(machine.name);
+        if (!latestDate || log.date > latestDate) {
+          latestDate = log.date;
+          latestRemaining = Number(log.remainingMfg) ?? null;
+        }
+      });
+    });
+
+    if (machineNames.size === 0) return null;
+    return {
+      machines: Array.from(machineNames),
+      latestDate,
+      latestRemaining,
+    };
+  }, [hasAnyPlan, row.remainingQty, row.material, machines, selectedCustomerName, selectedCustomerSeasonId, selectedCustomerSeasonName]);
+
+  // --- Order Status Debug Data (Admin Only) ---
+  const orderDebugData = useMemo(() => {
+    const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+    const targetClient = normalize(selectedCustomerName);
+    const targetFabric = normalize(row.material);
+    const logSeasonOk = (log: any) => {
+      if (!selectedCustomerSeasonId && !selectedCustomerSeasonName) return true;
+      if (!log?.clientSeason) return false; // season selected but log has no tag → cross-season
+      return log.clientSeason === selectedCustomerSeasonId || log.clientSeason === selectedCustomerSeasonName;
+    };
+    const activeSet = new Set(statusInfo?.active || []);
+    const plannedSet = new Set(statusInfo?.planned || []);
+    const historyMachineSet = new Set(historyFallback?.machines || []);
+    const finishedMachineSet = new Set(finishedDetails?.uniqueMachines || []);
+    type MachineDebugRow = { name: string; totalLogs: number; recentDate: string; recentStatus: string; recentSeason: string; seasonMatch: boolean; classification: string; };
+    const machineRows: MachineDebugRow[] = [];
+    const processedMachines = new Set<string>();
+    machines.forEach(machine => {
+      const allMatchingLogs = (machine.dailyLogs || []).filter((log: any) =>
+        normalize(log.client) === targetClient && normalize(log.fabric) === targetFabric
+      );
+      if (allMatchingLogs.length === 0) return;
+      const sorted = [...allMatchingLogs].sort((a: any, b: any) => b.date.localeCompare(a.date));
+      const recent: any = sorted[0];
+      const seasonOk = logSeasonOk(recent);
+      let classification = 'HISTORY';
+      if (activeSet.has(`${machine.name} (Finished)`)) classification = 'FINISHED_VIA_ACTIVE';
+      else if (activeSet.has(machine.name)) classification = 'ACTIVE';
+      else if (plannedSet.has(machine.name)) classification = 'PLANNED';
+      else if (historyMachineSet.has(machine.name)) classification = 'HISTORY_OUTSIDE_ACTIVE';
+      else if (finishedMachineSet.has(machine.name)) classification = 'FINISHED';
+      machineRows.push({ name: machine.name, totalLogs: allMatchingLogs.length, recentDate: recent.date, recentStatus: recent.status || 'No Status', recentSeason: recent.clientSeason || '(none)', seasonMatch: seasonOk, classification });
+      processedMachines.add(machine.name);
+    });
+    [...activeSet, ...plannedSet].forEach((mName: string) => {
+      const cleanName = mName.replace(' (Finished)', '');
+      if (!processedMachines.has(cleanName)) {
+        machineRows.push({ name: cleanName, totalLogs: 0, recentDate: '-', recentStatus: '-', recentSeason: '-', seasonMatch: true, classification: activeSet.has(mName) || activeSet.has(`${cleanName} (Finished)`) ? 'ACTIVE_NO_LOGS' : 'PLANNED_NO_LOGS' });
+        processedMachines.add(cleanName);
+      }
+    });
+    let finalStatus = '';
+    const reasons: string[] = [];
+    if (!row.requiredQty) {
+      finalStatus = 'No Order Quantity'; reasons.push(`requiredQty = ${row.requiredQty}`);
+    } else if (!hasAnyPlan) {
+      reasons.push('hasAnyPlan = false (no active/planned/external/direct)');
+      if ((displayRemaining || 0) <= 0) {
+        reasons.push(`displayRemaining = ${displayRemaining} (≤ 0)`);
+        if (finishedDetails && finishedDetails.uniqueMachines.length > 0) {
+          finalStatus = `Finished in ${finishedDetails.uniqueMachines.join(', ')}`;
+          reasons.push(`finishedDetails.uniqueMachines = [${finishedDetails.uniqueMachines.join(', ')}] → Finished badge`);
+        } else {
+          finalStatus = 'Finished (no logs)'; reasons.push('finishedDetails is null → Finished (no logs) / noMachineDataNote');
+        }
+      } else {
+        reasons.push(`displayRemaining = ${displayRemaining} (> 0)`);
+        if (historyFallback) {
+          finalStatus = `History: ${historyFallback.machines.join(', ')} (outside active day)`;
+          reasons.push(`historyFallback.machines = [${historyFallback.machines.join(', ')}]`);
+          reasons.push(`historyFallback.latestDate = ${historyFallback.latestDate}`);
+          reasons.push(`historyFallback.latestRemaining = ${historyFallback.latestRemaining}`);
+        } else {
+          finalStatus = 'Not Planned'; reasons.push('historyFallback = null → no logs found for client+fabric+season → Not Planned badge');
+        }
+      }
+    } else {
+      reasons.push('hasAnyPlan = true');
+      if ((displayRemaining || 0) <= 0 && hasHistory) {
+        finalStatus = `Finished on ${[...internalActive, ...internalPlanned].join(', ')}`;
+        reasons.push(`displayRemaining = ${displayRemaining} (≤ 0) + hasHistory = true → Finished`);
+        reasons.push(`active=[${internalActive.join(', ')}] planned=[${internalPlanned.join(', ')}]`);
+      } else if (internalActive.length > 0) {
+        finalStatus = `Active on ${internalActive.join(', ')}`;
+        reasons.push(`statusInfo.active (internal) = [${internalActive.join(', ')}] → Active badge`);
+        reasons.push(`statusInfo.remaining = ${statusInfo?.remaining}`);
+      } else if (internalPlanned.length > 0) {
+        finalStatus = `Planned on ${internalPlanned.join(', ')}`;
+        reasons.push(`statusInfo.planned (internal) = [${internalPlanned.join(', ')}] → Planned badge`);
+      } else if (externalMatches.length > 0) {
+        finalStatus = `External: ${externalMatches.map((e: any) => e.factoryName).join(', ')}`;
+        reasons.push(`externalMatches = [${externalMatches.map((e: any) => e.factoryName).join(', ')}]`);
+      } else if (directMachine) {
+        finalStatus = `Direct assignment: ${directMachine.name}`;
+        reasons.push(`directMachine = ${directMachine.name} (row.machine field)`);
+      }
+    }
+    return { machineRows, finalStatus, reasons, totalMachinesScanned: machines.length, machinesWithAnyMatch: machineRows.length };
+  }, [machines, row.material, row.requiredQty, selectedCustomerName, selectedCustomerSeasonId, selectedCustomerSeasonName, statusInfo, historyFallback, finishedDetails, hasAnyPlan, internalActive, internalPlanned, externalMatches, directMachine, displayRemaining, hasHistory]);
+
+  // Get completion status indicator for Dyehouse Info (simple search through delivery data)
+  const getDyehouseCompletionStatus = useMemo(() => {
+    if (!row.dyeingPlan || !Array.isArray(row.dyeingPlan) || row.dyeingPlan.length === 0) return null;
+
+    let sentCount = 0;
+    let receivedCount = 0;
+
+    row.dyeingPlan.forEach((batch: any) => {
+      // A batch is received if: status='received', dyehouseStatus='RECEIVED', isComplete=true, or receiveEvents exist
+      const isReceived =
+        batch.status === 'received' ||
+        batch.dyehouseStatus === 'RECEIVED' ||
+        batch.isComplete === true ||
+        (batch.receiveEvents && batch.receiveEvents.length > 0) ||
+        (batch.receivedQuantity && batch.receivedQuantity > 0);
+
+      // A batch is sent if: status='sent' or 'received' (received implies it was sent), or dateSent exists
+      const isSent = isReceived || batch.status === 'sent' || !!batch.dateSent;
+
+      if (isReceived) receivedCount += 1;
+      else if (isSent) sentCount += 1;
+    });
+
+    const total = row.dyeingPlan.length;
+
+    if (receivedCount === total)                    return 'all_received';   // 🟢 All done
+    if (receivedCount > 0 && sentCount + receivedCount === total) return 'partial_received'; // 🟣 Mixed
+    if (receivedCount > 0)                          return 'partial_received'; // 🟣 Some received
+    if (sentCount === total)                        return 'all_sent';       // 🔵 All sent, none received
+    if (sentCount > 0)                              return 'partial_sent';   // 🟡 Some sent
+
+    return 'not_sent'; // ⚫ Nothing sent
+  }, [row.dyeingPlan]);
+
   return (
     <>
     <tr 
@@ -1426,17 +1628,38 @@ const MemoizedOrderRow = React.memo(({
           </td>
           {/* Dyehouse (Computed Read-Only) */}
           <td className="p-0 border-r border-slate-200 bg-slate-50/50">
-             <div className="flex items-center h-full w-full px-3 py-2 text-slate-600 text-xs font-medium">
-                {(() => {
-                   const plan = row.dyeingPlan || [];
-                   
-                   // Collect all sources
-                   const explicitDyehouses = plan.map(b => b.dyehouse).filter(Boolean);
-                   const approvalDyehouses = plan.map(b => b.colorApprovals?.[0]?.dyehouseName).filter(Boolean);
-                   
-                   let uniqueDyehouses = Array.from(new Set([...explicitDyehouses, ...approvalDyehouses]));
-                   
-                   // Fallback to Order Default if nothing else found
+             <div className="flex items-center h-full w-full px-3 py-2 gap-3">
+                {/* Completion Status Badge */}
+                {getDyehouseCompletionStatus && getDyehouseCompletionStatus !== 'not_sent' && (
+                  <span className={`flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap border ${
+                    getDyehouseCompletionStatus === 'all_received'    ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                    getDyehouseCompletionStatus === 'all_sent'        ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                    getDyehouseCompletionStatus === 'partial_received'? 'bg-violet-50 text-violet-700 border-violet-200' :
+                                                                        'bg-amber-50 text-amber-700 border-amber-200'
+                  }`}>
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                      getDyehouseCompletionStatus === 'all_received'    ? 'bg-emerald-500' :
+                      getDyehouseCompletionStatus === 'all_sent'        ? 'bg-blue-500' :
+                      getDyehouseCompletionStatus === 'partial_received'? 'bg-violet-500' :
+                                                                          'bg-amber-500'
+                    }`} />
+                    {getDyehouseCompletionStatus === 'all_received'    ? 'تم الاستلام' :
+                     getDyehouseCompletionStatus === 'all_sent'        ? 'تم الإرسال' :
+                     getDyehouseCompletionStatus === 'partial_received'? 'استقبال جزئي' :
+                                                                         'إرسال جزئي'}
+                  </span>
+                )}
+                <div className="text-slate-600 text-xs font-medium truncate">
+                   {(() => {
+                      const plan = row.dyeingPlan || [];
+                      
+                      // Collect all sources
+                      const explicitDyehouses = plan.map(b => b.dyehouse).filter(Boolean);
+                      const approvalDyehouses = plan.map(b => b.colorApprovals?.[0]?.dyehouseName).filter(Boolean);
+                      
+                      let uniqueDyehouses = Array.from(new Set([...explicitDyehouses, ...approvalDyehouses]));
+                      
+                      // Fallback to Order Default if nothing else found
                    if (uniqueDyehouses.length === 0 && row.dyehouse) {
                        uniqueDyehouses = [row.dyehouse];
                    }
@@ -1444,11 +1667,12 @@ const MemoizedOrderRow = React.memo(({
                    if (uniqueDyehouses.length === 0) return <span className="text-slate-400 italic">Unassigned</span>;
 
                    return (
-                     <span title={uniqueDyehouses.join(' + ')} className="truncate max-w-[150px] block">
+                     <span title={uniqueDyehouses.join(' + ')} className="truncate block">
                        {uniqueDyehouses.join(' + ')}
                      </span>
                    );
                 })()}
+                </div>
              </div>
           </td>
           {/* Assigned Machines (Calculated) */}
@@ -1731,8 +1955,7 @@ const MemoizedOrderRow = React.memo(({
             </div>
           </td>
 
-          {/* Req GSM */}
-          <td className="p-0 border-r border-slate-200">
+          {ordersColVis?.['reqGsm'] !== false && <td className="p-0 border-r border-slate-200">
             <input 
               type="number"
               className={`w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
@@ -1741,10 +1964,9 @@ const MemoizedOrderRow = React.memo(({
               placeholder="-"
               disabled={isReadOnly}
             />
-          </td>
+          </td>}
 
-          {/* Req Width */}
-          <td className="p-0 border-r border-slate-200">
+          {ordersColVis?.['reqWidth'] !== false && <td className="p-0 border-r border-slate-200">
             <input 
               type="number"
               className={`w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
@@ -1753,10 +1975,9 @@ const MemoizedOrderRow = React.memo(({
               placeholder="-"
               disabled={isReadOnly}
             />
-          </td>
+          </td>}
 
-          {/* Accessories */}
-          <td className="p-0 border-r border-slate-200 relative">
+          {ordersColVis?.['accessories'] !== false && <td className="p-0 border-r border-slate-200 relative">
             <input 
               type="text"
               className={`w-full h-full px-3 py-2 bg-transparent outline-none focus:bg-blue-50 ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
@@ -1770,10 +1991,9 @@ const MemoizedOrderRow = React.memo(({
                 {row.accessoryPercentage}%
               </div>
             )}
-          </td>
+          </td>}
 
-          {/* Acc. Qty */}
-          <td className="p-0 border-r border-slate-200">
+          {ordersColVis?.['accQty'] !== false && <td className="p-0 border-r border-slate-200">
               <input 
               type="number"
               className={`w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-600 text-xs ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}
@@ -1782,14 +2002,13 @@ const MemoizedOrderRow = React.memo(({
               placeholder="-"
               disabled={isReadOnly}
             />
-          </td>
+          </td>}
         </>
       )}
 
       {!showDyehouse && (
         <>
-          {/* Status / Plan (Combined) */}
-          <td className="p-2 border-r border-slate-200 align-middle">
+          {ordersColVis?.['status'] !== false && <td className="p-2 border-r border-slate-200 align-middle">
             <div className="flex items-center justify-between gap-2">
               <div className="flex flex-col gap-1 flex-1 min-w-0">
                 {(() => {
@@ -1844,6 +2063,37 @@ const MemoizedOrderRow = React.memo(({
                               {row.noMachineDataNote || 'Finished'}
                             </button>
                         );
+                     }
+                     // Has prior production outside active day → show machine from history
+                     if (historyFallback) {
+                       // If last log shows 0 remaining → finished on that machine
+                       if (historyFallback.latestRemaining === 0) {
+                         return (
+                           <span className="text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap border bg-green-100 text-green-700 border-green-200 w-fit">
+                             Finished on {historyFallback.machines.join(', ')}
+                           </span>
+                         );
+                       }
+                       return (
+                         <div className="group/histfb relative flex flex-col gap-0.5">
+                           <span className="text-[10px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap border w-fit flex items-center gap-1 bg-blue-50 text-blue-700 border-blue-200 cursor-default">
+                             <History size={9} />
+                             {historyFallback.machines.join(', ')}
+                           </span>
+                           <div className="hidden group-hover/histfb:block absolute z-50 bg-white text-slate-700 text-[10px] p-2 rounded shadow-xl border border-slate-200 top-6 left-0 min-w-[180px]">
+                             <div className="font-bold border-b border-slate-100 mb-1 pb-1 text-slate-900">Last Production (outside active day)</div>
+                             <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                               <span className="text-slate-500">Machine(s):</span>
+                               <span>{historyFallback.machines.join(', ')}</span>
+                               <span className="text-slate-500">Last Date:</span>
+                               <span className="font-mono">{historyFallback.latestDate}</span>
+                               {historyFallback.latestRemaining !== null && (
+                                 <><span className="text-slate-500">Remaining:</span><span className="font-mono font-bold text-indigo-700">{historyFallback.latestRemaining.toLocaleString()} kg</span></>
+                               )}
+                             </div>
+                           </div>
+                         </div>
+                       );
                      }
                      return (
                         <button 
@@ -2022,11 +2272,20 @@ const MemoizedOrderRow = React.memo(({
               >
                 <History className="w-4 h-4" />
               </button>
+
+              {userRole === 'admin' && (
+                <button
+                  onClick={() => setShowOrderDebug(true)}
+                  className="p-1.5 rounded-md transition-all flex-shrink-0 text-slate-300 hover:text-purple-700 hover:bg-purple-50"
+                  title="Debug Order Status (Admin)"
+                >
+                  <Bug className="w-4 h-4" />
+                </button>
+              )}
             </div>
-          </td>
-          
-          {/* Dyehouse Plan */}
-          <DyehousePlanCell 
+          </td>}
+
+          {ordersColVis?.['dyehousePlan'] !== false && <DyehousePlanCell
             row={row}
             dyehouses={dyehouses}
             allOrders={allOrders}
@@ -2037,12 +2296,11 @@ const MemoizedOrderRow = React.memo(({
                 qty: row.requiredQty,
                 requiredColors: row.dyeingPlan ? row.dyeingPlan.length : 0
             }}
-          />
+          />}
         </>
       )}
 
-      {/* Ordered Qty */}
-      <td className="p-0 border-r border-slate-200">
+      {ordersColVis?.['ordered'] !== false && <td className="p-0 border-r border-slate-200">
         <input 
           type="number"
           className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 font-mono text-slate-700"
@@ -2050,65 +2308,112 @@ const MemoizedOrderRow = React.memo(({
           onChange={(e) => {
             const val = e.target.value === '' ? 0 : Number(e.target.value);
             const updates: Partial<OrderRow> = { requiredQty: val };
-            // If not active, update remaining too
             if (!statusInfo || (statusInfo.active.length === 0)) {
                 updates.remainingQty = val;
             }
             handleUpdateOrder(row.id, updates);
           }}
         />
-      </td>
+      </td>}
 
       {!showDyehouse && (
         <>
           {/* Produced Qty (From Machine Logs - matches History Modal) */}
-          <td className="p-2 text-right border-r border-slate-200 font-mono font-bold text-emerald-600 bg-emerald-50/30">
+          {ordersColVis?.['produced'] !== false && <td className="p-2 text-right border-r border-slate-200 font-mono font-bold text-emerald-600 bg-emerald-50/30">
             {totalProducedFromLogs > 0 ? totalProducedFromLogs.toLocaleString() : '-'}
-          </td>
+          </td>}
 
-          {/* Remaining Qty */}
-          <td className="p-0 border-r border-slate-200 font-mono font-bold">
+          {ordersColVis?.['remaining'] !== false && <td className="p-0 border-r border-slate-200 font-mono font-bold">
             <input 
               type="number"
               className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-blue-50 text-slate-600"
-              value={statusInfo?.remaining && statusInfo.remaining > 0 ? statusInfo.remaining : (displayRemaining ?? '')}
+              value={
+                statusInfo?.remaining && statusInfo.remaining > 0
+                  ? statusInfo.remaining
+                  : (displayRemaining ?? '')
+              }
               onChange={(e) => handleUpdateOrder(row.id, { remainingQty: Number(e.target.value) })}
-              title={statusInfo?.remaining && statusInfo.remaining > 0 ? "Real-time remaining from active machines" : "Planned remaining"}
+              title={
+                statusInfo?.remaining && statusInfo.remaining > 0
+                  ? 'Real-time remaining from active machines'
+                  : 'Order remaining quantity'
+              }
             />
-          </td>
+          </td>}
 
-          {/* Order Receive Date */}
-          <td className="p-0 border-r border-slate-200">
-            <input 
-              type="date"
-              className="w-full h-full px-2 py-2 text-center bg-transparent outline-none focus:bg-blue-50 text-xs text-slate-600"
-              value={row.orderReceiptDate || ''}
-              onChange={(e) => handleUpdateOrder(row.id, { orderReceiptDate: e.target.value })}
-            />
-          </td>
+          {ordersColVis?.['receiveDate'] !== false && <td className="p-0 border-r border-slate-200">
+            <div className="flex items-center justify-center h-full gap-2">
+              <input 
+                type="date"
+                className="flex-1 h-full px-2 py-2 text-center bg-transparent outline-none focus:bg-blue-50 text-xs text-slate-600"
+                value={row.orderReceiptDate || ''}
+                onChange={(e) => handleUpdateOrder(row.id, { orderReceiptDate: e.target.value })}
+              />
+              {row.orderReceiptDate && (() => {
+                const receiveDate = new Date(row.orderReceiptDate);
+                const today = new Date();
+                const daysElapsed = Math.floor((today.getTime() - receiveDate.getTime()) / (1000 * 60 * 60 * 24));
+                if (daysElapsed >= 0) {
+                  const bgColor = daysElapsed > 30 ? 'bg-red-100 text-red-700' : daysElapsed > 14 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
+                  return (
+                    <span className={`text-[10px] font-semibold px-1.5 py-1 rounded whitespace-nowrap ${bgColor}`}>
+                      {daysElapsed}d
+                    </span>
+                  );
+                }
+                return null;
+              })()}
+            </div>
+          </td>}
 
-          {/* Start Date (Auto) */}
-          <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500 whitespace-nowrap">
+          {ordersColVis?.['promisedDeliveryDate'] !== false && <td className="p-0 border-r border-slate-200">
+            {(() => {
+              const computedDefault = row.orderReceiptDate ? (() => {
+                const d = new Date(row.orderReceiptDate);
+                d.setDate(d.getDate() + 60);
+                return d.toISOString().split('T')[0];
+              })() : '';
+              const promisedVal = row.promisedDeliveryDate || computedDefault;
+              const isDefault = !row.promisedDeliveryDate;
+              const today = new Date();
+              const daysUntil = promisedVal ? Math.ceil((new Date(promisedVal).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) : null;
+              const badgeColor = daysUntil === null ? '' : daysUntil < 0 ? 'bg-red-100 text-red-700' : daysUntil <= 14 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700';
+              return (
+                <div className="flex items-center justify-center h-full gap-1">
+                  <input
+                    type="date"
+                    className={`flex-1 h-full px-2 py-2 text-center outline-none focus:bg-blue-50 text-xs ${isDefault ? 'text-slate-400 bg-transparent' : 'text-slate-700 bg-transparent'}`}
+                    value={promisedVal}
+                    onChange={(e) => handleUpdateOrder(row.id, { promisedDeliveryDate: e.target.value })}
+                    title={isDefault ? 'Default: 60 days after receive date' : 'Promised delivery date'}
+                  />
+                  {daysUntil !== null && (
+                    <span className={`text-[10px] font-semibold px-1.5 py-1 rounded whitespace-nowrap ${badgeColor} ${isDefault ? 'opacity-60' : ''}`}>
+                      {daysUntil >= 0 ? `${daysUntil}d` : `${Math.abs(daysUntil)}d!`}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
+          </td>}
+
+          {ordersColVis?.['startDate'] !== false && <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500 whitespace-nowrap">
             {formatDateShort(finishedDetails ? finishedDetails.startDate : statusInfo?.startDate)}
-          </td>
+          </td>}
 
-          {/* End Date (Auto) */}
-          <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500 whitespace-nowrap">
+          {ordersColVis?.['endDate'] !== false && <td className="p-2 text-center border-r border-slate-200 text-xs text-slate-500 whitespace-nowrap">
             {formatDateShort(finishedDetails ? finishedDetails.endDate : statusInfo?.endDate)}
-          </td>
+          </td>}
 
-          {/* Scrap (Auto) */}
-          <td className="p-2 text-right border-r border-slate-200 text-xs text-red-500 font-mono">
+          {ordersColVis?.['scrap'] !== false && <td className="p-2 text-right border-r border-slate-200 text-xs text-red-500 font-mono">
             {statusInfo?.scrap ? statusInfo.scrap.toFixed(1) : '-'}
-          </td>
+          </td>}
 
-          {/* Others (Auto) */}
-          <td className="p-2 text-left border-r border-slate-200 text-xs text-slate-500 truncate max-w-[100px]" title={statusInfo?.others}>
+          {ordersColVis?.['others'] !== false && <td className="p-2 text-left border-r border-slate-200 text-xs text-slate-500 truncate max-w-[100px]" title={statusInfo?.others}>
             {statusInfo?.others || '-'}
-          </td>
+          </td>}
 
-          {/* Delivery */}
-          <td className="p-0 border-r border-slate-200">
+          {ordersColVis?.['delivery'] !== false && <td className="p-0 border-r border-slate-200">
             {(() => {
               // Count all deliveries across all colors in this order
               const allDeliveries = (row.dyeingPlan || []).flatMap(b => b.deliveryEvents || []);
@@ -2140,10 +2445,9 @@ const MemoizedOrderRow = React.memo(({
                 </button>
               );
             })()}
-          </td>
+          </td>}
 
-          {/* Notes */}
-          <td className="p-0 border-r border-slate-200">
+          {ordersColVis?.['notes'] !== false && <td className="p-0 border-r border-slate-200">
             <textarea
               className="w-full h-full px-2 py-1 bg-transparent outline-none focus:bg-blue-50 text-xs resize-none overflow-hidden"
               value={row.notes || ''}
@@ -2151,9 +2455,8 @@ const MemoizedOrderRow = React.memo(({
               placeholder="Notes..."
               rows={1}
             />
-          </td>
+          </td>}
 
-          {/* Dyehouse Plan */}
         </>
       )}
 
@@ -2943,11 +3246,11 @@ const MemoizedOrderRow = React.memo(({
                         
                         elements.push(
                           <tr key={`group-header-${currentGroupId}`}>
-                            <td colSpan={20} className="p-0 border-t border-indigo-100">
-                                <div className="bg-gradient-to-r from-indigo-50/80 to-white px-3 py-2 border-l-4 border-l-indigo-500 flex items-center justify-between shadow-sm my-2 mb-0 rounded-tl-md mr-1">
+                            <td colSpan={20} className="p-0 pt-3">
+                                <div className="flex items-center justify-between px-3 py-2 bg-slate-50 border-t border-b border-slate-200">
                                     <div className="flex items-center gap-3 flex-1">
                                       <div className="flex items-center gap-2 w-full">
-                                        <div className="w-6 h-6 rounded bg-white flex items-center justify-center text-xs font-bold text-indigo-600 shadow-sm border border-indigo-100 mb-0.5 shrink-0">
+                                        <div className="w-5 h-5 rounded-full bg-indigo-600 flex items-center justify-center text-[11px] font-bold text-white shrink-0">
                                             {groupIndex}
                                         </div>
                                         
@@ -2993,28 +3296,53 @@ const MemoizedOrderRow = React.memo(({
                                                </button>
                                            </div>
                                         ) : (
-                                            <div className="flex flex-col">
-                                                <span className="text-xs font-bold text-indigo-800 flex items-center gap-2">
-                                                    {group?.name || `مجموعة ${groupIndex}`}
-                                                    {group?.note && <span className="text-[10px] font-normal text-slate-500 mx-1">({group.note})</span>}
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-sm font-semibold text-slate-700">
+                                                    {group?.name || `Group ${groupIndex}`}
+                                                    {group?.note && group.note !== group?.name && <span className="text-xs font-normal text-slate-400 mx-1">· {group.note}</span>}
                                                 </span>
-                                                <span className="text-[10px] text-indigo-400 font-mono">{groupBatches.length} ألوان</span>
+                                                <span className="text-[10px] font-medium text-indigo-600 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded-full">{groupBatches.length} ألوان</span>
                                             </div>
                                         )}
                                       </div>
                                     </div>
-                                    <div className="flex items-center gap-1 opacity-100">
+                                    <div className="flex items-center gap-1">
                                       {editingGroupId !== currentGroupId && canEditColors && (
-                                      <button
-                                        onClick={() => {
-                                          setEditingGroupId(currentGroupId);
-                                          setEditGroupNote(group?.note || group?.name || '');
-                                        }}
-                                        className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-white rounded transition-colors"
-                                        title="Edit Group"
-                                      >
-                                        <Edit2 size={12} />
-                                      </button>
+                                      <>
+                                        {/* Add color directly to this group */}
+                                        <button
+                                          onClick={() => {
+                                            const newBatch = {
+                                              id: crypto.randomUUID(),
+                                              color: '',
+                                              quantity: 0,
+                                              dyehouse: '',
+                                              machine: '',
+                                              notes: '',
+                                              status: 'pending' as const,
+                                              colorGroupId: currentGroupId!
+                                            };
+                                            handleUpdateOrder(row.id, {
+                                              dyeingPlan: [...(row.dyeingPlan || []), newBatch]
+                                            });
+                                          }}
+                                          className="flex items-center gap-1 text-[11px] font-medium text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 px-2 py-1 rounded border border-emerald-200 transition-colors"
+                                          title="اضافة لون للمجموعة"
+                                        >
+                                          <Plus size={11} />
+                                          لون
+                                        </button>
+                                        <button
+                                          onClick={() => {
+                                            setEditingGroupId(currentGroupId);
+                                            setEditGroupNote(group?.note || group?.name || '');
+                                          }}
+                                          className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-white rounded transition-colors"
+                                          title="تعديل اسم المجموعة"
+                                        >
+                                          <Edit2 size={12} />
+                                        </button>
+                                      </>
                                       )}
                                       {canEditColors && (
                                       <button
@@ -3027,8 +3355,8 @@ const MemoizedOrderRow = React.memo(({
                                             handleUpdateOrder(row.id, { dyeingPlan: updatedPlan, colorGroups: updatedGroups });
                                           }
                                         }}
-                                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-white rounded transition-colors"
-                                        title="Ungroup"
+                                        className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                                        title="فك التجميع"
                                       >
                                         <Unlink size={12} />
                                       </button>
@@ -4023,12 +4351,12 @@ const MemoizedOrderRow = React.memo(({
                         });
                       }
                       
-                      // Add blue separator line after the last item in a group
+                      // Add clean separator line after the last item in a group
                       if (isLastInGroup) {
                         elements.push(
                           <tr key={`group-separator-${currentGroupId}`}>
-                            <td colSpan={20} className="p-0">
-                              <div className="h-1 bg-gradient-to-r from-blue-500 via-blue-400 to-transparent mx-1 rounded-full shadow-sm"></div>
+                            <td colSpan={20} className="p-0 pb-2">
+                              <div className="h-px bg-slate-200 mx-3"></div>
                             </td>
                           </tr>
                         );
@@ -4157,6 +4485,153 @@ const MemoizedOrderRow = React.memo(({
         </td>
       </tr>
     )}
+
+    {/* Order Status Debug Modal (Admin Only) */}
+    {showOrderDebug && createPortal(
+      <div
+        className="fixed inset-0 z-[99999] flex items-start justify-center bg-black/50 backdrop-blur-sm p-4 overflow-y-auto"
+        onClick={(e) => { if (e.target === e.currentTarget) setShowOrderDebug(false); }}
+      >
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl my-8 flex flex-col">
+          {/* Header */}
+          <div className="p-4 border-b border-slate-200 bg-purple-50 rounded-t-xl flex items-center justify-between">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Bug className="w-5 h-5 text-purple-600" />
+              <span className="font-bold text-slate-800">Order Status Debug</span>
+              <span className="text-slate-400">—</span>
+              <span className="font-mono text-purple-700 font-bold">{row.material}</span>
+              <span className="text-[10px] text-purple-600 bg-purple-100 border border-purple-200 px-2 py-0.5 rounded-full">Admin Only</span>
+            </div>
+            <button onClick={() => setShowOrderDebug(false)} className="p-2 hover:bg-purple-100 rounded-full text-slate-500 flex-shrink-0"><X className="w-4 h-4" /></button>
+          </div>
+
+          <div className="p-5 space-y-5 overflow-y-auto max-h-[80vh]">
+            {/* Info Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[
+                { label: 'Client', value: selectedCustomerName },
+                { label: 'Fabric', value: row.material || '-' },
+                { label: 'Season ID', value: selectedCustomerSeasonId || '(none)' },
+                { label: 'Season Name', value: selectedCustomerSeasonName || '(none)' },
+                { label: 'requiredQty', value: `${row.requiredQty ?? '-'} kg` },
+                { label: 'displayRemaining', value: `${displayRemaining ?? '-'} kg` },
+                { label: 'statusInfo.remaining', value: `${statusInfo?.remaining ?? '-'} kg` },
+                { label: 'historyFallback', value: historyFallback ? `${historyFallback.machines.join(', ')} @ ${historyFallback.latestDate} (${historyFallback.latestRemaining} kg)` : 'null' },
+              ].map(item => (
+                <div key={item.label} className="bg-slate-50 border border-slate-200 rounded-lg p-2">
+                  <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wide">{item.label}</div>
+                  <div className="text-xs font-mono font-bold text-slate-800 mt-0.5 break-all">{item.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Final Status + Decision Path */}
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+              <div className="text-[10px] font-bold text-purple-700 uppercase tracking-wide mb-1">Final Status Determined</div>
+              <div className="font-bold text-purple-900 mb-3">{orderDebugData.finalStatus || '(undetermined)'}</div>
+              <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wide mb-2">Decision Path</div>
+              <ol className="space-y-1">
+                {orderDebugData.reasons.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs">
+                    <span className="flex-shrink-0 w-4 h-4 bg-purple-200 text-purple-800 rounded-full flex items-center justify-center font-bold text-[9px]">{i + 1}</span>
+                    <span className="font-mono text-slate-700">{r}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+
+            {/* statsInfo Active / Planned */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wide mb-2">statusInfo.active</div>
+                {(statusInfo?.active || []).length === 0
+                  ? <span className="text-xs text-slate-400 italic">empty</span>
+                  : (statusInfo?.active || []).map((m: string) => (
+                    <span key={m} className="inline-block mr-1 mb-1 px-2 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-300 rounded text-xs font-mono">{m}</span>
+                  ))}
+              </div>
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <div className="text-[10px] font-bold text-blue-700 uppercase tracking-wide mb-2">statusInfo.planned</div>
+                {(statusInfo?.planned || []).length === 0
+                  ? <span className="text-xs text-slate-400 italic">empty</span>
+                  : (statusInfo?.planned || []).map((m: string) => (
+                    <span key={m} className="inline-block mr-1 mb-1 px-2 py-0.5 bg-blue-100 text-blue-800 border border-blue-300 rounded text-xs font-mono">{m}</span>
+                  ))}
+              </div>
+            </div>
+
+            {/* Machine Scan Table */}
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">Machine Scan Results</span>
+                <span className="text-[10px] text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                  {orderDebugData.totalMachinesScanned} machines scanned · {orderDebugData.machinesWithAnyMatch} had matching logs
+                </span>
+              </div>
+              {orderDebugData.machineRows.length === 0 ? (
+                <div className="text-sm text-slate-400 italic bg-slate-50 border border-dashed border-slate-200 rounded-lg p-6 text-center">
+                  No machines found with logs matching this client + fabric combination across all {orderDebugData.totalMachinesScanned} machines.
+                </div>
+              ) : (
+                <div className="border border-slate-200 rounded-lg overflow-hidden">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-slate-100 text-slate-600 font-semibold border-b border-slate-200">
+                      <tr>
+                        <th className="px-3 py-2">Machine</th>
+                        <th className="px-3 py-2 text-right"># Logs</th>
+                        <th className="px-3 py-2">Last Date</th>
+                        <th className="px-3 py-2">Last Status</th>
+                        <th className="px-3 py-2">Log Season</th>
+                        <th className="px-3 py-2 text-center">Season OK?</th>
+                        <th className="px-3 py-2">Classification</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {orderDebugData.machineRows.map((mRow: any) => {
+                        const clsMap: Record<string, string> = {
+                          ACTIVE: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+                          ACTIVE_NO_LOGS: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                          FINISHED_VIA_ACTIVE: 'bg-teal-100 text-teal-800 border-teal-300',
+                          PLANNED: 'bg-blue-100 text-blue-800 border-blue-300',
+                          PLANNED_NO_LOGS: 'bg-blue-50 text-blue-700 border-blue-200',
+                          HISTORY_OUTSIDE_ACTIVE: 'bg-amber-100 text-amber-800 border-amber-300',
+                          FINISHED: 'bg-slate-100 text-slate-700 border-slate-300',
+                          HISTORY: 'bg-orange-50 text-orange-700 border-orange-200',
+                        };
+                        const cls = clsMap[mRow.classification] || 'bg-gray-100 text-gray-700 border-gray-300';
+                        return (
+                          <tr key={mRow.name} className="hover:bg-slate-50">
+                            <td className="px-3 py-2 font-mono font-bold text-slate-800">{mRow.name}</td>
+                            <td className="px-3 py-2 text-right font-mono text-slate-600">{mRow.totalLogs || '-'}</td>
+                            <td className="px-3 py-2 font-mono text-slate-600">{mRow.recentDate}</td>
+                            <td className="px-3 py-2 font-mono text-slate-500">{mRow.recentStatus}</td>
+                            <td className="px-3 py-2 font-mono text-slate-400 text-[10px]">{mRow.recentSeason}</td>
+                            <td className="px-3 py-2 text-center font-bold">
+                              {mRow.recentDate === '-' ? <span className="text-slate-300">-</span> : mRow.seasonMatch
+                                ? <span className="text-emerald-600">✓</span>
+                                : <span className="text-red-500">✗</span>}
+                            </td>
+                            <td className="px-3 py-2">
+                              <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${cls}`}>{mRow.classification}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="p-3 border-t border-slate-200 bg-slate-50 rounded-b-xl flex justify-end">
+            <button onClick={() => setShowOrderDebug(false)} className="px-4 py-1.5 bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 text-sm font-medium transition-colors">Close</button>
+          </div>
+        </div>
+      </div>,
+      document.body
+    )}
     </>
   );
 });
@@ -4178,6 +4653,27 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const [rawCustomers, setRawCustomers] = useState<CustomerSheet[]>([]);
   const [flatOrders, setFlatOrders] = useState<OrderRow[]>([]);
   const [userName, setUserName] = useState<string>(propUserName || ''); // NEW: Store display name from Firestore
+  
+  // Loading state tracker
+  const [loadingState, setLoadingState] = useState({
+    customers: false,
+    orders: false,
+    machines: false,
+    externalFactories: false,
+    fabrics: false,
+    yarns: false,
+    dyehouses: false,
+    inventory: false,
+    settings: false
+  });
+  
+  const loadingPercentage = useMemo(() => {
+    const loaded = Object.values(loadingState).filter(Boolean).length;
+    const total = Object.keys(loadingState).length;
+    return Math.round((loaded / total) * 100);
+  }, [loadingState]);
+  
+  const isFullyLoaded = loadingPercentage === 100;
 
   // Sync with prop
   useEffect(() => {
@@ -4279,6 +4775,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const [showYarnRequirements, setShowYarnRequirements] = useState(false);
   const [selectedYarnDetails, setSelectedYarnDetails] = useState<any>(null);
   const [showDyehouse, setShowDyehouse] = useState(userRole === 'dyehouse_manager' || userRole === 'dyehouse_colors_manager');
+  const [sortByDyehouseStatus, setSortByDyehouseStatus] = useState(() => localStorage.getItem('sortByDyehouseStatus') === 'true');
   const [dyehousePlanningModal, setDyehousePlanningModal] = useState<{isOpen: boolean, order: OrderRow | null}>({isOpen: false, order: null});
   const [noMachineDataModal, setNoMachineDataModal] = useState<{isOpen: boolean; orderId: string; currentNote: string}>({isOpen: false, orderId: '', currentNote: ''});
 //   const [showDyehouseImport, setShowDyehouseImport] = useState(false);
@@ -4309,7 +4806,6 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   // Toggle column visibility handler
   const handleToggleColumnVisibility = (columnId: string) => {
     if (columnId === '__RESET__') {
-      // Reset all columns to visible
       setManageColorsVisibleColumns({});
       return;
     }
@@ -4318,7 +4814,22 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       [columnId]: prev[columnId] === false ? true : false
     }));
   };
-  
+
+  // Orders Table Column Visibility
+  const [ordersVisibleCols, setOrdersVisibleCols] = useState<Record<string, boolean>>(() => {
+    try {
+      const saved = localStorage.getItem('ordersVisibleCols');
+      return saved ? JSON.parse(saved) : {};
+    } catch { return {}; }
+  });
+  useEffect(() => {
+    localStorage.setItem('ordersVisibleCols', JSON.stringify(ordersVisibleCols));
+  }, [ordersVisibleCols]);
+  const handleToggleOrdersCol = (colId: string) => {
+    setOrdersVisibleCols(prev => ({ ...prev, [colId]: prev[colId] === false ? true : false }));
+  };
+  const [showOrdersColPicker, setShowOrdersColPicker] = useState(false);
+
   // Seasons State
   const [seasons, setSeasons] = useState<Season[]>([]);
   // Initialize from localStorage if available
@@ -4330,6 +4841,10 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
   // Machine Filter State
   const [machineFilter, setMachineFilter] = useState<string>('');
+
+  // Summary View Print State
+  const summaryViewRef = useRef<HTMLDivElement>(null);
+  const [isDownloadingSummaryPDF, setIsDownloadingSummaryPDF] = useState(false);
 
   // Persist Season Selection
   useEffect(() => {
@@ -4434,6 +4949,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [bulkDate, setBulkDate] = useState<string>('');
   const [showBulkDateInput, setShowBulkDateInput] = useState(false);
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
+  const [fabricSearchTerm, setFabricSearchTerm] = useState<string>('');
 
   // Plan Search Modal State
   const [planSearchModal, setPlanSearchModal] = useState<{
@@ -4522,6 +5039,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     const unsubCustomers = onSnapshot(collection(db, 'CustomerSheets'), (snapshot) => {
       const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as CustomerSheet));
       setRawCustomers(data);
+      setLoadingState(prev => ({ ...prev, customers: true }));
     });
 
     // 2. All Orders (Sub-collections) - Optimized for Global View
@@ -4533,33 +5051,46 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         customerId: d.ref.parent.parent?.id 
       } as OrderRow));
       setFlatOrders(orders);
+      setLoadingState(prev => ({ ...prev, orders: true }));
     });
 
     // Machines (for active status)
     const unsubMachines = onSnapshot(collection(db, 'MachineSS'), (snapshot) => {
       const data = snapshot.docs.map(d => d.data() as MachineSS);
       setMachines(data);
+      setLoadingState(prev => ({ ...prev, machines: true }));
     });
 
     // External Plans
     const unsubExternal = onSnapshot(collection(db, 'ExternalPlans'), (snapshot) => {
       const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       setExternalFactories(data);
+      setLoadingState(prev => ({ ...prev, externalFactories: true }));
     });
 
     // Fabrics
-    DataService.getFabrics().then(setFabrics);
+    DataService.getFabrics().then(data => {
+      setFabrics(data);
+      setLoadingState(prev => ({ ...prev, fabrics: true }));
+    });
 
     // Yarns
-    DataService.getYarns().then(setYarns);
+    DataService.getYarns().then(data => {
+      setYarns(data);
+      setLoadingState(prev => ({ ...prev, yarns: true }));
+    });
 
     // Dyehouses
-    DataService.getDyehouses().then(data => setDyehouses(data as unknown as Dyehouse[]));
+    DataService.getDyehouses().then(data => {
+      setDyehouses(data as unknown as Dyehouse[]);
+      setLoadingState(prev => ({ ...prev, dyehouses: true }));
+    });
 
     // Inventory
     const unsubInventory = onSnapshot(collection(db, 'yarn_inventory'), (snapshot) => {
       const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as YarnInventoryItem));
       setInventory(data);
+      setLoadingState(prev => ({ ...prev, inventory: true }));
     });
 
     // Active Day
@@ -4567,6 +5098,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       if (doc.exists() && doc.data().activeDay) {
         setActiveDay(doc.data().activeDay);
       }
+      setLoadingState(prev => ({ ...prev, settings: true }));
     });
 
     return () => {
@@ -4643,12 +5175,27 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     const fabrics = new Set<string>();
     const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
     const targetClient = normalize(client.name);
+    const custSeasonId = (client as any).createdSeasonId || '';
+    const custSeasonName = (client as any).createdSeasonName || '';
+    const custCombinedId = custSeasonId ? normalize(`${client.name}-${custSeasonId}`) : '';
+    const custCombinedName = custSeasonName ? normalize(`${client.name}-${custSeasonName}`) : '';
+    const custClientOk = (lc: string) => {
+      const n = normalize(lc);
+      return n === targetClient
+        || (custCombinedId && n === custCombinedId)
+        || (custCombinedName && n === custCombinedName);
+    };
+    const logSeasonOk = (log: any) => {
+      if (!log.clientSeason) return true;
+      if (!custSeasonId && !custSeasonName) return true; // customer has no season
+      return log.clientSeason === custSeasonId || log.clientSeason === custSeasonName;
+    };
 
     // 1. Internal Machines
     machines.forEach(machine => {
         if (machine.dailyLogs && Array.isArray(machine.dailyLogs)) {
             machine.dailyLogs.forEach(log => {
-                if (normalize(log.client) === targetClient && log.fabric) {
+                if (custClientOk(log.client) && log.fabric && logSeasonOk(log)) {
                     fabrics.add(log.fabric);
                 }
             });
@@ -4755,6 +5302,23 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     const clientName = selectedCustomer.name;
     const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
     const normCurrentClient = normalize(clientName);
+    const statsSeasonId = selectedCustomer.createdSeasonId || '';
+    const statsSeasonName = (selectedCustomer as any).createdSeasonName
+      || (statsSeasonId ? (seasons.find(s => s.id === statsSeasonId)?.name || '') : '');
+    // Also build combined forms like "test-2025-summer" in case that was stored as client
+    const normCombinedId = statsSeasonId ? normalize(`${clientName}-${statsSeasonId}`) : '';
+    const normCombinedName = statsSeasonName ? normalize(`${clientName}-${statsSeasonName}`) : '';
+    const clientNameMatches = (logClient: string) => {
+      const n = normalize(logClient);
+      return n === normCurrentClient
+        || (normCombinedId && n === normCombinedId)
+        || (normCombinedName && n === normCombinedName);
+    };
+    const logSeasonMatches = (log: any) => {
+      if (!statsSeasonId && !statsSeasonName) return true; // customer has no season → match all
+      if (!log?.clientSeason) return false; // season selected but log has no tag → exclude (cross-season)
+      return log.clientSeason === statsSeasonId || log.clientSeason === statsSeasonName;
+    };
 
     // 1. Initialize keys for relevant fabrics
     const relevantFabrics = new Set(selectedCustomer.orders.map(o => o.material).filter(Boolean));
@@ -4793,16 +5357,18 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         }
 
         // Normalize
-        const normEffectiveClient = normalize(effectiveClient);
         const lowerStatus = (effectiveStatus || '').trim().toLowerCase();
         
         // Define what considers as "Active"
         // Also include 'finished' states to show them as recently active but done
-        const isActiveState = ['working', 'active', 'under operation', 'تعمل', 'تشغيل', 'تحت التشغيل'].includes(lowerStatus);
-        const isFinishedState = ['finished', 'completed', 'done', 'منتهي', 'تم', 'finish'].includes(lowerStatus);
+        // Also treat any log with dayProduction > 0 as active (covers "No Order" status with real production)
+        const hasProduction = hasActiveLog && Number(activeLog?.dayProduction) > 0;
+        const isActiveState = hasProduction || ['working', 'active', 'under operation', 'تعمل', 'تشغيل', 'تحت التشغيل'].includes(lowerStatus);
+        const isFinishedState = !hasProduction && ['finished', 'completed', 'done', 'منتهي', 'تم', 'finish'].includes(lowerStatus);
 
         if (isActiveState || isFinishedState) {
-            if (normEffectiveClient === normCurrentClient && relevantFabrics.has(effectiveFabric)) {
+            const effectiveLog = activeLog || (m.dailyLogs || []).filter((l: any) => l.date < activeDay).sort((a: any, b: any) => b.date.localeCompare(a.date))[0];
+            if (clientNameMatches(effectiveClient) && relevantFabrics.has(effectiveFabric) && logSeasonMatches(effectiveLog)) {
                  const entry = intermediateMap.get(effectiveFabric);
                  if (entry) {
                      // If finished, append label
@@ -4817,10 +5383,9 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             }
         } else if (m.activeOrder) {
             // Fallback to legacy activeOrder object if status check didn't catch it
-            const activeClient = normalize(m.activeOrder.clientName);
             const activeFabric = m.activeOrder.material; 
             
-            if (activeClient === normCurrentClient && relevantFabrics.has(activeFabric)) {
+            if (clientNameMatches(m.activeOrder.clientName) && relevantFabrics.has(activeFabric)) {
                 const entry = intermediateMap.get(activeFabric);
                 if (entry) {
                     if (!entry.active.includes(m.name)) entry.active.push(m.name);
@@ -4831,10 +5396,9 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
         // B. Future Plans
         m.futurePlans?.forEach(plan => {
-            const planClient = normalize(plan.client);
             const planFabric = plan.fabric; 
 
-            if (planClient === normCurrentClient && relevantFabrics.has(planFabric)) {
+            if (clientNameMatches(plan.client) && relevantFabrics.has(planFabric)) {
                  const entry = intermediateMap.get(planFabric);
                  if (entry) {
                      if (!entry.planned.includes(m.name)) entry.planned.push(m.name);
@@ -4844,16 +5408,30 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             }
         });
 
-        // C. History Logs (Scrap + Dates)
+        // C. History Logs (Scrap + Dates + Finished History)
         m.dailyLogs?.forEach(log => {
-             const logClient = normalize(log.client);
              const logFabric = log.fabric;
+             const logStatus = (log.status || '').toLowerCase();
              
-             if (logClient === normCurrentClient && relevantFabrics.has(logFabric)) {
+             if (clientNameMatches(log.client) && relevantFabrics.has(logFabric) && logSeasonMatches(log)) {
                  const entry = intermediateMap.get(logFabric);
                  if (entry) {
                      if (log.date) entry.logDates.push(log.date);
                      if (log.scrap) entry.totalScrap += Number(log.scrap);
+                     
+                     // Check if this log shows the machine finished this order
+                     if (['finished', 'completed', 'done', 'منتهي', 'تم', 'finish'].includes(logStatus)) {
+                         const finishedLabel = `${m.name} (Finished)`;
+                         // Add finished machine - check all variations to avoid duplicates
+                         if (!entry.active.includes(finishedLabel)) {
+                             // Remove non-finished version if it exists
+                             const idx = entry.active.indexOf(m.name);
+                             if (idx !== -1) {
+                                 entry.active.splice(idx, 1);
+                             }
+                             entry.active.push(finishedLabel);
+                         }
+                     }
                  }
              }
         });
@@ -4951,7 +5529,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     });
 
     return finalMap;
-  }, [selectedCustomer, machines, externalFactories, customers, activeDay]);
+  }, [selectedCustomer, machines, externalFactories, customers, activeDay, seasons]);
 
   const allClientsStats = useMemo(() => {
     if (selectedCustomerId !== ALL_CLIENTS_ID) return [];
@@ -5508,6 +6086,123 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     setSelectedRows(new Set());
   };
 
+  // Handle Download Summary View PDF — per-card capture, 2 columns, portrait A4
+  const handleDownloadSummaryPDF = async () => {
+    if (!summaryViewRef.current) return;
+    setIsDownloadingSummaryPDF(true);
+
+    // Collect references to each card DOM node inside the grid
+    const cardNodes = Array.from(
+      summaryViewRef.current.children
+    ) as HTMLElement[];
+
+    if (cardNodes.length === 0) {
+      setIsDownloadingSummaryPDF(false);
+      return;
+    }
+
+    try {
+      // A4 portrait dimensions in mm
+      const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true });
+      const pageW = pdf.internal.pageSize.getWidth();   // 210
+      const pageH = pdf.internal.pageSize.getHeight();  // 297
+      const margin = 8;
+      const gap = 4;
+      const cols = 2;
+      const cardW = (pageW - margin * 2 - gap * (cols - 1)) / cols; // ~95mm each
+
+      let curX = margin;
+      let curY = margin;
+      let colIndex = 0;
+      let pageIndex = 0;
+
+      for (let i = 0; i < cardNodes.length; i++) {
+        const original = cardNodes[i];
+
+        // Clone the card
+        const clone = original.cloneNode(true) as HTMLElement;
+        clone.style.position = 'absolute';
+        clone.style.top = '0';
+        clone.style.left = '0';
+        clone.style.zIndex = '-9999';
+        // Set clone width to match how it will appear in the PDF column (px ≈ mm * 3.78)
+        const cloneWidthPx = Math.round(cardW * 3.78);
+        clone.style.width = cloneWidthPx + 'px';
+        clone.style.backgroundColor = '#ffffff';
+        document.body.appendChild(clone);
+
+        // Strip all images to avoid CORS errors
+        clone.querySelectorAll('img').forEach(img => {
+          const el = img as HTMLImageElement;
+          el.removeAttribute('src');
+          el.removeAttribute('srcset');
+          el.style.display = 'none';
+        });
+
+        // Strip inline background-images
+        clone.querySelectorAll('*').forEach(el => {
+          const htmlEl = el as HTMLElement;
+          if (htmlEl.style.backgroundImage && htmlEl.style.backgroundImage !== 'none') {
+            htmlEl.style.backgroundImage = 'none';
+          }
+        });
+
+        // Hide buttons
+        clone.querySelectorAll('button').forEach(btn => {
+          (btn as HTMLElement).style.display = 'none';
+        });
+
+        // Let layout settle
+        await new Promise(resolve => setTimeout(resolve, 80));
+
+        // Capture card as JPEG
+        const dataUrl = await toJpeg(clone, {
+          quality: 0.88,
+          cacheBust: false,
+          backgroundColor: '#ffffff',
+          pixelRatio: 2,
+          filter: (node: Node) => (node as HTMLElement).tagName !== 'IMG',
+        });
+
+        document.body.removeChild(clone);
+
+        // Measure rendered card height in mm
+        const imgProps = pdf.getImageProperties(dataUrl);
+        const cardH = (imgProps.height / imgProps.width) * cardW;
+
+        // Check if this card overflows the current page
+        if (curY + cardH > pageH - margin) {
+          pdf.addPage();
+          pageIndex++;
+          curX = margin;
+          curY = margin;
+          colIndex = 0;
+        }
+
+        pdf.addImage(dataUrl, 'JPEG', curX, curY, cardW, cardH);
+
+        // Advance column / row
+        colIndex++;
+        if (colIndex < cols) {
+          curX += cardW + gap;
+        } else {
+          // Move to next row
+          colIndex = 0;
+          curX = margin;
+          curY += cardH + gap;
+        }
+      }
+
+      pdf.save(`Order_Summary_${selectedCustomer?.name || 'Orders'}_${new Date().toISOString().split('T')[0]}.pdf`);
+
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Failed to generate PDF. Please try again.');
+    } finally {
+      setIsDownloadingSummaryPDF(false);
+    }
+  };
+
   // Removed getOrderStats in favor of statsMap
 
   const handleDeleteRow = async (rowId: string) => {
@@ -5893,7 +6588,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     c.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  // Filter Orders based on Machine Filter
+  // Filter Orders based on Machine Filter and Fabric Search
   const filteredOrders = useMemo(() => {
       if (!selectedCustomer) return [];
       let orders = selectedCustomer.orders;
@@ -5906,6 +6601,13 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                   (b.machine && b.machine.toLowerCase().includes(machineFilter.toLowerCase()))
               );
           });
+      }
+
+      // Apply fabric search filter
+      if (fabricSearchTerm.trim()) {
+          orders = orders.filter(row => 
+              row.material && row.material.toLowerCase().includes(fabricSearchTerm.toLowerCase())
+          );
       }
 
       // --- Helper: Calculate Order Tier for Sorting ---
@@ -5996,13 +6698,36 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       };
 
       return [...orders].sort((a, b) => {
-          // Maintain insertion order only - no tier or fabric sorting
-          // This keeps new rows at the bottom and prevents them from jumping around
+          if (sortByDyehouseStatus) {
+            // Compute dyehouse completion rank for each order
+            const getDyehouseRank = (row: OrderRow): number => {
+              if (!row.dyeingPlan || row.dyeingPlan.length === 0) return 0;
+              let sentCount = 0, receivedCount = 0;
+              row.dyeingPlan.forEach((batch: any) => {
+                const isReceived = batch.status === 'received' || batch.dyehouseStatus === 'RECEIVED' ||
+                  batch.isComplete === true || (batch.receiveEvents && batch.receiveEvents.length > 0) ||
+                  (batch.receivedQuantity && batch.receivedQuantity > 0);
+                const isSent = isReceived || batch.status === 'sent' || !!batch.dateSent;
+                if (isReceived) receivedCount++;
+                else if (isSent) sentCount++;
+              });
+              const total = row.dyeingPlan.length;
+              if (receivedCount === total) return 4;      // all_received  → bottom
+              if (receivedCount > 0) return 3;            // partial_received
+              if (sentCount === total) return 2;           // all_sent
+              if (sentCount > 0) return 1;                // partial_sent
+              return 0;                                   // not_sent      → top
+            };
+            const rankA = getDyehouseRank(a);
+            const rankB = getDyehouseRank(b);
+            if (rankA !== rankB) return rankA - rankB;
+          }
+          // Default: preserve insertion order by createdAt
           const createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
           const createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
           return createdA - createdB;
       });
-  }, [selectedCustomer, machineFilter, machines, externalFactories]);
+  }, [selectedCustomer, machineFilter, machines, externalFactories, fabricSearchTerm, sortByDyehouseStatus]);
 
   const usedFabricNames = useMemo(() => {
       if (!selectedCustomer || selectedCustomerId === ALL_CLIENTS_ID || selectedCustomerId === ALL_YARNS_ID) {
@@ -7220,6 +7945,52 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     <div className="flex flex-col min-h-[calc(100vh-100px)] bg-slate-50 rounded-xl border border-slate-200 shadow-sm">
       <style>{globalStyles}</style>
       
+      {/* Loading Progress Indicator */}
+      {!isFullyLoaded && (
+        <div className="fixed top-20 right-6 z-[9999] animate-in slide-in-from-right fade-in duration-300">
+          <div className="bg-white border-2 border-indigo-500 rounded-xl shadow-2xl p-4 min-w-[200px]">
+            <div className="flex items-center gap-3">
+              <div className="relative w-12 h-12">
+                <svg className="w-12 h-12 transform -rotate-90" viewBox="0 0 48 48">
+                  <circle
+                    cx="24"
+                    cy="24"
+                    r="20"
+                    stroke="#e2e8f0"
+                    strokeWidth="4"
+                    fill="none"
+                  />
+                  <circle
+                    cx="24"
+                    cy="24"
+                    r="20"
+                    stroke="#6366f1"
+                    strokeWidth="4"
+                    fill="none"
+                    strokeDasharray={`${2 * Math.PI * 20}`}
+                    strokeDashoffset={`${2 * Math.PI * 20 * (1 - loadingPercentage / 100)}`}
+                    strokeLinecap="round"
+                    className="transition-all duration-300"
+                  />
+                </svg>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <span className="text-xs font-bold text-indigo-600">{loadingPercentage}%</span>
+                </div>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-sm font-bold text-slate-800">Loading Data</span>
+                <span className="text-xs text-slate-500">
+                  {loadingPercentage < 30 && "Fetching customers..."}
+                  {loadingPercentage >= 30 && loadingPercentage < 60 && "Loading orders..."}
+                  {loadingPercentage >= 60 && loadingPercentage < 90 && "Syncing machines..."}
+                  {loadingPercentage >= 90 && "Almost done..."}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
       {/* Success Notification Banner */}
       {successNotification && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[9999] animate-in slide-in-from-top fade-in duration-300">
@@ -7256,6 +8027,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                 setShowAddSeason(true);
                             } else {
                                 setSelectedSeasonId(e.target.value);
+                                setSelectedCustomerId(null);
                             }
                         }}
                         className="appearance-none bg-transparent text-2xl font-black text-slate-800 cursor-pointer focus:outline-none hover:text-indigo-700 transition-colors pr-6"
@@ -7329,22 +8101,81 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             
             {/* Left: View Toggles */}
             <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto pb-2 sm:pb-0 no-scrollbar">
+                
+                {/* View Mode Toggle */}
+                <div className="bg-slate-100 p-1 rounded-lg flex items-center shadow-inner">
+                    <button
+                        onClick={() => setViewMode('table')}
+                        className={`p-1.5 rounded-md transition-all ${
+                            viewMode === 'table' 
+                            ? 'bg-white text-indigo-600 shadow-sm' 
+                            : 'text-slate-400 hover:text-slate-600'
+                        }`}
+                        title="Table View"
+                    >
+                        <List className="w-4 h-4" />
+                    </button>
+                    <button
+                        onClick={() => setViewMode('cards')}
+                        className={`p-1.5 rounded-md transition-all ${
+                            viewMode === 'cards' 
+                            ? 'bg-white text-indigo-600 shadow-sm' 
+                            : 'text-slate-400 hover:text-slate-600'
+                        }`}
+                        title="Summary View"
+                    >
+                        <LayoutGrid className="w-4 h-4" />
+                    </button>
+                </div>
+
+                <div className="h-4 w-px bg-slate-300 mx-1"></div>
+
+                {/* Fabric Search */}
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-md shadow-sm">
+                    <Search className="w-3.5 h-3.5 text-slate-400" />
+                    <input
+                        type="text"
+                        placeholder="Search fabric..."
+                        value={fabricSearchTerm}
+                        onChange={(e) => setFabricSearchTerm(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                                setFabricSearchTerm('');
+                            }
+                        }}
+                        className="flex-1 bg-transparent border-none outline-none text-sm text-slate-700 placeholder-slate-400 min-w-[150px]"
+                    />
+                    {fabricSearchTerm && (
+                        <button
+                            onClick={() => setFabricSearchTerm('')}
+                            className="p-1 text-slate-400 hover:text-slate-600"
+                            title="Clear search"
+                        >
+                            <X className="w-3.5 h-3.5" />
+                        </button>
+                    )}
+                </div>
+
+                <div className="h-4 w-px bg-slate-300 mx-1"></div>
+
                 <button 
                     onClick={() => setFabricDictionaryModal(true)}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 text-slate-600 hover:text-indigo-600 hover:border-indigo-200 text-xs font-medium rounded-md shadow-sm transition-all whitespace-nowrap"
+                    className="flex items-center gap-1.5 px-2 py-1 bg-white border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-200 text-[11px] font-medium rounded-md transition-all whitespace-nowrap"
+                    title="Fabric Dictionary"
                 >
-                    <FileSpreadsheet className="w-3.5 h-3.5" />
-                    Fabric Dictionary
+                    <FileSpreadsheet className="w-3 h-3" />
+                    Dictionary
                 </button>
 
                 <div className="h-4 w-px bg-slate-300 mx-1"></div>
 
                 <button 
                     onClick={() => setShowExportModal(true)}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 text-slate-600 hover:text-green-600 hover:border-green-200 text-xs font-medium rounded-md shadow-sm transition-all whitespace-nowrap"
+                    className="flex items-center gap-1.5 px-2 py-1 bg-white border border-slate-200 text-slate-500 hover:text-green-600 hover:border-green-200 text-[11px] font-medium rounded-md transition-all whitespace-nowrap"
+                    title="Export Orders Report"
                 >
-                    <FileText className="w-3.5 h-3.5" />
-                    Export Report
+                    <FileText className="w-3 h-3" />
+                    Export
                 </button>
 
                 <button 
@@ -7356,14 +8187,15 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                             // setShowRemainingWork(false); // Removed state
                         }
                     }}
-                    className={`flex items-center gap-2 px-3 py-1.5 border text-xs font-medium rounded-md shadow-sm transition-all whitespace-nowrap ${
+                    className={`flex items-center gap-1.5 px-2 py-1 border text-[11px] font-medium rounded-md transition-all whitespace-nowrap ${
                         showYarnRequirements 
-                        ? 'bg-indigo-600 border-indigo-600 text-white shadow-indigo-100' 
-                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                        ? 'bg-indigo-600 border-indigo-600 text-white' 
+                        : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
                     }`}
+                    title="Yarn Requirements"
                 >
-                    <Package className="w-3.5 h-3.5" />
-                    Yarn Requirements
+                    <Package className="w-3 h-3" />
+                    Yarn Req.
                 </button>
 
                 <button 
@@ -7375,25 +8207,44 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                             // setShowRemainingWork(false);
                         }
                     }}
-                    className={`flex items-center gap-2 px-3 py-1.5 border text-xs font-medium rounded-md shadow-sm transition-all whitespace-nowrap ${
+                    className={`flex items-center gap-2 px-3 py-1.5 border text-xs font-semibold rounded-lg shadow-sm transition-all whitespace-nowrap ${
                         showDyehouse 
-                        ? 'bg-purple-600 border-purple-600 text-white shadow-purple-100' 
-                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                        ? 'bg-purple-600 border-purple-600 text-white shadow-purple-200' 
+                        : 'bg-white border-purple-300 text-purple-600 hover:bg-purple-50'
                     }`}
+                    title="Toggle Dyehouse Info columns"
                 >
-                    <Droplets className="w-3.5 h-3.5" />
+                    <Droplets className="w-4 h-4" />
                     Dyehouse Info
                 </button>
 
                 {showDyehouse && (
+                    <>
                     <button 
                          onClick={() => setShowDyehouseExportModal(true)}
-                         className="flex items-center gap-2 px-3 py-1.5 border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 text-xs font-medium rounded-md shadow-sm transition-all whitespace-nowrap"
-                         title="Export Dyehouse/Color Info to Excel"
+                         className="flex items-center gap-1.5 px-2 py-1 border border-purple-200 bg-purple-50 text-purple-600 hover:bg-purple-100 text-[11px] font-medium rounded-md transition-all whitespace-nowrap"
+                         title="Export Dyehouse / Color Info to Excel"
                     >
-                         <Download className="w-3.5 h-3.5" />
-                         Export Dyehouse Info
+                         <Download className="w-3 h-3" />
+                         Export Colors
                     </button>
+                    <button
+                         onClick={() => {
+                           const next = !sortByDyehouseStatus;
+                           setSortByDyehouseStatus(next);
+                           localStorage.setItem('sortByDyehouseStatus', String(next));
+                         }}
+                         className={`flex items-center gap-1.5 px-2 py-1 border text-[11px] font-medium rounded-md transition-all whitespace-nowrap ${
+                           sortByDyehouseStatus
+                             ? 'bg-emerald-600 border-emerald-600 text-white'
+                             : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                         }`}
+                         title={sortByDyehouseStatus ? 'Sorting active: pending first, received last. Click to disable.' : 'Sort rows by dyehouse status (done to bottom)'}
+                    >
+                         <ArrowUpDown className="w-3 h-3" />
+                         Sort Status
+                    </button>
+                    </>
                 )}
             </div>
 
@@ -7598,148 +8449,310 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             <div className="flex-1 p-4 bg-slate-50">
               {!showYarnRequirements ? (
                 <>
-                  <div className="sm:bg-white sm:rounded-lg sm:shadow sm:border sm:border-slate-200 overflow-x-auto mb-4">
-                    <table className="w-full text-sm border-collapse whitespace-nowrap sm:table block">
-                      <thead className="bg-slate-100 text-slate-600 font-semibold shadow-sm text-xs uppercase tracking-wider table-view hidden sm:table-header-group">
-                        <tr>
-                          <th className="p-3 w-10 border-b border-r border-slate-200 text-center">
-                            <button onClick={toggleSelectAll} className="text-slate-400 hover:text-slate-600">
-                              {selectedCustomer.orders.length > 0 && selectedRows.size === selectedCustomer.orders.length ? (
-                                <CheckSquare className="w-4 h-4 text-blue-600" />
+                  {viewMode === 'table' ? (
+                      // TABLE VIEW
+                      <div className="sm:bg-white sm:rounded-lg sm:shadow sm:border sm:border-slate-200 overflow-x-auto mb-4">
+                        <table className="w-full text-sm border-collapse whitespace-nowrap sm:table block">
+                          <thead className="bg-slate-100 text-slate-600 font-semibold shadow-sm text-xs uppercase tracking-wider table-view hidden sm:table-header-group">
+                            <tr>
+                              <th className="p-3 w-10 border-b border-r border-slate-200 text-center">
+                                <button onClick={toggleSelectAll} className="text-slate-400 hover:text-slate-600">
+                                  {selectedCustomer.orders.length > 0 && selectedRows.size === selectedCustomer.orders.length ? (
+                                    <CheckSquare className="w-4 h-4 text-blue-600" />
+                                  ) : (
+                                    <Square className="w-4 h-4" />
+                                  )}
+                                </button>
+                              </th>
+                              {showDyehouse ? (
+                                <>
+                                  <th className="p-3 text-right border-b border-r border-slate-200 min-w-[300px]">القماش</th>
+                                  <th className="p-3 text-right border-b border-r border-slate-200 min-w-[120px]">المصبغة</th>
+                                  <th className="p-3 text-right border-b border-r border-slate-200 min-w-[200px]">الماكينات</th>
+                                  <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي المرسل</th>
+                                  <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي المستلم</th>
+                                  <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي التسليمات</th>
+                                  <th className="p-3 text-center border-b border-r border-slate-200 w-10"></th>
+                                </>
                               ) : (
-                                <Square className="w-4 h-4" />
+                                <>
+                                  <th className="p-3 text-left border-b border-r border-slate-200 min-w-[350px]">
+                                    <div className="flex items-center gap-2">
+                                      <span>Fabric</span>
+                                      <div className="relative">
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); setShowOrdersColPicker(p => !p); }}
+                                          className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-slate-100 hover:bg-indigo-100 text-slate-500 hover:text-indigo-600 border border-slate-200 transition-colors"
+                                          title="Show/hide columns"
+                                        >
+                                          <Eye size={11} />
+                                        </button>
+                                        {showOrdersColPicker && (
+                                          <div
+                                            className="fixed left-12 top-1/4 z-[9999] bg-white border border-slate-200 rounded-xl shadow-2xl p-3 min-w-[200px]"
+                                            onClick={(e) => e.stopPropagation()}
+                                          >
+                                            <div className="flex items-center justify-between mb-2 pb-2 border-b border-slate-100">
+                                              <span className="text-xs font-semibold text-slate-600">Visible Columns</span>
+                                              <button onClick={() => setShowOrdersColPicker(false)} className="text-slate-400 hover:text-slate-600 text-xs">✕</button>
+                                            </div>
+                                            {[
+                                              { id: 'reqGsm', label: 'Req GSM' },
+                                              { id: 'reqWidth', label: 'Req Width' },
+                                              { id: 'accessories', label: 'Accessories' },
+                                              { id: 'accQty', label: 'Acc. Qty' },
+                                              { id: 'status', label: 'Status' },
+                                              { id: 'dyehousePlan', label: 'Dyehouse Plan' },
+                                              { id: 'ordered', label: 'Ordered' },
+                                              { id: 'produced', label: 'Produced' },
+                                              { id: 'remaining', label: 'Remaining' },
+                                              { id: 'receiveDate', label: 'Receive Date' },
+                                              { id: 'promisedDeliveryDate', label: 'Promised Delivery' },
+                                              { id: 'startDate', label: 'Start Date' },
+                                              { id: 'endDate', label: 'End Date' },
+                                              { id: 'scrap', label: 'Scrap' },
+                                              { id: 'others', label: 'Others' },
+                                              { id: 'delivery', label: 'Delivery' },
+                                              { id: 'notes', label: 'Notes' },
+                                            ].map(col => (
+                                              <label key={col.id} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-slate-50 cursor-pointer">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={ordersVisibleCols[col.id] !== false}
+                                                  onChange={() => handleToggleOrdersCol(col.id)}
+                                                  className="w-3 h-3 accent-indigo-600"
+                                                />
+                                                <span className="text-xs text-slate-700">{col.label}</span>
+                                              </label>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </th>
+                                  {ordersVisibleCols['reqGsm'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20">Req GSM</th>}
+                                  {ordersVisibleCols['reqWidth'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20">Req Width</th>}
+                                  {ordersVisibleCols['accessories'] !== false && <th className="p-3 text-left border-b border-r border-slate-200 min-w-[140px]">Accessories</th>}
+                                  {ordersVisibleCols['accQty'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20">Acc. Qty</th>}
+                                </>
                               )}
-                            </button>
-                          </th>
-                          {showDyehouse ? (
-                            <>
-                              <th className="p-3 text-right border-b border-r border-slate-200 min-w-[300px]">القماش</th>
-                              <th className="p-3 text-right border-b border-r border-slate-200 min-w-[120px]">المصبغة</th>
-                              <th className="p-3 text-right border-b border-r border-slate-200 min-w-[200px]">الماكينات</th>
-                              <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي المرسل</th>
-                              <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي المستلم</th>
-                              <th className="p-3 text-right border-b border-r border-slate-200 w-24">اجمالي التسليمات</th>
-                              <th className="p-3 text-center border-b border-r border-slate-200 w-10"></th>
-                            </>
-                          ) : (
-                            <>
-                              <th className="p-3 text-left border-b border-r border-slate-200 min-w-[350px]">Fabric</th>
-                              <th className="p-3 text-right border-b border-r border-slate-200 w-20">Req GSM</th>
-                              <th className="p-3 text-right border-b border-r border-slate-200 w-20">Req Width</th>
-                              <th className="p-3 text-left border-b border-r border-slate-200 min-w-[140px]">Accessories</th>
-                              <th className="p-3 text-right border-b border-r border-slate-200 w-20">Acc. Qty</th>
-                            </>
-                          )}
-                          {!showDyehouse && (
-                            <>
-                              <th className="p-3 text-center border-b border-r border-slate-200 w-28">Status</th>
-                              <th className="p-3 text-center border-b border-r border-slate-200 w-32 bg-indigo-50">Dyehouse Plan</th>
-                              <th className="p-3 text-right border-b border-r border-slate-200 w-20">Ordered</th>
-                              <th className="p-3 text-right border-b border-r border-slate-200 w-20 bg-emerald-50 text-emerald-700">Produced</th>
-                              <th className="p-3 text-right border-b border-r border-slate-200 w-20 bg-slate-50">Remaining</th>
-                              <th className="p-3 text-center border-b border-r border-slate-200 w-24">Receive Date</th>
-                              <th className="p-3 text-center border-b border-r border-slate-200 w-24">Start Date</th>
-                              <th className="p-3 text-center border-b border-r border-slate-200 w-24">End Date</th>
-                              <th className="p-3 text-right border-b border-r border-slate-200 w-20">Scrap</th>
-                              <th className="p-3 text-left border-b border-r border-slate-200 min-w-[100px]">Others</th>
-                              <th className="p-3 text-center border-b border-r border-slate-200 w-24">Delivery</th>
-                              <th className="p-3 text-left border-b border-r border-slate-200 w-32">Notes</th>
-                            </>
-                          )}
-                          {showDyehouse && (
-                             <th className="p-3 text-right border-b border-r border-slate-200 w-24">المطلوب</th>
-                          )}
-                          <th className="p-3 w-10 border-b border-slate-200"></th>
-                        </tr>
-                      </thead>
-                      <tbody className="sm:table-row-group grid grid-cols-2 gap-4 p-4 sm:p-0 sm:contents">
-                        {filteredOrders.map((row) => {
-                          const statusInfo = row.material ? statsMap.get(row.material) : null;
-                          // If we have active machines, override the remaining qty
-                          if (statusInfo && statusInfo.active.length > 0) {
-                              // statusInfo.remaining is already calculated in the map
-                          }
-                          
-                          const isSelected = selectedRows.has(row.id);
+                              {!showDyehouse && (
+                                <>
+                                  {ordersVisibleCols['status'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-28">Status</th>}
+                                  {ordersVisibleCols['dyehousePlan'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-32 bg-indigo-50">Dyehouse Plan</th>}
+                                  {ordersVisibleCols['ordered'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20">Ordered</th>}
+                                  {ordersVisibleCols['produced'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20 bg-emerald-50 text-emerald-700">Produced</th>}
+                                  {ordersVisibleCols['remaining'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20 bg-slate-50">Remaining</th>}
+                                  {ordersVisibleCols['receiveDate'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-24">Receive Date</th>}
+                                  {ordersVisibleCols['promisedDeliveryDate'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-28">Promised Delivery</th>}
+                                  {ordersVisibleCols['startDate'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-24">Start Date</th>}
+                                  {ordersVisibleCols['endDate'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-24">End Date</th>}
+                                  {ordersVisibleCols['scrap'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20">Scrap</th>}
+                                  {ordersVisibleCols['others'] !== false && <th className="p-3 text-left border-b border-r border-slate-200 min-w-[100px]">Others</th>}
+                                  {ordersVisibleCols['delivery'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-24">Delivery</th>}
+                                  {ordersVisibleCols['notes'] !== false && <th className="p-3 text-left border-b border-r border-slate-200 w-32">Notes</th>}
+                                </>
+                              )}
+                              {showDyehouse && (
+                                <th className="p-3 text-right border-b border-r border-slate-200 w-24">المطلوب</th>
+                              )}
+                              <th className="p-3 w-10 border-b border-slate-200"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="sm:table-row-group grid grid-cols-2 gap-4 p-4 sm:p-0 sm:contents">
+                            {!isFullyLoaded ? (
+                              // Skeleton Loader
+                              Array.from({ length: 5 }).map((_, idx) => (
+                                <tr key={`skeleton-${idx}`} className="animate-pulse border-b border-slate-100">
+                                  <td className="p-3"><div className="w-4 h-4 bg-slate-200 rounded"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-3/4"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-12"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-12"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-20"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-12"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-16"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-24"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-16"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-16"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-16"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-20"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-20"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-20"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-12"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-20"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-16"></div></td>
+                                  <td className="p-3"><div className="h-4 bg-slate-200 rounded w-24"></div></td>
+                                  <td className="p-3"><div className="w-4 h-4 bg-slate-200 rounded"></div></td>
+                                </tr>
+                              ))
+                            ) : (
+                              filteredOrders.map((row) => {
+                                const statusInfo = row.material ? statsMap.get(row.material) : null;
+                                const isSelected = selectedRows.has(row.id);
 
-                          return (
-                            <MemoizedOrderRow
-                              key={row.id}
-                              row={row}
-                              statusInfo={statusInfo}
-                              fabrics={fabrics}
-                              isSelected={isSelected}
-                              toggleSelectRow={toggleSelectRow}
-                              handleUpdateOrder={handleUpdateOrder}
-                              handleCreateFabric={handleCreateFabric}
-                              handlePlanSearch={handlePlanSearch}
-                              handleDeleteRow={handleDeleteRow}
-                              selectedCustomerName={selectedCustomer.name}
-                              onOpenFabricDetails={handleOpenFabricDetails}
-                              showDyehouse={showDyehouse}
-                              onOpenFabricDyehouse={(order) => setFabricDyehouseModal({ isOpen: true, order })}
-                              onOpenColorApproval={(orderId, batchIdx, batch) => setColorApprovalModal({ isOpen: true, orderId, batchIdx, batch })}
-                              onOpenCreatePlan={(order) => setCreatePlanModal({  
-                                isOpen: true, 
-                                order, 
-                                customerName: selectedCustomer.name 
-                              })}
-                              onOpenDyehousePlan={(order) => setDyehousePlanningModal({ isOpen: true, order })}
-                              dyehouses={dyehouses}
-                              handleCreateDyehouse={handleCreateDyehouse}
-                              machines={machines}
-                              externalFactories={externalFactories}
-                              allOrders={flatOrders}
-                              userRole={userRole}
-                              userName={userName}
-                              onOpenProductionOrder={(order, active, planned) => {
-                                setProductionOrderModal({
-                                  isOpen: true,
-                                  order,
-                                  activeMachines: active,
-                                  plannedMachines: planned
-                                });
-                              }}
-                              onOpenHistory={(order) => setSelectedOrderForHistory(order)}
-                              hasHistory={historySet.has(row.material || '')}
-                              onFilterMachine={(cap) => setMachineFilter(cap)}
-                              onOpenReceiveModal={(orderId, batchIdx, batch) => {
-                                setReceiveModal({ isOpen: true, orderId, batchIdx, batch });
-                                setNewReceive({ date: new Date().toISOString().split('T')[0], quantityRaw: 0, quantityAccessory: 0, notes: '' });
-                              }}
-                              onOpenSentModal={(orderId, batchIdx, batch) => {
-                                setSentModal({ isOpen: true, orderId, batchIdx, batch });
-                                setNewSent({ date: new Date().toISOString().split('T')[0], quantity: 0, notes: '' });
-                              }}
-                              onOpenDyehouseTracking={(data) => setDyehouseTrackingModal(data)}
-                              onOpenDelivery={(orderId, batchIdx, batch) => {
-                                const order = flatOrders.find(o => o.id === orderId);
-                                if (order) setDeliveryModal({ isOpen: true, customerId: selectedCustomer.id, orderId, batches: order.dyeingPlan || [] });
-                              }}
-                              visibleColumns={manageColorsVisibleColumns}
-                              onToggleColumnVisibility={handleToggleColumnVisibility}
-                              onUploadFabricImage={handleUploadFabricImage}
-                              inventory={inventory}
-                              setNoMachineDataModal={setNoMachineDataModal}
-                            />
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Order Summary Cards */}
-                  <div className="mt-4 space-y-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
-                        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
-                            <div>
-                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Ordered</p>
-                                <p className="text-2xl font-bold text-slate-800 mt-1">{orderTotals.ordered.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
-                            </div>
-                            <div className="p-3 bg-blue-50 rounded-full">
-                                <Package className="w-6 h-6 text-blue-600" />
-                            </div>
+                                return (
+                                  <MemoizedOrderRow
+                                    key={row.id}
+                                    row={row}
+                                    statusInfo={statusInfo}
+                                    fabrics={fabrics}
+                                    isSelected={isSelected}
+                                    toggleSelectRow={toggleSelectRow}
+                                    handleUpdateOrder={handleUpdateOrder}
+                                    handleCreateFabric={handleCreateFabric}
+                                    handlePlanSearch={handlePlanSearch}
+                                    handleDeleteRow={handleDeleteRow}
+                                    selectedCustomerName={selectedCustomer.name}
+                                    selectedCustomerSeasonId={selectedCustomer.createdSeasonId}
+                                    selectedCustomerSeasonName={(selectedCustomer as any).createdSeasonName || (selectedCustomer.createdSeasonId ? (seasons.find(s => s.id === selectedCustomer.createdSeasonId)?.name || '') : '')}
+                                    onOpenFabricDetails={handleOpenFabricDetails}
+                                    showDyehouse={showDyehouse}
+                                    onOpenFabricDyehouse={(order) => setFabricDyehouseModal({ isOpen: true, order })}
+                                    onOpenColorApproval={(orderId, batchIdx, batch) => setColorApprovalModal({ isOpen: true, orderId, batchIdx, batch })}
+                                    onOpenCreatePlan={(order) => setCreatePlanModal({  
+                                      isOpen: true, 
+                                      order, 
+                                      customerName: selectedCustomer.name 
+                                    })}
+                                    onOpenDyehousePlan={(order) => setDyehousePlanningModal({ isOpen: true, order })}
+                                    dyehouses={dyehouses}
+                                    handleCreateDyehouse={handleCreateDyehouse}
+                                    machines={machines}
+                                    externalFactories={externalFactories}
+                                    allOrders={flatOrders}
+                                    userRole={userRole}
+                                    userName={userName}
+                                    onOpenProductionOrder={(order, active, planned) => {
+                                      setProductionOrderModal({
+                                        isOpen: true,
+                                        order,
+                                        activeMachines: active,
+                                        plannedMachines: planned
+                                      });
+                                    }}
+                                    onOpenHistory={(order) => setSelectedOrderForHistory(order)}
+                                    hasHistory={historySet.has(row.material || '')}
+                                    onFilterMachine={(cap) => setMachineFilter(cap)}
+                                    onOpenReceiveModal={(orderId, batchIdx, batch) => {
+                                      setReceiveModal({ isOpen: true, orderId, batchIdx, batch });
+                                      setNewReceive({ date: new Date().toISOString().split('T')[0], quantityRaw: 0, quantityAccessory: 0, notes: '' });
+                                    }}
+                                    onOpenSentModal={(orderId, batchIdx, batch) => {
+                                      setSentModal({ isOpen: true, orderId, batchIdx, batch });
+                                      setNewSent({ date: new Date().toISOString().split('T')[0], quantity: 0, notes: '' });
+                                    }}
+                                    onOpenDyehouseTracking={(data) => setDyehouseTrackingModal(data)}
+                                    onOpenDelivery={(orderId, batchIdx, batch) => {
+                                      const order = flatOrders.find(o => o.id === orderId);
+                                      if (order) setDeliveryModal({ isOpen: true, customerId: selectedCustomer.id, orderId, batches: order.dyeingPlan || [] });
+                                    }}
+                                    visibleColumns={manageColorsVisibleColumns}
+                                    onToggleColumnVisibility={handleToggleColumnVisibility}
+                                    onUploadFabricImage={handleUploadFabricImage}
+                                    inventory={inventory}
+                                    setNoMachineDataModal={setNoMachineDataModal}
+                                    ordersColVis={ordersVisibleCols}
+                                  />
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                  ) : (
+                      // CARD VIEW (SUMMARY VIEW)
+                      <div className="flex flex-col gap-4">
+                        {/* Print Button for Summary View */}
+                        <div className="flex justify-end">
+                          <button
+                            onClick={handleDownloadSummaryPDF}
+                            disabled={isDownloadingSummaryPDF || !selectedCustomer || filteredOrders.length === 0}
+                            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                            title="Download Summary View as PDF"
+                          >
+                            <Printer className="w-4 h-4" />
+                            {isDownloadingSummaryPDF ? 'Generating PDF...' : 'Print Summary'}
+                          </button>
                         </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8" ref={summaryViewRef}>
+                           {!isFullyLoaded ? (
+                                Array.from({ length: 5 }).map((_, idx) => (
+                                  <div key={idx} className="bg-white p-6 rounded-xl border border-slate-200 animate-pulse h-40"></div>
+                                ))
+                           ) : (
+                               filteredOrders.map(order => {
+                                   const statusInfo = order.material ? statsMap.get(order.material) : null;
+                                   const fabricDef = fabrics.find(f => f.name === order.material);
+                                   const imageUrl = fabricDef ? fabricDef.imageUrl : undefined;
+                                   const hasHistory = historySet.has(order.material || '');
+                                   
+                                   // Calculate finishedDetails for this order (same as table view)
+                                   const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+                                   const targetClient = normalize(selectedCustomer.name);
+                                   const targetFabric = normalize(order.material);
+                                   const finishedMachines = new Set<string>();
+
+                                 machines.forEach(machine => {
+                                   if (!machine.dailyLogs || !Array.isArray(machine.dailyLogs)) return;
+                                   
+                                   machine.dailyLogs.forEach((log) => {
+                                     const logClient = normalize(log.client);
+                                     const logFabric = normalize(log.fabric);
+                                     
+                                     const isMatch = (logClient === targetClient && logFabric === targetFabric) ||
+                                                     (log.client === selectedCustomer.name && log.fabric === order.material);
+
+                                     if (isMatch) {
+                                       finishedMachines.add(machine.name);
+                                     }
+                                   });
+                                 });
+
+                                 const finishedDetails = finishedMachines.size > 0 ? {
+                                   lastDate: statusInfo?.endDate || order.endDate || '',
+                                   startDate: statusInfo?.startDate || order.startDate,
+                                   endDate: statusInfo?.endDate || order.endDate,
+                                   uniqueMachines: Array.from(finishedMachines)
+                                 } : null;
+
+                                 return (
+                                     <OrderSummaryCard 
+                                         key={order.id}
+                                         order={order}
+                                         imageUrl={imageUrl}
+                                         statusInfo={statusInfo}
+                                         finishedDetails={finishedDetails}
+                                         onOpenHistory={(o) => setSelectedOrderForHistory(o)}
+                                         hasHistory={hasHistory}
+                                     />
+                                 );
+                             })
+                         )}
+                        </div>
+                      </div>
+                  )}
+                  {viewMode === 'table' && (
+                    <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
+                        {!isFullyLoaded ? (
+                          // Skeleton for stats cards
+                          Array.from({ length: 5 }).map((_, idx) => (
+                            <div key={`stat-skeleton-${idx}`} className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm animate-pulse">
+                              <div className="h-3 bg-slate-200 rounded w-24 mb-3"></div>
+                              <div className="h-8 bg-slate-200 rounded w-32"></div>
+                            </div>
+                          ))
+                        ) : (
+                          <>
+                            <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
+                                <div>
+                                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Ordered</p>
+                                    <p className="text-2xl font-bold text-slate-800 mt-1">{orderTotals.ordered.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
+                                </div>
+                                <div className="p-3 bg-blue-50 rounded-full">
+                                    <Package className="w-6 h-6 text-blue-600" />
+                                </div>
+                            </div>
                         
                         <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
                             <div>
@@ -7783,8 +8796,10 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                 ></div>
                             </div>
                         </div>
+                          </>
+                        )}
                     </div>
-                  </div>
+                  )}
                 </>
               ) : (
                 /* Yarn Requirements View */
@@ -8612,6 +9627,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                 };
                                 await setDoc(doc(db, 'Seasons', id), newSeason);
                                 setSelectedSeasonId(id);
+                                setSelectedCustomerId(null);
                                 setShowAddSeason(false);
                                 setNewSeasonName('');
                             }}
@@ -8757,6 +9773,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             order={selectedOrderForHistory}
             clientName={selectedCustomer?.name || ''}
             machines={machines}
+            seasonId={selectedCustomer?.createdSeasonId || ''}
+            seasonName={(selectedCustomer as any)?.createdSeasonName || (selectedCustomer?.createdSeasonId ? (seasons.find(s => s.id === selectedCustomer.createdSeasonId)?.name || '') : '')}
           />
         )}
 
@@ -9014,7 +10032,13 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                     
                     <div className="p-4 overflow-auto">
                         <div className="mb-4 bg-blue-50 p-3 rounded text-sm text-blue-800 border border-blue-200">
-                             <strong>Current Client:</strong> {selectedCustomer?.name} <br/>
+                             <strong>Current Client:</strong> {selectedCustomer?.name}
+                             {selectedCustomer?.createdSeasonId && <span className="ml-2 text-blue-600">Season ID: {selectedCustomer.createdSeasonId}</span>}
+                             {(selectedCustomer as any)?.createdSeasonName && <span className="ml-2 text-blue-600">Season Name: {(selectedCustomer as any).createdSeasonName}</span>}
+                             <br/>
+                             <strong>Combined form also accepted:</strong>{' '}
+                             {selectedCustomer?.createdSeasonId ? `"${selectedCustomer.name}-${selectedCustomer.createdSeasonId}"` : 'N/A (no season)'}
+                             <br/>
                              <strong>Logic (MATCHING FETCH DATA):</strong> Scanning all {machines.length} machines. 
                              If a Daily Log exists for {activeDay}, it is used (Effective Status/Client). <br/>
                              If NO log exists, it creates a "Virtual Log" from the last known state (Effective Status/Client). <br/>
@@ -9036,11 +10060,23 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                             <tbody>
                                 {machines.map(m => {
                                     const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
-                                    const normCurrentClient = selectedCustomer ? normalize(selectedCustomer.name) : '';
+                                    const dbName = selectedCustomer?.name || '';
+                                    const dbSeasonId = selectedCustomer?.createdSeasonId || '';
+                                    const dbSeasonName = (selectedCustomer as any)?.createdSeasonName || '';
+                                    const normCurrentClient = normalize(dbName);
+                                    const dbCombinedId = dbSeasonId ? normalize(`${dbName}-${dbSeasonId}`) : '';
+                                    const dbCombinedName = dbSeasonName ? normalize(`${dbName}-${dbSeasonName}`) : '';
+                                    const dbClientOk = (ec: string) => {
+                                      const n = normalize(ec);
+                                      return n === normCurrentClient
+                                        || (dbCombinedId && n === dbCombinedId)
+                                        || (dbCombinedName && n === dbCombinedName);
+                                    };
                                     
                                     // REPLICATE EXACT LOGIC FROM statsMap calculation
                                     let effectiveStatus = '';
                                     let effectiveClient = '';
+                                    let effectiveClientSeason = '';
                                     let effectiveFabric = '';
                                     let source = 'NONE';
                                     let logDate = '-';
@@ -9051,6 +10087,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                         // Case 1: Real Log Exists for Today
                                         effectiveStatus = activeLog.status || '';
                                         effectiveClient = activeLog.client || '';
+                                        effectiveClientSeason = (activeLog as any).clientSeason || '';
                                         effectiveFabric = activeLog.fabric || '';
                                         source = 'REAL_LOG';
                                         logDate = activeLog.date;
@@ -9061,22 +10098,30 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                         
                                         effectiveStatus = lastLog ? lastLog.status : (m.status || '');
                                         effectiveClient = lastLog ? lastLog.client : (m.client || '');
+                                        effectiveClientSeason = lastLog ? ((lastLog as any).clientSeason || '') : '';
                                         effectiveFabric = lastLog ? lastLog.fabric : (m.material || '');
                                         source = lastLog ? 'VIRTUAL (Last Log)' : 'VIRTUAL (Machine State)';
                                         logDate = lastLog ? lastLog.date : 'NO LOGS';
                                     }
 
                                     // Normalize
-                                    const normEffectiveClient = normalize(effectiveClient);
                                     const normEffectiveStatus = (effectiveStatus || '').trim().toLowerCase();
                                     
                                     // Define what considers as "Active"
-                                    const isActiveState = ['working', 'active', 'under operation', 'تعمل', 'تشغيل', 'تحت التشغيل'].includes(normEffectiveStatus);
+                                    // Also treat any log with dayProduction > 0 as active
+                                    const hasProduction = !!activeLog && Number((activeLog as any).dayProduction) > 0;
+                                    const isActiveState = hasProduction || ['working', 'active', 'under operation', 'تعمل', 'تشغيل', 'تحت التشغيل'].includes(normEffectiveStatus);
                                     // Define "Finished" state
-                                    const isFinishedState = ['finished', 'completed', 'done', 'منتهي'].includes(normEffectiveStatus);
+                                    const isFinishedState = !hasProduction && ['finished', 'completed', 'done', 'منتهي'].includes(normEffectiveStatus);
                                     
-                                    const clientMatch = normEffectiveClient === normCurrentClient;
-                                    const isIncluded = (isActiveState || isFinishedState) && clientMatch;
+                                    // Season check
+                                    const seasonOk = !effectiveClientSeason
+                                      || (!dbSeasonId && !dbSeasonName)
+                                      || effectiveClientSeason === dbSeasonId
+                                      || effectiveClientSeason === dbSeasonName;
+                                    
+                                    const clientMatch = dbClientOk(effectiveClient);
+                                    const isIncluded = (isActiveState || isFinishedState) && clientMatch && seasonOk;
 
                                     return (
                                         <tr key={m.id} className={`border-b hover:bg-slate-50 ${isActiveState && clientMatch ? 'bg-green-50' : isFinishedState && clientMatch ? 'bg-blue-50' : ''}`}>
@@ -9092,14 +10137,17 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                                     {effectiveStatus || 'Blank'}
                                                 </span>
                                             </td>
-                                            <td className="p-2 border font-mono">{effectiveClient || '-'}</td>
+                                            <td className="p-2 border font-mono">
+                                                <div>{effectiveClient || '-'}</div>
+                                                {effectiveClientSeason && <div className="text-[10px] text-slate-400">{effectiveClientSeason}</div>}
+                                            </td>
                                             <td className="p-2 border font-mono text-emerald-600">{effectiveFabric || '-'}</td>
                                             <td className="p-2 border text-center font-bold">
-                                                {isActiveState ? 'YES' : isFinishedState ? 'FINISHED' : 'NO'}
+                                                {isActiveState ? (hasProduction ? 'YES (prod>0)' : 'YES') : isFinishedState ? 'FINISHED' : 'NO'}
                                             </td>
                                             <td className="p-2 border text-center">
                                                 {clientMatch ? (
-                                                    <span className="text-green-600 font-bold">MATCH</span>
+                                                    <span className="text-green-600 font-bold">{seasonOk ? 'MATCH' : 'NAME✓ SEASON✗'}</span>
                                                 ) : (
                                                     <span className="text-slate-300">-</span>
                                                 )}

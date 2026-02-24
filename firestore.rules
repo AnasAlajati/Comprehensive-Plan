@@ -32,7 +32,7 @@ service cloud.firestore {
     }
     
     function isEditor() {
-      return isAuthenticated() && userExists() && getUserData().role == 'editor';
+      return isAuthenticated() && userExists() && getUserData().role == 'schedule_editor';
     }
     
     function isViewer() {

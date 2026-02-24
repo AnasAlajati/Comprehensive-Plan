@@ -10,6 +10,8 @@ interface OrderProductionHistoryModalProps {
   order: OrderRow;
   clientName: string;
   machines: MachineSS[];
+  seasonId?: string;
+  seasonName?: string;
 }
 
 interface ProductionLog {
@@ -21,6 +23,15 @@ interface ProductionLog {
   scrap: number;
   reason?: string;
   isExternal?: boolean; // NEW: Track if external
+  logSeason?: string; // The clientSeason value from this log
+}
+
+interface CrossSeasonInfo {
+  seasonLabel: string;
+  machines: string[];
+  totalProduced: number;
+  logCount: number;
+  dateRange: string;
 }
 
 interface Insight {
@@ -44,12 +55,15 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
   onClose,
   order,
   clientName,
-  machines
+  machines,
+  seasonId,
+  seasonName
 }) => {
   const [logs, setLogs] = useState<ProductionLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [totalProduction, setTotalProduction] = useState(0);
   const [debugInfo, setDebugInfo] = useState<string[]>([]);
+  const [crossSeasonInfo, setCrossSeasonInfo] = useState<CrossSeasonInfo[]>([]);
 
   useEffect(() => {
     if (isOpen && order) {
@@ -63,12 +77,21 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
     debug.push(`Searching for Client: "${clientName}"`);
     debug.push(`Searching for Fabric: "${order.material}"`);
     debug.push(`Total Machines Scanned: ${machines.length}`);
+    if (seasonId) debug.push(`Season Filter: "${seasonName || seasonId}"`);
 
     try {
       const logsData: ProductionLog[] = [];
+      const crossSeasonLogsData: ProductionLog[] = [];
       const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
       const targetClient = normalize(clientName);
       const targetFabric = normalize(order.material);
+
+      // Helper: does this log's season match the current season?
+      const logSeasonMatches = (logClientSeason: string | undefined) => {
+        if (!seasonId && !seasonName) return true; // no season filter → everything matches
+        if (!logClientSeason) return false; // season selected but log has no season tag → treat as cross-season
+        return logClientSeason === seasonId || logClientSeason === seasonName;
+      };
       
       // 1. Internal Logs
       const fabricFoundOnClients = new Set<string>();
@@ -93,16 +116,23 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
                               (log.client === clientName && log.fabric === order.material); // Fallback to exact match
 
               if (isMatch) {
-                  logsData.push({
+                  const entry: ProductionLog = {
                       id: `${machine.name}-${log.date}-${idx}`,
                       date: log.date,
                       machineName: machine.name,
                       dayProduction: Number(log.dayProduction) || 0,
-                      remaining: Number(log.remainingMfg) || 0, // Capture remaining
+                      remaining: Number(log.remainingMfg) || 0,
                       scrap: Number(log.scrap) || 0,
                       reason: log.note || '',
-                      isExternal: false
-                  });
+                      isExternal: false,
+                      logSeason: (log as any).clientSeason || undefined
+                  };
+
+                  if (logSeasonMatches((log as any).clientSeason)) {
+                      logsData.push(entry);
+                  } else {
+                      crossSeasonLogsData.push(entry);
+                  }
               }
           });
       });
@@ -112,18 +142,13 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
         const extDocs = await getDocs(query(
             collection(db, 'externalProduction'),
             where('client', '==', clientName), 
-            // Note: If you have issues with strict equality, you might need to fetch more and filter.
-            // For now assuming client names match exactly as they usually come from dropdowns.
         ));
 
         extDocs.forEach(doc => {
             const data = doc.data();
-            // Safety check for fabric
             if (normalize(data.fabric) === targetFabric) {
-                // If scrap exists but scrapQty is not set, use scrap
                 const scrapVal = Number(data.scrap) || Number(data.scrapQty) || 0;
-                
-                logsData.push({
+                const entry: ProductionLog = {
                     id: doc.id,
                     date: data.date,
                     machineName: data.factory || 'External',
@@ -131,8 +156,15 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
                     remaining: Number(data.remainingQty) || 0,
                     scrap: scrapVal,
                     reason: data.notes || '',
-                    isExternal: true
-                });
+                    isExternal: true,
+                    logSeason: data.clientSeason || undefined
+                };
+
+                if (logSeasonMatches(data.clientSeason)) {
+                    logsData.push(entry);
+                } else {
+                    crossSeasonLogsData.push(entry);
+                }
             }
         });
         debug.push(`Found ${extDocs.size} external records (filtered to ${logsData.filter(l => l.isExternal).length}).`);
@@ -141,18 +173,41 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
         debug.push("Error fetching external logs: " + err);
       }
 
-      debug.push(`Found ${logsData.length} total matching logs.`);
-      
-      // Add helpful debug info if no matches but fabric exists elsewhere
-      // DISABLED: User requested to hide "Different Clients" warning as it causes confusion
-      /*
-      if (logsData.length === 0 && totalLogsWithFabric > 0) {
-          debug.push(`---`);
-          debug.push(`⚠️ This fabric was found ${totalLogsWithFabric} times but for DIFFERENT clients:`);
-          debug.push(`Clients with this fabric: ${Array.from(fabricFoundOnClients).join(', ')}`);
-          debug.push(`Machines that produced it: ${Array.from(fabricFoundOnMachines).join(', ')}`);
+      debug.push(`Found ${logsData.length} matching logs (current season).`);
+      if (crossSeasonLogsData.length > 0) {
+        debug.push(`Found ${crossSeasonLogsData.length} logs from OTHER seasons.`);
       }
-      */
+
+      // Build cross-season summary grouped by season label
+      if (crossSeasonLogsData.length > 0) {
+        const seasonMap = new Map<string, { machines: Set<string>; totalProduced: number; count: number; dates: string[] }>();
+        crossSeasonLogsData.forEach(log => {
+          const label = log.logSeason || 'Unknown Season';
+          if (!seasonMap.has(label)) {
+            seasonMap.set(label, { machines: new Set(), totalProduced: 0, count: 0, dates: [] });
+          }
+          const entry = seasonMap.get(label)!;
+          entry.machines.add(log.machineName);
+          entry.totalProduced += log.dayProduction;
+          entry.count++;
+          entry.dates.push(log.date);
+        });
+
+        const crossInfo: CrossSeasonInfo[] = [];
+        seasonMap.forEach((val, key) => {
+          const sorted = val.dates.sort();
+          crossInfo.push({
+            seasonLabel: key,
+            machines: Array.from(val.machines),
+            totalProduced: val.totalProduced,
+            logCount: val.count,
+            dateRange: sorted.length > 1 ? `${formatDate(sorted[0])} – ${formatDate(sorted[sorted.length - 1])}` : formatDate(sorted[0])
+          });
+        });
+        setCrossSeasonInfo(crossInfo);
+      } else {
+        setCrossSeasonInfo([]);
+      }
 
       // Sort by date descending for display
       logsData.sort((a, b) => b.date.localeCompare(a.date));
@@ -372,9 +427,36 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
               <p>Analyzing production data...</p>
             </div>
           ) : logs.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-slate-400 bg-slate-50 rounded-lg border border-dashed border-slate-200">
-              <AlertCircle className="w-10 h-10 mb-3 text-slate-300" />
-              <p>No production logs found for this order.</p>
+            <div className="space-y-4">
+              {/* If there are cross-season logs, show them prominently */}
+              {crossSeasonInfo.length > 0 ? (
+                <div className="bg-amber-50 border border-amber-300 rounded-lg p-5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <History className="w-5 h-5 text-amber-600" />
+                    <span className="font-bold text-amber-900 text-sm">Produced in a previous season</span>
+                  </div>
+                  <div className="space-y-2">
+                    {crossSeasonInfo.map((info, idx) => (
+                      <div key={idx} className="flex flex-wrap items-center gap-3 text-sm text-amber-800 bg-amber-100/60 rounded px-3 py-2">
+                        <span className="font-bold bg-amber-200 text-amber-900 px-2 py-0.5 rounded text-xs">{info.seasonLabel || 'No Season Tag'}</span>
+                        <span className="font-bold text-amber-900">{info.totalProduced.toLocaleString()} kg produced</span>
+                        <span className="text-amber-600">•</span>
+                        <span className="text-xs">{info.logCount} days on {info.machines.join(', ')}</span>
+                        <span className="text-amber-600">•</span>
+                        <span className="text-xs font-mono">{info.dateRange}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="text-xs text-amber-600 mt-3 border-t border-amber-200 pt-2">
+                    No production logs found for the current season ({seasonName || seasonId || 'selected season'}). The data above is from a previous season only.
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12 text-slate-400 bg-slate-50 rounded-lg border border-dashed border-slate-200">
+                  <AlertCircle className="w-10 h-10 mb-3 text-slate-300" />
+                  <p>No production logs found for this order.</p>
+                </div>
+              )}
             </div>
           ) : (
             <>
@@ -407,6 +489,31 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
                   </div>
                 </div>
               </div>
+
+              {/* Cross-Season Warning */}
+              {crossSeasonInfo.length > 0 && (
+                <div className="bg-amber-50 border border-amber-300 rounded-lg p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <AlertTriangle className="w-5 h-5 text-amber-600" />
+                    <span className="font-bold text-amber-900 text-sm">Same fabric produced in a different season</span>
+                  </div>
+                  <div className="space-y-2">
+                    {crossSeasonInfo.map((info, idx) => (
+                      <div key={idx} className="flex items-center gap-3 text-xs text-amber-800 bg-amber-100/60 rounded px-3 py-2">
+                        <span className="font-bold bg-amber-200 text-amber-900 px-2 py-0.5 rounded">{info.seasonLabel}</span>
+                        <span>{info.totalProduced.toLocaleString()} kg</span>
+                        <span className="text-amber-600">•</span>
+                        <span>{info.logCount} days on {info.machines.join(', ')}</span>
+                        <span className="text-amber-600">•</span>
+                        <span className="font-mono">{info.dateRange}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="text-[10px] text-amber-600 mt-2">
+                    Only logs from the current season ({seasonName || seasonId || 'no season'}) are shown below.
+                  </div>
+                </div>
+              )}
 
               {/* AI Insights Section */}
               <div className="space-y-3">

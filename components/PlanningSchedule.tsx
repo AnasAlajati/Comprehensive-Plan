@@ -210,11 +210,13 @@ interface PlanningScheduleProps {
   machines?: MachineRow[];
   onUpdate?: (machine: MachineRow) => Promise<void>;
   initialViewMode?: 'INTERNAL' | 'EXTERNAL';
-  userRole?: 'admin' | 'editor' | 'viewer' | null;
+  userRole?: 'admin' | 'schedule_editor' | 'daily_planner' | 'viewer' | null;
 }
 type PlanningMachine = MachineRow & { machineSSId: string; scheduleIndex?: number };
 
 export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, initialViewMode = 'INTERNAL', userRole }) => {
+  // Allowed roles to edit: admin, schedule_editor, daily_planner
+  const canEdit = userRole && ['admin', 'schedule_editor', 'daily_planner'].includes(userRole);
   const [smartAddMachineId, setSmartAddMachineId] = useState<string | null>(null);
   const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean; machine: any; plan?: any; isCurrent?: boolean; } | null>(null);
   const [draggedPlan, setDraggedPlan] = useState<{machineId: string, index: number} | null>(null);
@@ -1768,18 +1770,40 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                               <button 
                                 type="button"
                                 onMouseDown={(e) => e.stopPropagation()} 
-                                onClick={(e) => handleActivatePlan(e, machine, plan, index)}
-                                className="p-1 text-slate-300 hover:text-emerald-500 hover:bg-emerald-50 rounded transition-colors"
-                                title="Start Production"
+                                onClick={(e) => canEdit && handleActivatePlan(e, machine, plan, index)}
+                                disabled={!canEdit}
+                                className={`p-1 rounded transition-colors ${!canEdit ? 'text-slate-300 opacity-50 cursor-not-allowed' : 'text-slate-300 hover:text-emerald-500 hover:bg-emerald-50'}`}
+                                title={!canEdit ? 'You do not have permission to edit' : 'Start Production'}
+                                onMouseEnter={(e) => {
+                                  if (!canEdit) {
+                                    e.currentTarget.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2732%27 height=%2732%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2710%27 fill=%27%23ef4444%27/%3E%3C/svg%3E") 16 16, auto';
+                                  }
+                                }}
+                                onMouseLeave={(e) => {
+                                  if (!canEdit) {
+                                    e.currentTarget.style.cursor = 'not-allowed';
+                                  }
+                                }}
                               >
                                 <Play className="w-4 h-4" />
                               </button>
                               <button 
                               type="button"
                               onMouseDown={(e) => e.stopPropagation()} 
-                              onClick={(e) => deletePlan(e, machine, index)}
-                              className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                              title="Delete Plan"
+                              onClick={(e) => canEdit && deletePlan(e, machine, index)}
+                              disabled={!canEdit}
+                              className={`p-1 rounded transition-colors ${!canEdit ? 'text-slate-300 opacity-50 cursor-not-allowed' : 'text-slate-300 hover:text-red-500 hover:bg-red-50'}`}
+                              title={!canEdit ? 'You do not have permission to edit' : 'Delete Plan'}
+                              onMouseEnter={(e) => {
+                                if (!canEdit) {
+                                  e.currentTarget.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2732%27 height=%2732%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2710%27 fill=%27%23ef4444%27/%3E%3C/svg%3E") 16 16, auto';
+                                }
+                              }}
+                              onMouseLeave={(e) => {
+                                if (!canEdit) {
+                                  e.currentTarget.style.cursor = 'not-allowed';
+                                }
+                              }}
                               >
                               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                               </button>
@@ -1800,10 +1824,40 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                   <tr>
                     <td colSpan={12} className="p-2 bg-slate-50 border-t border-slate-100">
                       <div className="flex flex-col sm:flex-row gap-2">
-                        <button onClick={() => addPlan(machine, 'PRODUCTION')} className="flex-1 flex items-center justify-center gap-2 py-2 border border-dashed border-slate-300 rounded-lg text-slate-500 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50/50 transition-all text-xs font-medium">
+                        <button 
+                          onClick={() => canEdit && addPlan(machine, 'PRODUCTION')} 
+                          disabled={!canEdit}
+                          className={`flex-1 flex items-center justify-center gap-2 py-2 border border-dashed rounded-lg transition-all text-xs font-medium ${!canEdit ? 'border-slate-300 text-slate-300 opacity-50 cursor-not-allowed' : 'border-slate-300 text-slate-500 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50/50'}`}
+                          title={!canEdit ? 'You do not have permission to edit' : ''}
+                          onMouseEnter={(e) => {
+                            if (!canEdit) {
+                              e.currentTarget.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2732%27 height=%2732%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2710%27 fill=%27%23ef4444%27/%3E%3C/svg%3E") 16 16, auto';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!canEdit) {
+                              e.currentTarget.style.cursor = 'not-allowed';
+                            }
+                          }}
+                        >
                           + Add Production Plan
                         </button>
-                        <button onClick={() => addPlan(machine, 'SETTINGS')} className="px-4 py-2 border border-dashed border-amber-300 rounded-lg text-amber-600 hover:text-amber-700 hover:bg-amber-50 hover:border-amber-400 transition-all text-xs font-medium">
+                        <button 
+                          onClick={() => canEdit && addPlan(machine, 'SETTINGS')} 
+                          disabled={!canEdit}
+                          className={`px-4 py-2 border border-dashed rounded-lg transition-all text-xs font-medium ${!canEdit ? 'border-amber-300 text-amber-300 opacity-50 cursor-not-allowed' : 'border-amber-300 text-amber-600 hover:text-amber-700 hover:bg-amber-50 hover:border-amber-400'}`}
+                          title={!canEdit ? 'You do not have permission to edit' : ''}
+                          onMouseEnter={(e) => {
+                            if (!canEdit) {
+                              e.currentTarget.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2732%27 height=%2732%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2710%27 fill=%27%23ef4444%27/%3E%3C/svg%3E") 16 16, auto';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!canEdit) {
+                              e.currentTarget.style.cursor = 'not-allowed';
+                            }
+                          }}
+                        >
                           + Add Settings
                         </button>
                       </div>
@@ -1837,6 +1891,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
              </div>
              <button
                onClick={() => {
+                 if (!canEdit) return;
                  const name = window.prompt("Enter new factory name:");
                  if (name) {
                    setNewFactoryName(name);
@@ -1854,7 +1909,19 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                    }).catch(err => console.error("Error adding factory:", err));
                  }
                }}
-               className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg font-semibold transition-all shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
+               disabled={!canEdit}
+               className={`flex items-center gap-2 px-6 py-3 rounded-lg font-semibold transition-all shadow-md ${!canEdit ? 'bg-slate-400 text-slate-200 opacity-50 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white hover:shadow-lg transform hover:-translate-y-0.5'}`}
+               title={!canEdit ? 'You do not have permission to edit' : ''}
+               onMouseEnter={(e) => {
+                 if (!canEdit) {
+                   e.currentTarget.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2732%27 height=%2732%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2710%27 fill=%27%23ef4444%27/%3E%3C/svg%3E") 16 16, auto';
+                 }
+               }}
+               onMouseLeave={(e) => {
+                 if (!canEdit) {
+                   e.currentTarget.style.cursor = 'not-allowed';
+                 }
+               }}
              >
                <Plus size={20} />
                <span>Add New Factory</span>
@@ -1999,9 +2066,20 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                              </select>
 
                              <button 
-                                onClick={() => handleDeleteExternalPlan(factory.id, index)}
-                                className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                                title="Delete Plan"
+                                onClick={() => canEdit && handleDeleteExternalPlan(factory.id, index)}
+                                disabled={!canEdit}
+                                className={`p-1 rounded transition-colors ${!canEdit ? 'text-slate-300 opacity-50 cursor-not-allowed' : 'text-slate-300 hover:text-red-500 hover:bg-red-50'}`}
+                                title={!canEdit ? 'You do not have permission to edit' : 'Delete Plan'}
+                                onMouseEnter={(e) => {
+                                  if (!canEdit) {
+                                    e.currentTarget.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2732%27 height=%2732%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2710%27 fill=%27%23ef4444%27/%3E%3C/svg%3E") 16 16, auto';
+                                  }
+                                }}
+                                onMouseLeave={(e) => {
+                                  if (!canEdit) {
+                                    e.currentTarget.style.cursor = 'not-allowed';
+                                  }
+                                }}
                              >
                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                              </button>
@@ -2012,8 +2090,20 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                     <tr>
                       <td colSpan={11} className="p-2 bg-slate-50 border-t border-slate-100">
                         <button 
-                          onClick={() => handleAddExternalPlan(factory.id)}
-                          className="w-full flex items-center justify-center gap-2 py-2 border border-dashed border-slate-300 rounded-lg text-slate-500 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50/50 transition-all text-xs font-medium"
+                          onClick={() => canEdit && handleAddExternalPlan(factory.id)}
+                          disabled={!canEdit}
+                          className={`w-full flex items-center justify-center gap-2 py-2 border border-dashed rounded-lg transition-all text-xs font-medium ${!canEdit ? 'border-slate-300 text-slate-300 opacity-50 cursor-not-allowed' : 'border-slate-300 text-slate-500 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50/50'}`}
+                          title={!canEdit ? 'You do not have permission to edit' : ''}
+                          onMouseEnter={(e) => {
+                            if (!canEdit) {
+                              e.currentTarget.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2732%27 height=%2732%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2710%27 fill=%27%23ef4444%27/%3E%3C/svg%3E") 16 16, auto';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!canEdit) {
+                              e.currentTarget.style.cursor = 'not-allowed';
+                            }
+                          }}
                         >
                           <Plus size={14} />
                           Add External Plan

@@ -266,7 +266,8 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
                   onClick={() => handleSelect(opt)}
                   className="px-2 py-1.5 hover:bg-blue-50 cursor-pointer text-xs border-b border-slate-100 last:border-b-0"
                 >
-                  {getLabel(opt)}
+                  <span>{getLabel(opt)}</span>
+                  {(opt as any).subLabel && <span className="text-slate-400 ml-1">({(opt as any).subLabel})</span>}
                 </div>
               ))}
               {searchTerm && onCreateNew && !options.some(o => o.name.toLowerCase() === searchTerm.toLowerCase()) && (
@@ -373,6 +374,38 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   }, [allLogs]);
   const [fabrics, setFabrics] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
+
+  // Derive client+season options from the loaded clients list
+  const clientSeasonOptions = React.useMemo(() => {
+    console.log('[DEBUG clientSeasonOptions] raw clients count:', clients.length);
+    clients.forEach((c: any) => {
+      console.log('[DEBUG client]', {
+        name: c.name,
+        createdSeasonId: c.createdSeasonId ?? '(none)',
+        createdSeasonName: c.createdSeasonName ?? '(none)',
+        keys: Object.keys(c)
+      });
+    });
+    const seen = new Set<string>();
+    const opts: Array<{ id: string; name: string; shortName: string; subLabel: string; clientName: string; seasonName: string }> = [];
+    clients.forEach((c: any) => {
+      const clientName: string = c.name || '';
+      const seasonLabel: string = c.createdSeasonName || c.createdSeasonId || '';
+      if (seasonLabel) {
+        const combinedName = `${clientName}-${seasonLabel}`;
+        if (!seen.has(combinedName)) {
+          seen.add(combinedName);
+          opts.push({ id: c.id || combinedName, name: combinedName, shortName: clientName, subLabel: seasonLabel, clientName, seasonName: seasonLabel });
+        }
+      } else {
+        if (!seen.has(clientName)) {
+          seen.add(clientName);
+          opts.push({ id: c.id || clientName, name: clientName, shortName: clientName, subLabel: '', clientName, seasonName: '' });
+        }
+      }
+    });
+    return opts.sort((a, b) => a.clientName.localeCompare(b.clientName));
+  }, [clients]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [fetchTime, setFetchTime] = useState<number>(0);
@@ -556,6 +589,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
              status: prevLog.status,
              fabric: prevLog.fabric,
              client: prevLog.client,
+             clientSeason: prevLog.clientSeason || '',
              avgProduction: prevLog.avgProduction || machine.avgProduction || 0,
              remainingMfg: newRemaining,
              customStatusNote: prevLog.customStatusNote || '',
@@ -584,6 +618,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 status: newLogEntry.status,
                 fabric: newLogEntry.fabric,
                 client: newLogEntry.client,
+                clientSeason: newLogEntry.clientSeason,
                 remainingMfg: newLogEntry.remainingMfg,
                 reason: newLogEntry.reason,
                 customStatusNote: newLogEntry.customStatusNote
@@ -851,6 +886,72 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     }
   };
 
+  // Handles client selection: splits combined "ClientName-Season" value into separate
+  // client and clientSeason fields, then persists both in a single Firestore write.
+  const handleClientSelect = async (val: string, machineId: string, logId: string) => {
+    const matchingOption = clientSeasonOptions.find(o => o.name === val);
+    const clientName = matchingOption ? matchingOption.clientName : val;
+    const seasonName = matchingOption ? matchingOption.seasonName : '';
+
+    const log = filteredLogs.find(l => l.machineId === machineId && l.id === logId);
+    if (!log) return;
+    if (log.client === clientName && (log.clientSeason || '') === seasonName) return;
+
+    // Optimistic update
+    setAllLogs(prev => prev.map(l =>
+      (l.machineId === machineId && l.id === logId)
+        ? { ...l, client: clientName, clientSeason: seasonName }
+        : l
+    ));
+
+    try {
+      const machines = await DataService.getMachinesFromMachineSS();
+      const machine = machines.find((m: any) => m.id === machineId);
+      if (!machine) return;
+
+      const updatedLogs = [...(machine.dailyLogs || [])];
+      let logIndex = updatedLogs.findIndex((l: any) => l.date === selectedDate);
+
+      if (logIndex < 0) {
+        const newLog: any = {
+          id: selectedDate,
+          date: selectedDate,
+          dayProduction: 0,
+          scrap: 0,
+          status: machine.status || '',
+          client: clientName,
+          clientSeason: seasonName,
+          fabric: log.fabric || '',
+          avgProduction: machine.avgProduction || 0,
+          remainingMfg: 0,
+          reason: '',
+          timestamp: new Date().toISOString()
+        };
+        updatedLogs.push(newLog);
+        logIndex = updatedLogs.length - 1;
+      } else {
+        updatedLogs[logIndex] = { ...updatedLogs[logIndex], client: clientName, clientSeason: seasonName };
+      }
+
+      const updatePayload: any = {
+        dailyLogs: updatedLogs,
+        lastUpdated: new Date().toISOString()
+      };
+
+      if (updatedLogs[logIndex].date === activeDay) {
+        updatePayload.client = clientName;
+      }
+
+      await DataService.updateMachineInMachineSS(machineId, updatePayload);
+      await DataService.updateDailyLog(machineId, selectedDate, updatedLogs[logIndex]);
+      checkSmartLink(machineId, logId, clientName, log.fabric || '');
+      showMessage('✅ Updated');
+    } catch (error: any) {
+      showMessage('❌ Error: ' + error.message, true);
+      handleFetchLogs(selectedDate);
+    }
+  };
+
   // Real-time Subscription
   // REPLACED: We now rely on the 'machines' prop passed from App.tsx which handles the complex merging of Sub-collections + Arrays.
   // This fixes the "Disappearing Data" issue where local state was out of sync with the parent's view.
@@ -919,6 +1020,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         const lastLog = sortedLogs.find((l: any) => l.date < date);
         
         const defaultClient = lastLog ? lastLog.client : (machine.client || '');
+        const defaultClientSeason = lastLog ? (lastLog.clientSeason || '') : '';
         const defaultFabric = lastLog ? lastLog.fabric : (machine.material || machine.fabric || '');
         const defaultStatus = lastLog ? lastLog.status : (machine.status || '');
 
@@ -930,6 +1032,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           status: defaultStatus,
           fabric: defaultFabric,
           client: defaultClient,
+          clientSeason: defaultClientSeason,
           avgProduction: machine.avgProduction || 0,
           remainingMfg: lastLog ? (Number(lastLog.remainingMfg) || 0) : 0,
           reason: '',
@@ -1971,7 +2074,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                  className="shrink-0 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none w-24 md:w-28 transition-all"
                />
             </div>
-            
+
              {/* Desktop Sync Status */}
              <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200 text-xs font-medium text-slate-500 shrink-0">
                 {navigator.onLine ? (
@@ -2423,14 +2526,19 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         <td className="border border-slate-200 p-0 relative group">
                           <SearchDropdown
                             id={getCellId(log.machineId, 'client')}
-                            options={clients}
-                            value={log.client || ''}
-                            onChange={(val) => handleBlur({ target: { value: val, type: 'text' } } as any, log.machineId, log.id, 'client')}
+                            options={clientSeasonOptions}
+                            value={(log.clientSeason ? `${log.client}-${log.clientSeason}` : log.client) || ''}
+                            onChange={(val) => handleClientSelect(val, log.machineId, log.id)}
                             onFocus={() => handleCellFocus(idx, 'client')}
                             disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
                             placeholder="---"
                             strict={true}
                           />
+                          {log.clientSeason && (
+                            <div className="text-[10px] text-slate-400 px-1 pb-0.5 leading-none pointer-events-none select-none">
+                              {log.clientSeason}
+                            </div>
+                          )}
                           
                           {/* Reference Code Tooltip */}
                           {log.client && log.fabric && (
