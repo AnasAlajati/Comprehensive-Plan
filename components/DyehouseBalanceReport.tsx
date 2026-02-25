@@ -12,9 +12,26 @@ import {
   Package,
   Calendar,
   User,
-  ArrowRight
+  ArrowRight,
+  Bug
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+
+// Debug item — every batch (including excluded ones) with full calc breakdown
+interface DebugBatchItem {
+  color: string;
+  dyehouse: string;
+  sent: number;
+  received: number;
+  scrapRaw: number;
+  scrapAccessory: number;
+  rawRemaining: number;     // sent - received - scrap (before clamp)
+  clampedRemaining: number; // after Math.max(0,...)
+  notSent: boolean;         // filtered out before even calculating
+  excludeReason: string;    // human-readable why it's absent from report
+  dateSent?: string;
+  dispatchNumber?: string;
+}
 
 // Detail item for breakdown
 interface BalanceDetailItem {
@@ -37,7 +54,11 @@ interface BalanceEntry {
   totalBalance: number;
 }
 
-export const DyehouseBalanceReport: React.FC = () => {
+interface DyehouseBalanceReportProps {
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
+}
+
+export const DyehouseBalanceReport: React.FC<DyehouseBalanceReportProps> = ({ userRole }) => {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<BalanceEntry[]>([]);
   const [dyehouses, setDyehouses] = useState<string[]>([]);
@@ -46,7 +67,11 @@ export const DyehouseBalanceReport: React.FC = () => {
   
   // Store all detail items for drill-down
   const [allDetails, setAllDetails] = useState<BalanceDetailItem[]>([]);
-  
+
+  // Debug map: key = `${orderId}__${fabric}` → all batches for that order+fabric
+  const [debugMap, setDebugMap] = useState<Record<string, DebugBatchItem[]>>({});
+  const [debugModal, setDebugModal] = useState<{ key: string; title: string } | null>(null);
+
   // Modal state for showing breakdown
   const [detailModal, setDetailModal] = useState<{
     isOpen: boolean;
@@ -85,9 +110,11 @@ export const DyehouseBalanceReport: React.FC = () => {
       const allDyehouses = new Set<string>();
       const detailItems: BalanceDetailItem[] = [];
 
+      const debugData: Record<string, DebugBatchItem[]> = {};
+
       ordersSnapshot.docs.forEach(doc => {
         const order = doc.data() as OrderRow;
-        const clientId = order.customerId || 'unknown';
+        const clientId = doc.ref.parent.parent?.id || order.customerId || 'unknown';
         const clientName = clientMap[clientId] || 'Unknown Client';
 
         if (!balances[clientName]) {
@@ -103,33 +130,67 @@ export const DyehouseBalanceReport: React.FC = () => {
             } else {
               totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
             }
-            
-            if (batch.dateSent || totalSent > 0) {
-              // Smart Dyehouse Display Logic
-              const dyehouse = batch.dyehouse || 
-                               (batch.colorApprovals && batch.colorApprovals.length > 0 ? batch.colorApprovals[0].dyehouseName : '') || 
-                               order.dyehouse || 
-                               'Unassigned';
-                               
+
+            const dyehouse = batch.dyehouse ||
+                             (batch.colorApprovals && batch.colorApprovals.length > 0 ? batch.colorApprovals[0].dyehouseName : '') ||
+                             order.dyehouse ||
+                             'Unassigned';
+
+            const events = batch.receiveEvents || [];
+            const totalReceivedRaw = events.reduce((s: number, e: any) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
+            const totalReceivedAccessory = events.reduce((s: number, e: any) => s + (e.quantityAccessory || 0), 0);
+            const totalReceived = totalReceivedRaw + totalReceivedAccessory;
+            const scrapRaw = batch.scrapRaw || 0;
+            const scrapAccessory = batch.scrapAccessory || 0;
+            const rawRemaining = totalSent - totalReceived - scrapRaw - scrapAccessory;
+            const clampedRemaining = Math.max(0, rawRemaining);
+            const notSent = !batch.dateSent && totalSent === 0;
+
+            // Debug reason
+            let excludeReason = '';
+            if (notSent) {
+              excludeReason = 'Not sent yet (no dateSent and totalSent = 0)';
+            } else if (clampedRemaining === 0 && rawRemaining <= 0) {
+              if (scrapRaw > 0 || scrapAccessory > 0) {
+                excludeReason = `Fully accounted: received ${totalReceived} + scrap ${scrapRaw}${scrapAccessory > 0 ? `+${scrapAccessory}acc` : ''} = ${totalReceived + scrapRaw + scrapAccessory} ≥ sent ${totalSent}`;
+              } else {
+                excludeReason = `Fully received: ${totalReceived} ≥ sent ${totalSent}`;
+              }
+            } else if (clampedRemaining > 0) {
+              excludeReason = '✅ Shown in report';
+            }
+
+            // Store in debugMap keyed by orderId + fabric
+            const debugKey = `${doc.id}__${order.material || ''}`;
+            if (!debugData[debugKey]) debugData[debugKey] = [];
+            debugData[debugKey].push({
+              color: batch.color || '—',
+              dyehouse,
+              sent: totalSent,
+              received: totalReceived,
+              scrapRaw,
+              scrapAccessory,
+              rawRemaining,
+              clampedRemaining,
+              notSent,
+              excludeReason,
+              dateSent: batch.dateSent,
+              dispatchNumber: batch.dispatchNumber,
+            });
+
+            if (!notSent) {
               allDyehouses.add(dyehouse);
 
-              // Calculate total received from events
-              const events = batch.receiveEvents || [];
-              const totalReceivedRaw = events.reduce((s, e) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
-              const totalReceivedAccessory = events.reduce((s, e) => s + (e.quantityAccessory || 0), 0);
-              const totalReceived = totalReceivedRaw + totalReceivedAccessory;
-              
-              // Calculate remaining balance in dyehouse
-              let remaining = totalSent - totalReceived;
-              if (remaining < 0) remaining = 0;
+              // Calculate remaining balance in dyehouse (exclude scrap — it will never be received)
+              const remaining = clampedRemaining;
 
               if (remaining > 0) {
                 balances[clientName][dyehouse] = (balances[clientName][dyehouse] || 0) + remaining;
-                
+
                 // Store detail item
                 detailItems.push({
                   clientName,
-                  orderId: order.id,
+                  orderId: doc.id,
                   fabric: order.material,
                   fabricShortName: fabricMap[order.material] || order.material,
                   color: batch.color,
@@ -145,6 +206,8 @@ export const DyehouseBalanceReport: React.FC = () => {
           });
         }
       });
+
+      setDebugMap(debugData);
 
       // Convert to Array
       const result: BalanceEntry[] = Object.entries(balances).map(([client, dhMap]) => {
@@ -462,6 +525,7 @@ export const DyehouseBalanceReport: React.FC = () => {
                     <th className="px-3 py-2 text-center bg-indigo-50 text-indigo-700">Remaining</th>
                     <th className="px-3 py-2 text-left">Date Sent</th>
                     <th className="px-3 py-2 text-left">Dispatch #</th>
+                    {userRole === 'admin' && <th className="px-3 py-2 text-center">Debug</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -494,6 +558,17 @@ export const DyehouseBalanceReport: React.FC = () => {
                           </span>
                         ) : '-'}
                       </td>
+                      {userRole === 'admin' && (
+                      <td className="px-3 py-2 text-center">
+                        <button
+                          onClick={() => setDebugModal({ key: `${item.orderId}__${item.fabric}`, title: `${item.clientName} → ${item.fabricShortName}` })}
+                          className="p-1 rounded hover:bg-amber-100 text-amber-500 hover:text-amber-700 transition-colors"
+                          title="Show why other colors are hidden"
+                        >
+                          <Bug size={14} />
+                        </button>
+                      </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -520,15 +595,96 @@ export const DyehouseBalanceReport: React.FC = () => {
               <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
                 <div className="font-semibold mb-1">📊 How is this calculated?</div>
                 <div className="text-amber-700">
-                  <strong>Remaining Balance</strong> = Sent (مرسل) - Received (مستلم)
+                  <strong>Remaining Balance</strong> = Sent − Received − ScrapRaw − ScrapAccessory
                   <br />
-                  <span className="text-xs">Only batches that have been sent to the dyehouse are included.</span>
+                  <span className="text-xs">Batches where remaining = 0 (fully received or scrapped) are hidden. Click <Bug size={11} className="inline" /> to inspect any row.</span>
                 </div>
               </div>
             </div>
           </div>
         </div>
       )}
+      {/* Debug Modal — admin only */}
+      {userRole === 'admin' && debugModal && (() => {
+        const items = debugMap[debugModal.key] || [];
+        return (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col">
+              <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-amber-50 rounded-t-xl">
+                <div>
+                  <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                    <Bug size={18} className="text-amber-600" />
+                    Debug: {debugModal.title}
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    All {items.length} color(s) for this fabric — showing why each appears or is hidden
+                  </p>
+                </div>
+                <button onClick={() => setDebugModal(null)} className="p-2 hover:bg-slate-200 rounded-full">
+                  <X size={18} className="text-slate-500" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-auto p-4">
+                <table className="w-full text-xs border-collapse">
+                  <thead className="bg-slate-100 sticky top-0">
+                    <tr className="text-[11px] uppercase text-slate-500 font-semibold">
+                      <th className="px-3 py-2 text-left">Color</th>
+                      <th className="px-3 py-2 text-left">Dyehouse</th>
+                      <th className="px-3 py-2 text-center">Sent</th>
+                      <th className="px-3 py-2 text-center">Received</th>
+                      <th className="px-3 py-2 text-center text-red-600">Scrap Raw</th>
+                      <th className="px-3 py-2 text-center text-red-400">Scrap Acc</th>
+                      <th className="px-3 py-2 text-center">Raw Rem</th>
+                      <th className="px-3 py-2 text-center bg-indigo-50 text-indigo-700">Final Rem</th>
+                      <th className="px-3 py-2 text-left">Status / Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {items.map((item, idx) => {
+                      const isShown = item.clampedRemaining > 0 && !item.notSent;
+                      return (
+                        <tr key={idx} className={isShown ? 'bg-emerald-50' : 'bg-slate-50 opacity-70'}>
+                          <td className="px-3 py-2 font-medium text-slate-800">{item.color}</td>
+                          <td className="px-3 py-2 text-slate-600">{item.dyehouse}</td>
+                          <td className="px-3 py-2 text-center font-mono text-blue-600">{item.sent}</td>
+                          <td className="px-3 py-2 text-center font-mono text-emerald-600">{item.received}</td>
+                          <td className="px-3 py-2 text-center font-mono text-red-500">{item.scrapRaw > 0 ? item.scrapRaw : '—'}</td>
+                          <td className="px-3 py-2 text-center font-mono text-red-400">{item.scrapAccessory > 0 ? item.scrapAccessory : '—'}</td>
+                          <td className={`px-3 py-2 text-center font-mono ${item.rawRemaining < 0 ? 'text-red-500' : 'text-slate-600'}`}>
+                            {item.rawRemaining.toFixed(1)}
+                          </td>
+                          <td className={`px-3 py-2 text-center font-mono font-bold ${
+                            isShown ? 'text-indigo-700 bg-indigo-50' : 'text-slate-400'
+                          }`}>
+                            {item.clampedRemaining.toFixed(1)}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                              isShown
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : item.notSent
+                                  ? 'bg-slate-200 text-slate-500'
+                                  : 'bg-red-50 text-red-600'
+                            }`}>
+                              {item.excludeReason}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {items.length === 0 && (
+                  <div className="text-center py-8 text-slate-400">No debug data found for this order+fabric</div>
+                )}
+                <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-700">
+                  <strong>Formula:</strong> Raw Remaining = Sent − Received − ScrapRaw − ScrapAcc → if &lt; 0 clamp to 0 → only rows where Final Rem &gt; 0 appear in the report.
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

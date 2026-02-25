@@ -26,7 +26,8 @@ import {
   FlaskConical,
   Trash2,
   Link2,
-  X
+  X,
+  Bug
 } from 'lucide-react';
 
 interface DyehouseActiveWorkPageProps {
@@ -117,6 +118,7 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
   const [filterStatus, setFilterStatus] = useState<DyehouseStatusType | 'All'>('All');
   const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
   const [expandedMachineQueue, setExpandedMachineQueue] = useState<string | null>(null);
+  const [debugModalItem, setDebugModalItem] = useState<ActiveWorkItem | null>(null);
   
   // Date picker modal state
   const [datePickerModal, setDatePickerModal] = useState<{
@@ -977,6 +979,137 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
     );
   };
 
+  // Debug Modal Component - Shows why a dyehouse name was selected
+  const DyehouseDebugModal = ({ item }: { item: ActiveWorkItem | null }) => {
+    if (!item || userRole !== 'admin') return null;
+
+    // Get the raw batch data to inspect
+    const batch = item.batch;
+    const batchDyehouseValue = batch.dyehouse || '(empty)';
+    const orderDyehouseValue = 'order.dyehouse would go here';
+
+    return (
+      <div className="fixed inset-0 bg-black/50 z-[1000] flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-auto">
+          {/* Header */}
+          <div className="sticky top-0 px-6 py-4 bg-slate-100 border-b border-slate-200 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Bug className="text-red-600" size={20} />
+              <h2 className="text-lg font-bold text-slate-800">Dyehouse Assignment Debug</h2>
+            </div>
+            <button 
+              onClick={() => setDebugModalItem(null)}
+              className="p-1 hover:bg-slate-200 rounded transition-colors"
+            >
+              <X size={20} className="text-slate-600" />
+            </button>
+          </div>
+
+          {/* Content */}
+          <div className="p-6 space-y-4">
+            {/* Item Info */}
+            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+              <h3 className="text-sm font-bold text-slate-700 mb-2">📦 Item Information</h3>
+              <div className="space-y-1 text-sm font-mono">
+                <div><span className="text-slate-500">Order ID:</span> <span className="text-slate-700 font-bold">{item.orderId}</span></div>
+                <div><span className="text-slate-500">Batch Index:</span> <span className="text-slate-700 font-bold">{item.batchIdx}</span></div>
+                <div><span className="text-slate-500">Client:</span> <span className="text-slate-700 font-bold">{item.clientName}</span></div>
+                <div><span className="text-slate-500">Fabric:</span> <span className="text-slate-700 font-bold">{item.fabric}</span></div>
+                <div><span className="text-slate-500">Color:</span> <span className="text-slate-700 font-bold">{item.color}</span></div>
+              </div>
+            </div>
+
+            {/* Dyehouse Resolution Logic */}
+            <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+              <h3 className="text-sm font-bold text-blue-900 mb-3">🏭 Dyehouse Resolution Logic</h3>
+              <div className="space-y-2 text-sm">
+                <div className="flex items-start gap-3">
+                  <span className="bg-blue-600 text-white px-2 py-0.5 rounded text-xs font-bold min-w-fit">Step 1</span>
+                  <div className="flex-1">
+                    <div className="text-slate-800 font-semibold">batch.dyehouse</div>
+                    <div className={`font-mono text-xs mt-1 p-2 rounded ${batchDyehouseValue === '(empty)' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                      {batchDyehouseValue}
+                    </div>
+                    <div className="text-xs text-slate-600 mt-1">
+                      {batchDyehouseValue === '(empty)' 
+                        ? '❌ Empty or undefined - will fallback to Step 2' 
+                        : '✅ Found - THIS VALUE IS USED'}
+                    </div>
+                  </div>
+                </div>
+
+                {batchDyehouseValue === '(empty)' && (
+                  <div className="flex items-start gap-3 mt-3">
+                    <span className="bg-orange-600 text-white px-2 py-0.5 rounded text-xs font-bold min-w-fit">Step 2</span>
+                    <div className="flex-1">
+                      <div className="text-slate-800 font-semibold">order.dyehouse (Fallback)</div>
+                      <div className="font-mono text-xs mt-1 p-2 rounded bg-green-100 text-green-700">
+                        {item.dyehouse}
+                      </div>
+                      <div className="text-xs text-slate-600 mt-1">
+                        ⚠️ Fallback used because batch.dyehouse is empty
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Current Display Value */}
+            <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+              <h3 className="text-sm font-bold text-green-900 mb-2">✅ Currently Displayed</h3>
+              <div className="text-2xl font-bold text-green-700 font-mono p-3 bg-white rounded border-2 border-green-300">
+                {item.dyehouse}
+              </div>
+            </div>
+
+            {/* Problem Diagnosis */}
+            <div className="bg-amber-50 p-4 rounded-lg border border-amber-200">
+              <h3 className="text-sm font-bold text-amber-900 mb-2">🔍 Diagnosis</h3>
+              <div className="text-sm text-amber-800 space-y-1">
+                {batch.dyehouse ? (
+                  <div>✅ Batch has dyehouse explicitly set to: <span className="font-bold">{batch.dyehouse}</span></div>
+                ) : (
+                  <>
+                    <div>❌ batch.dyehouse is empty or missing</div>
+                    <div>→ Using order-level dyehouse as fallback</div>
+                    <div>→ This may be causing the wrong dyehouse to display if the order has a different dyehouse than intended</div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Raw Data */}
+            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+              <h3 className="text-sm font-bold text-slate-700 mb-2">📋 Raw Batch Data</h3>
+              <div className="font-mono text-xs bg-white p-3 rounded border border-slate-200 overflow-auto max-h-48">
+                <pre className="text-slate-700">
+{JSON.stringify({
+  'batch.dyehouse': batch.dyehouse || undefined,
+  'batch.id': batch.id,
+  'batch.quantity': batch.quantity,
+  'batch.status': batch.status,
+  'displayedAs': item.dyehouse
+}, null, 2)}
+                </pre>
+              </div>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="sticky bottom-0 px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+            <button 
+              onClick={() => setDebugModalItem(null)}
+              className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-medium transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96">
@@ -1175,6 +1308,16 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
                             <span className="text-xs font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
                               {groupDyehouse}
                             </span>
+                            {/* Debug Button - Only for Admin */}
+                            {userRole === 'admin' && group.items.length > 0 && (
+                              <button
+                                onClick={() => setDebugModalItem(group.items[0])}
+                                className="ml-auto p-1 hover:bg-red-100 rounded transition-colors group/debug"
+                                title="Debug: See why this dyehouse name was selected"
+                              >
+                                <Bug size={12} className="text-red-600 opacity-60 group-hover/debug:opacity-100 transition-opacity" />
+                              </button>
+                            )}
                           </div>
                         )}
                         <div className="flex items-center justify-between">
@@ -1667,6 +1810,9 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
           </div>
         </div>
       )}
+
+      {/* Debug Modal */}
+      {debugModalItem && <DyehouseDebugModal item={debugModalItem} />}
     </div>
   );
 };

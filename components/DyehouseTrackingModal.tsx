@@ -42,7 +42,39 @@ export const DyehouseTrackingModal: React.FC<DyehouseTrackingModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setHistory(batch.dyehouseHistory || []);
-      setActiveStatus(batch.dyehouseStatus || '');
+
+      // Auto-infer status when none is manually set
+      let inferredStatus = batch.dyehouseStatus || '';
+      if (!inferredStatus) {
+        // Collect sent quantities
+        const sentEvents = batch.sentEvents || [];
+        const sentRaw =
+          sentEvents.reduce((s, e) => s + (Number(e.quantity) || 0), 0) +
+          (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
+        const hasSent = sentRaw > 0;
+
+        // Collect received quantities
+        const receiveEvents = batch.receiveEvents || [];
+        const recRaw =
+          receiveEvents.reduce((s, e) => s + (Number(e.quantityRaw) || 0), 0) +
+          (Number(batch.receivedQuantity) || 0);
+
+        // Check scrap / completion signals
+        const remainingPct =
+          sentRaw > 0 ? ((sentRaw - recRaw) / sentRaw) * 100 : 100;
+        const isReceived =
+          batch.isComplete === true ||
+          (Number(batch.scrapRaw) || 0) > 0 ||
+          (recRaw > 0 && remainingPct <= 10);
+
+        if (isReceived) {
+          inferredStatus = 'RECEIVED';
+        } else if (hasSent) {
+          inferredStatus = 'STORE_RAW';
+        }
+      }
+
+      setActiveStatus(inferredStatus);
     }
   }, [isOpen, batch]);
 

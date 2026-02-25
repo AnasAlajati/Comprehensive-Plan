@@ -750,35 +750,140 @@ export const FabricDyehouseModal: React.FC<FabricDyehouseModalProps> = ({
                 </div>
 
                 {/* Scrap / Pending Summary (New) */}
-                <div className="bg-slate-100 p-3 mx-4 mt-4 rounded-lg flex items-center justify-between text-xs">
+                <div className="bg-slate-100 p-3 mx-4 mt-4 rounded-lg">
                     {( () => {
                         const batch = receiveModal.batch;
                         
                         // Total Sent Logic
                         const rawSent = (batch.sentEvents || []).reduce((s:number,e:any)=>s+(e.quantity||0),0) + (batch.quantitySentRaw || batch.quantitySent || 0);
                         const accSent = (batch.sentEvents || []).reduce((s:number,e:any)=>s+(e.accessorySent||0),0) + (batch.quantitySentAccessory || 0);
+                        const totalSent = rawSent + accSent;
 
                         // Total Received Logic
                         const rawRec = (batch.receiveEvents || []).reduce((s:number,e:any)=>s+(e.quantityRaw||0),0) + (batch.receivedQuantity || 0);
                         const accRec = (batch.receiveEvents || []).reduce((s:number,e:any)=>s+(e.quantityAccessory||0),0);
+                        const totalRec = rawRec + accRec;
+
+                        // Scrap Calculation
+                        const existingScrap = (batch.scrapRaw || 0) + (batch.scrapAccessory || 0);
+                        const remaining = Math.max(0, totalSent - totalRec);
+                        const totalAccountedFor = totalRec + existingScrap;
+                        const scrapPercentage = totalSent > 0 ? ((totalAccountedFor - totalRec) / totalSent) * 100 : 0;
+                        const newScrapPercentage = totalSent > 0 ? ((remaining + existingScrap) / totalSent) * 100 : 0;
 
                         return (
                             <>
-                               <div className="text-center">
-                                   <div className="text-[10px] text-slate-400 uppercase font-bold">Planned To Receive</div>
-                                   <div className="font-mono font-bold text-slate-700">{rawSent} <span className="text-[9px] text-slate-400">Raw</span> {accSent > 0 && <span className="text-blue-600">+{accSent} Acc</span>}</div>
-                               </div>
-                               <div className="h-6 w-px bg-slate-300 mx-2"></div>
-                               <div className="text-center">
-                                   <div className="text-[10px] text-slate-400 uppercase font-bold">Pending</div>
-                                   <div className={`font-mono font-bold ${(rawSent + accSent - rawRec - accRec) > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                                       {Math.max(0, (rawSent + accSent) - (rawRec + accRec))} <span className="text-[9px] opacity-70">kg</span>
+                               <div className="flex items-center justify-between mb-3">
+                                   <div className="text-center flex-1">
+                                       <div className="text-[10px] text-slate-400 uppercase font-bold">Planned To Receive</div>
+                                       <div className="font-mono font-bold text-slate-700">{totalSent} <span className="text-[9px] text-slate-400">kg</span></div>
+                                   </div>
+                                   <div className="h-6 w-px bg-slate-300 mx-2"></div>
+                                   <div className="text-center flex-1">
+                                       <div className="text-[10px] text-slate-400 uppercase font-bold">Received</div>
+                                       <div className="font-mono font-bold text-emerald-600">{totalRec} <span className="text-[9px] text-slate-400">kg</span></div>
                                    </div>
                                </div>
+
+                               {/* Show current scrap if exists, else show pending */}
+                               {existingScrap > 0 ? (
+                                   <div className="bg-white/60 rounded p-2 mb-2 text-center">
+                                       <div className="text-[10px] text-red-500 uppercase font-bold mb-0.5">Scrap</div>
+                                       <div className="text-sm font-bold text-red-600">{scrapPercentage.toFixed(1)}% <span className="text-[9px] text-slate-400">({existingScrap} kg)</span></div>
+                                   </div>
+                               ) : remaining > 0 ? (
+                                   <div className="bg-amber-50 rounded p-2 mb-2 border border-amber-200">
+                                       <div className="flex items-center justify-between">
+                                           <div className="text-left">
+                                               <div className="text-[10px] text-amber-600 uppercase font-bold">Remaining</div>
+                                               <div className="text-sm font-bold text-amber-700">{remaining} kg</div>
+                                           </div>
+                                           <div className="text-right">
+                                               <div className="text-[10px] text-amber-600 uppercase font-bold">Est. Scrap</div>
+                                               <div className="text-sm font-bold text-amber-700">{newScrapPercentage.toFixed(1)}%</div>
+                                           </div>
+                                       </div>
+                                   </div>
+                               ) : (
+                                   <div className="bg-emerald-50 rounded p-2 mb-2 text-center border border-emerald-200">
+                                       <div className="text-[10px] text-emerald-600 uppercase font-bold">Complete</div>
+                                       <div className="font-mono font-bold text-emerald-600">All quantity received</div>
+                                   </div>
+                               )}
                             </>
                         );
                     })()}
                 </div>
+
+                {/* Finished Receiving / Undo Scrap Buttons */}
+                {( () => {
+                    const batch = receiveModal.batch;
+                    const rawSent = (batch.sentEvents || []).reduce((s:number,e:any)=>s+(e.quantity||0),0) + (batch.quantitySentRaw || batch.quantitySent || 0);
+                    const accSent = (batch.sentEvents || []).reduce((s:number,e:any)=>s+(e.accessorySent||0),0) + (batch.quantitySentAccessory || 0);
+                    const totalSent = rawSent + accSent;
+
+                    const rawRec = (batch.receiveEvents || []).reduce((s:number,e:any)=>s+(e.quantityRaw||0),0) + (batch.receivedQuantity || 0);
+                    const accRec = (batch.receiveEvents || []).reduce((s:number,e:any)=>s+(e.quantityAccessory||0),0);
+                    const totalRec = rawRec + accRec;
+
+                    const existingScrap = (batch.scrapRaw || 0) + (batch.scrapAccessory || 0);
+                    const remaining = Math.max(0, totalSent - totalRec);
+                    const scrapPercentage = totalSent > 0 ? (remaining / totalSent) * 100 : 0;
+
+                    // Already marked as scrap — show Undo button
+                    if (batch.isComplete && existingScrap > 0) {
+                        return (
+                            <div className="px-4 pb-3 pt-2 bg-red-50 border-t border-red-200 flex items-center justify-between gap-3">
+                                <div className="text-xs text-red-600 font-medium">
+                                    {existingScrap.toFixed(1)} kg marked as scrap
+                                </div>
+                                <button
+                                    onClick={() => {
+                                        const newPlan = [...batches];
+                                        const updatedBatch = { ...newPlan[receiveModal.batchIdx] };
+                                        updatedBatch.scrapRaw = 0;
+                                        updatedBatch.scrapAccessory = 0;
+                                        updatedBatch.isComplete = false;
+                                        updatedBatch.status = 'sent';
+                                        newPlan[receiveModal.batchIdx] = updatedBatch;
+                                        onUpdateOrder(order.id, { dyeingPlan: newPlan });
+                                        setReceiveModal({...receiveModal, batch: updatedBatch});
+                                    }}
+                                    className="px-3 py-1.5 bg-white border border-red-300 text-red-600 rounded-lg text-xs font-bold hover:bg-red-100 transition-colors flex items-center gap-1.5 shrink-0"
+                                >
+                                    <X size={13} />
+                                    Undo Scrap
+                                </button>
+                            </div>
+                        );
+                    }
+
+                    // Show Mark as Scrap button only if scrap > 10% and there's remaining quantity
+                    if (scrapPercentage > 10 && remaining > 0) {
+                        return (
+                            <div className="p-4 bg-red-50 border-t border-red-200">
+                                <button 
+                                    onClick={() => {
+                                        const newPlan = [...batches];
+                                        const updatedBatch = { ...newPlan[receiveModal.batchIdx] };
+                                        updatedBatch.scrapRaw = (updatedBatch.scrapRaw || 0) + (Math.max(0, rawSent - rawRec));
+                                        updatedBatch.scrapAccessory = (updatedBatch.scrapAccessory || 0) + (Math.max(0, accSent - accRec));
+                                        updatedBatch.isComplete = true;
+                                        updatedBatch.status = 'received';
+                                        newPlan[receiveModal.batchIdx] = updatedBatch;
+                                        onUpdateOrder(order.id, { dyeingPlan: newPlan });
+                                        setReceiveModal({...receiveModal, batch: updatedBatch});
+                                    }}
+                                    className="w-full py-3 bg-red-500 text-white rounded-lg text-sm font-bold hover:bg-red-600 transition-colors flex items-center justify-center gap-2"
+                                >
+                                    <Check size={16} />
+                                    Mark Remaining as Scrap ({remaining} kg)
+                                </button>
+                            </div>
+                        );
+                    }
+                    return null;
+                })()}
                 
                 <div className="p-4 max-h-[400px] overflow-y-auto space-y-3">
                    {/* Existing Events */}

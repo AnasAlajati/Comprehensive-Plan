@@ -74,8 +74,6 @@ import {
   CalendarRange,
   Truck,
   LayoutList,
-  Link,
-  Link2,
   Edit2,
   Unlink,
   Image as ImageIcon,
@@ -130,102 +128,6 @@ interface DyehouseOption {
   reasons: string[];
   machineLoad: Record<number, { planned: number; sent: number }>; // CHANGED: Breakdown
 }
-
-const BatchLinkingModal = ({
-    isOpen,
-    onClose,
-    sourceBatch,
-    sourceRowId,
-    flatOrders,
-    onConfirm
-}: {
-    isOpen: boolean;
-    onClose: () => void;
-    sourceBatch: DyeingBatch | null;
-    sourceRowId: string;
-    flatOrders: OrderRow[];
-    onConfirm: (targetRowId: string, targetBatchIdx: number, targetBatch: DyeingBatch) => void;
-}) => {
-    if (!isOpen || !sourceBatch) return null;
-
-    const candidates = useMemo(() => {
-        const list: { row: OrderRow, batch: DyeingBatch, batchIdx: number }[] = [];
-        
-        flatOrders.forEach(row => {
-            if (!row.dyeingPlan) return;
-            row.dyeingPlan.forEach((b, idx) => {
-                // Filter:
-                // 1. Same Dyehouse
-                if (b.dyehouse !== sourceBatch.dyehouse) return;
-                
-                // 2. Pending/Sent Status (allow linking if not fully closed?)
-                // Allow linking sent items too if they went together
-                
-                // 3. Not the same batch
-                if (row.id === sourceRowId && b.id === sourceBatch.id) return;
-                if (row.id === sourceRowId && b.id === sourceBatch.id) return; 
-
-                // 4. Same Color (requested)
-                if ((b.color || '').trim().toLowerCase() !== (sourceBatch.color || '').trim().toLowerCase()) return;
-
-                // 5. Not already in same group
-                if (b.batchGroupId && b.batchGroupId === sourceBatch.batchGroupId) return;
-
-                list.push({ row, batch: b, batchIdx: idx });
-            });
-        });
-        return list;
-    }, [flatOrders, sourceBatch, sourceRowId]);
-
-    return (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
-                <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                    <h3 className="font-bold text-slate-800 flex items-center gap-2">
-                        <Link2 className="text-indigo-600" size={18} />
-                        Link Batch to Shared Machine
-                    </h3>
-                    <button onClick={onClose}><X size={20} className="text-slate-400" /></button>
-                </div>
-                <div className="p-4 overflow-y-auto">
-                    <div className="text-sm text-slate-600 mb-4 bg-blue-50 p-3 rounded-lg border border-blue-100">
-                        Select another batch to combine with <strong>{sourceBatch.quantity}kg {sourceBatch.color}</strong> at <strong>{sourceBatch.dyehouse}</strong>.
-                        They will share the same machine capacity and dispatch number.
-                    </div>
-                    
-                    {candidates.length === 0 ? (
-                        <div className="text-center py-8 text-slate-400">
-                            No matching batches found.<br/>(Must be same Dyehouse & Color)
-                        </div>
-                    ) : (
-                        <div className="space-y-2">
-                            {candidates.map((c, i) => (
-                                <button 
-                                    key={i}
-                                    onClick={() => onConfirm(c.row.id, c.batchIdx, c.batch)}
-                                    className="w-full text-left p-3 rounded-lg border border-slate-200 hover:border-indigo-500 hover:bg-indigo-50 transition-all flex justify-between items-center group"
-                                >
-                                    <div>
-                                        <div className="font-bold text-slate-800 text-sm">{c.row.material}</div>
-                                        <div className="text-xs text-slate-500 flex gap-2">
-                                            <span>Qty: {c.batch.quantity}kg</span>
-                                            <span>•</span>
-                                            <span>{c.row.requiredQty}kg Total</span>
-                                            {c.batch.batchGroupId && <span className="text-indigo-600 font-bold">• Group: {c.batch.batchGroupId}</span>}
-                                        </div>
-                                    </div>
-                                    <div className="opacity-0 group-hover:opacity-100 text-indigo-600 bg-white p-2 rounded-full shadow-sm">
-                                        <Link size={16} />
-                                    </div>
-                                </button>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            </div>
-        </div>
-    );
-};
 
 const findAllDyehouseOptions = (
   plan: { quantity: number }[], 
@@ -1281,8 +1183,8 @@ const MemoizedOrderRow = React.memo(({
   }, [machines, selectedCustomerName, row.material, selectedCustomerSeasonId, selectedCustomerSeasonName]);
 
   // Calculate Assigned Machines Summary & Total Capacity
-  const { summary: assignedMachinesSummary, totalCapacity, totalSent, totalReceived, totalDelivered, groupedBatches } = useMemo(() => {
-    if (!row.dyeingPlan || row.dyeingPlan.length === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0, totalDelivered: 0, groupedBatches: new Map() };
+  const { summary: assignedMachinesSummary, totalCapacity, totalSent, totalReceived, totalDelivered, scrapPercentage, scrapQuantity, groupedBatches } = useMemo(() => {
+    if (!row.dyeingPlan || row.dyeingPlan.length === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0, totalDelivered: 0, scrapPercentage: 0, scrapQuantity: 0, groupedBatches: new Map() };
     
     const machineCounts = new Map<number, number>();
     const grouped = new Map<number, any[]>();
@@ -1290,6 +1192,7 @@ const MemoizedOrderRow = React.memo(({
     let sent = 0;
     let received = 0;
     let delivered = 0;
+    let scrap = 0;
 
     row.dyeingPlan.forEach(batch => {
       if (batch.plannedCapacity) {
@@ -1314,6 +1217,9 @@ const MemoizedOrderRow = React.memo(({
       const batchReceivedAccessory = rEvents.reduce((s, e) => s + (Number(e.quantityAccessory) || 0), 0);
       received += batchReceivedRaw + batchReceivedAccessory;
       
+      // Calculate Scrap
+      scrap += (Number(batch.scrapRaw) || 0) + (Number(batch.scrapAccessory) || 0);
+      
       // Calculate Delivered (Net: Delivered - Returned)
       const dEvents = batch.deliveryEvents || [];
       const batchDelivered = dEvents.reduce((s, e) => s + (Number(e.quantityColorDelivered) || 0), 0);
@@ -1330,12 +1236,14 @@ const MemoizedOrderRow = React.memo(({
       delivered += (batchDelivered + batchDeliveredAcc) - (batchReturned + batchReturnedAcc);
     });
 
-    if (machineCounts.size === 0 && total === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0, totalDelivered: 0, groupedBatches: new Map() };
+    if (machineCounts.size === 0 && total === 0) return { summary: '-', totalCapacity: 0, totalSent: 0, totalReceived: 0, totalDelivered: 0, scrapPercentage: 0, scrapQuantity: 0, groupedBatches: new Map() };
 
     const summary = Array.from(machineCounts.entries())
       .map(([capacity, count]) => ({ capacity, count }));
-      
-    return { summary, totalCapacity: total, totalSent: sent, totalReceived: received, totalDelivered: delivered, groupedBatches: grouped };
+    
+    const scrapPercentage = sent > 0 ? ((scrap) / sent) * 100 : 0;
+    
+    return { summary, totalCapacity: total, totalSent: sent, totalReceived: received, totalDelivered: delivered, scrapPercentage, scrapQuantity: scrap, groupedBatches: grouped };
   }, [row.dyeingPlan]);
 
   // Calculate Finished Details (SIMPLIFIED - no logs)
@@ -2720,9 +2628,12 @@ const MemoizedOrderRow = React.memo(({
                     <span className="text-[8px] text-emerald-600 font-bold uppercase tracking-wider mb-0.5">Produced</span>
                     <div className="font-mono text-lg font-bold text-emerald-700">{totalProducedFromLogs > 0 ? totalProducedFromLogs.toLocaleString() : '-'}</div>
                  </div>
-                 <div className="bg-white p-2.5 rounded-xl border border-indigo-100 flex flex-col shadow-sm">
-                    <span className="text-[8px] text-indigo-400 font-bold uppercase tracking-wider mb-0.5">Remaining</span>
-                    <div className="font-mono text-lg font-bold text-indigo-600">{statusInfo?.remaining && statusInfo.remaining > 0 ? statusInfo.remaining : (displayRemaining ?? '-')}</div>
+                 <div className={`p-2.5 rounded-xl border flex flex-col shadow-sm ${scrapPercentage > 10 ? 'bg-red-50 border-red-100' : 'bg-white border-indigo-100'}`}>
+                    <span className={`text-[8px] font-bold uppercase tracking-wider mb-0.5 ${scrapPercentage > 10 ? 'text-red-500' : 'text-indigo-400'}`}>{scrapPercentage > 10 ? 'Scrap %' : 'Remaining'}</span>
+                    <div className={`font-mono text-lg font-bold ${scrapPercentage > 10 ? 'text-red-600' : 'text-indigo-600'}`}>
+                       {scrapPercentage > 10 ? `${scrapPercentage.toFixed(1)}%` : (statusInfo?.remaining && statusInfo.remaining > 0 ? statusInfo.remaining : (displayRemaining ?? '-'))}
+                       {scrapPercentage > 10 && <span className="text-xs text-red-500 ml-1">({scrapQuantity} kg)</span>}
+                    </div>
                  </div>
             </div>
             
@@ -3533,11 +3444,25 @@ const MemoizedOrderRow = React.memo(({
                       )}
                       {visibleColumns['daysAfterFormation'] !== false && (
                       <td className="p-0 text-center align-middle">
-                        {batch.formationDate && (
-                          <span className="text-xs font-bold text-black font-mono">
-                            {Math.floor((new Date().getTime() - new Date(batch.formationDate).getTime()) / (1000 * 60 * 60 * 24))}
-                          </span>
-                        )}
+                        {batch.formationDate && (() => {
+                          const _rev = batch.receiveEvents || [];
+                          const _lastRecvDate = _rev.length > 0
+                            ? _rev.reduce((latest: string, e: any) => (e.date > latest ? e.date : latest), _rev[0].date)
+                            : null;
+                          const _totalSent = (_rev.length > 0 ? 0 : 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0)
+                            + (batch.sentEvents || []).reduce((s: number, e: any) => s + (Number(e.quantity) || 0), 0);
+                          const _totalRecv = _rev.reduce((s: number, e: any) => s + (Number(e.quantityRaw) || 0), 0) + (Number(batch.receivedQuantity) || 0);
+                          const _remPct = _totalSent > 0 ? ((_totalSent - _totalRecv) / _totalSent) * 100 : 100;
+                          const _isReceived = batch.isComplete === true || (Number(batch.scrapRaw) || 0) > 0 || (_totalRecv > 0 && _remPct <= 10);
+                          const _endDate = _isReceived ? (_lastRecvDate || new Date().toISOString().split('T')[0]) : null;
+                          const _startDate = new Date(batch.formationDate);
+                          const _refDate = _endDate ? new Date(_endDate) : new Date();
+                          const _days = Math.floor((_refDate.getTime() - _startDate.getTime()) / (1000 * 60 * 60 * 24));
+                          if (_isReceived) {
+                            return <span className="text-xs font-bold text-teal-600 font-mono leading-tight block">✓ {_days}</span>;
+                          }
+                          return <span className="text-xs font-bold text-black font-mono">{_days}</span>;
+                        })()}
                       </td>
                       )}
                       {visibleColumns['dateSent'] !== false && (
@@ -3560,11 +3485,25 @@ const MemoizedOrderRow = React.memo(({
                       )}
                       {visibleColumns['daysAfterSent'] !== false && (
                       <td className="p-0 text-center align-middle">
-                        {batch.dateSent && (
-                          <span className="text-xs font-bold text-black font-mono">
-                            {Math.floor((new Date().getTime() - new Date(batch.dateSent).getTime()) / (1000 * 60 * 60 * 24))}
-                          </span>
-                        )}
+                        {batch.dateSent && (() => {
+                          const _rev2 = batch.receiveEvents || [];
+                          const _lastRecvDate2 = _rev2.length > 0
+                            ? _rev2.reduce((latest: string, e: any) => (e.date > latest ? e.date : latest), _rev2[0].date)
+                            : null;
+                          const _totalSent2 = (_rev2.length > 0 ? 0 : 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0)
+                            + (batch.sentEvents || []).reduce((s: number, e: any) => s + (Number(e.quantity) || 0), 0);
+                          const _totalRecv2 = _rev2.reduce((s: number, e: any) => s + (Number(e.quantityRaw) || 0), 0) + (Number(batch.receivedQuantity) || 0);
+                          const _remPct2 = _totalSent2 > 0 ? ((_totalSent2 - _totalRecv2) / _totalSent2) * 100 : 100;
+                          const _isReceived2 = batch.isComplete === true || (Number(batch.scrapRaw) || 0) > 0 || (_totalRecv2 > 0 && _remPct2 <= 10);
+                          const _endDate2 = _isReceived2 ? (_lastRecvDate2 || new Date().toISOString().split('T')[0]) : null;
+                          const _startDate2 = new Date(batch.dateSent);
+                          const _refDate2 = _endDate2 ? new Date(_endDate2) : new Date();
+                          const _days2 = Math.floor((_refDate2.getTime() - _startDate2.getTime()) / (1000 * 60 * 60 * 24));
+                          if (_isReceived2) {
+                            return <span className="text-xs font-bold text-teal-600 font-mono leading-tight block">✓ {_days2}</span>;
+                          }
+                          return <span className="text-xs font-bold text-black font-mono">{_days2}</span>;
+                        })()}
                       </td>
                       )}
                       {visibleColumns['dyehouse'] !== false && (
@@ -3827,7 +3766,7 @@ const MemoizedOrderRow = React.memo(({
                         })()}
                       </td>
                       )}
-                      {/* متبقي - Remaining */}
+                      {/* متبقي - Remaining / Scrap */}
                       {visibleColumns['remaining'] !== false && (
                       <td className="p-0 relative">
                         {(() => {
@@ -3838,9 +3777,33 @@ const MemoizedOrderRow = React.memo(({
 
                            const sentRaw = sentEvents.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
                            const sentAcc = sentEvents.reduce((s, e) => s + (Number(e.accessorySent) || 0), 0) + (Number(batch.quantitySentAccessory) || 0);
+                           const totalSent = sentRaw + sentAcc;
                            
-                           const remainingRaw = Math.max(0, sentRaw - recRaw);
-                           const remainingAcc = Math.max(0, sentAcc - recAcc);
+                           const batchScrapRaw = Number(batch.scrapRaw) || 0;
+                           const batchScrapAcc = Number(batch.scrapAccessory) || 0;
+                           const totalScrap = batchScrapRaw + batchScrapAcc;
+                           // Explicitly marked as scrap (user pressed the button)
+                           const hasExplicitScrap = totalScrap > 0 && batch.isComplete;
+                           
+                           const remainingRaw = Math.max(0, sentRaw - recRaw - batchScrapRaw);
+                           const remainingAcc = Math.max(0, sentAcc - recAcc - batchScrapAcc);
+                           const remainingTotal = remainingRaw + remainingAcc;
+                           const remainingPct = totalSent > 0 ? (remainingTotal / totalSent) * 100 : 0;
+                           // Auto-treat remaining as scrap if ≤ 10% and some receiving has been done
+                           const isAutoScrap = !hasExplicitScrap && remainingTotal > 0 && remainingPct <= 10 && (recRaw + recAcc) > 0;
+                           const scrapPct = hasExplicitScrap 
+                             ? (totalSent > 0 ? (totalScrap / totalSent) * 100 : 0)
+                             : remainingPct;
+                           const scrapKg = hasExplicitScrap ? totalScrap : remainingTotal;
+
+                           if (hasExplicitScrap || isAutoScrap) {
+                             return (
+                               <div className="w-full h-full flex flex-col items-center justify-center min-h-[40px] px-1 py-1">
+                                 <span className="font-mono font-bold text-xs text-red-500">{scrapPct.toFixed(1)}%</span>
+                                 <span className="text-[9px] text-red-400">({scrapKg.toFixed(1)} kg)</span>
+                               </div>
+                             );
+                           }
 
                            return (
                               <div className="w-full h-full flex flex-col items-center justify-center min-h-[40px] px-1 py-1">
@@ -3932,7 +3895,41 @@ const MemoizedOrderRow = React.memo(({
                       {visibleColumns['dyehouseStatus'] !== false && (
                       <td className="p-1 min-w-[120px]">
                         <div className="flex flex-col gap-1 w-full group/tracker">
-                            <button
+                            {(() => {
+                              // Auto-infer display status when none is manually saved
+                              const manualStatus = batch.dyehouseStatus || '';
+                              let displayStatus = manualStatus;
+                              let isAutoInferred = false;
+                              if (!displayStatus) {
+                                const _sev = batch.sentEvents || [];
+                                const _sentRaw = _sev.reduce((s: number, e: any) => s + (Number(e.quantity) || 0), 0)
+                                  + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
+                                const _rev = batch.receiveEvents || [];
+                                const _recRaw = _rev.reduce((s: number, e: any) => s + (Number(e.quantityRaw) || 0), 0)
+                                  + (Number(batch.receivedQuantity) || 0);
+                                const _remPct = _sentRaw > 0 ? ((_sentRaw - _recRaw) / _sentRaw) * 100 : 100;
+                                const _isReceived = batch.isComplete === true
+                                  || (Number(batch.scrapRaw) || 0) > 0
+                                  || (_recRaw > 0 && _remPct <= 10);
+                                if (_isReceived) { displayStatus = 'RECEIVED'; isAutoInferred = true; }
+                                else if (_sentRaw > 0) { displayStatus = 'STORE_RAW'; isAutoInferred = true; }
+                              }
+                              const statusLabel =
+                                displayStatus === 'STORE_RAW' ? 'مخزن مصبغة' :
+                                displayStatus === 'DYEING' ? 'صباغة' :
+                                displayStatus === 'FINISHING' ? 'تجهيز' :
+                                displayStatus === 'STORE_FINISHED' ? 'منتهي مخزن' :
+                                displayStatus === 'RECEIVED' ? 'مستلم' :
+                                '- الوضع -';
+                              const colorClass =
+                                displayStatus === 'DYEING' ? 'bg-purple-100 text-purple-700 border-purple-200' :
+                                displayStatus === 'FINISHING' ? 'bg-orange-100 text-orange-700 border-orange-200' :
+                                displayStatus === 'STORE_FINISHED' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' :
+                                displayStatus === 'RECEIVED' ? 'bg-blue-100 text-blue-700 border-blue-200' :
+                                displayStatus === 'STORE_RAW' ? `${isAutoInferred ? 'bg-slate-50' : 'bg-slate-100'} text-slate-700 border-slate-200` :
+                                'bg-white text-slate-400 border-slate-200';
+                              return (
+                              <button
                                 onClick={() => {
                                     if (!canEditColors) {
                                         alert('يتطلب صلاحية مدير ألوان المصبغة');
@@ -3948,26 +3945,18 @@ const MemoizedOrderRow = React.memo(({
                                 disabled={!canEditColors}
                                 className={`w-full text-[10px] py-1 px-1 rounded border outline-none font-bold text-center flex items-center justify-center gap-1 transition-all ${
                                   canEditColors ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
-                                } ${
-                                    batch.dyehouseStatus === 'DYEING' ? 'bg-purple-100 text-purple-700 border-purple-200' :
-                                    batch.dyehouseStatus === 'FINISHING' ? 'bg-orange-100 text-orange-700 border-orange-200' :
-                                    batch.dyehouseStatus === 'STORE_FINISHED' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' :
-                                    batch.dyehouseStatus === 'RECEIVED' ? 'bg-blue-100 text-blue-700 border-blue-200' :
-                                    batch.dyehouseStatus === 'STORE_RAW' ? 'bg-slate-100 text-slate-700 border-slate-200' :
-                                    'bg-white text-slate-400 border-slate-200'
-                                }`}
-                            >
-                                <span>
-                                    {batch.dyehouseStatus === 'STORE_RAW' ? 'مخزن مصبغة' :
-                                     batch.dyehouseStatus === 'DYEING' ? 'صباغة' :
-                                     batch.dyehouseStatus === 'FINISHING' ? 'تجهيز' :
-                                     batch.dyehouseStatus === 'STORE_FINISHED' ? 'منتهي مخزن' :
-                                     batch.dyehouseStatus === 'RECEIVED' ? 'مستلم' :
-                                     '- الوضع -'}
-                                </span>
-                                <div className="w-1.5 h-1.5 rounded-full bg-current opacity-50 animate-pulse ml-0.5"></div>
-                            </button>
-                            
+                                } ${colorClass} ${isAutoInferred ? 'opacity-70' : ''}`}
+                                title={isAutoInferred ? 'تم الاستنتاج تلقائياً – اضغط لتعيين يدوي' : undefined}
+                              >
+                                <span>{statusLabel}</span>
+                                {isAutoInferred
+                                  ? <span className="text-[8px] opacity-60 font-normal">auto</span>
+                                  : <div className="w-1.5 h-1.5 rounded-full bg-current opacity-50 animate-pulse ml-0.5"></div>
+                                }
+                              </button>
+                              );
+                            })()}
+
                             {/* Date Display (Click to open modal too) */}
                             {batch.dyehouseStatusDate && (
                                 <div 
@@ -4015,38 +4004,6 @@ const MemoizedOrderRow = React.memo(({
                       )}
                       <td className="p-0 h-full">
                         <div className="flex items-center justify-center h-full gap-0.5">
-                            {/* Link Button */}
-                            {batch.batchGroupId ? (
-                                <div className="flex items-center gap-0.5 relative group/link h-full">
-                                    <span 
-                                        className="text-[9px] font-bold text-white bg-indigo-500 px-1 py-0.5 rounded cursor-help shadow-sm"
-                                        title={`Linked Group: ${batch.batchGroupId}`}
-                                    >
-                                        G
-                                    </span>
-                                    <button
-                                        onClick={() => unlinkBatch(row.id, idx)}
-                                        className="p-1 text-slate-300 hover:text-amber-500 opacity-0 group-hover/link:opacity-100 transition-opacity absolute top-0 -left-6 bg-white shadow-md border rounded-full"
-                                        title="Unlink from group"
-                                    >
-                                        <Link2 size={10} className="off" />
-                                    </button>
-                                </div>
-                            ) : (
-                                <button
-                                    onClick={() => setBatchLinkModal({
-                                        isOpen: true,
-                                        sourceRowId: row.id,
-                                        sourceBatchIdx: idx,
-                                        sourceBatch: batch
-                                    })}
-                                    className="p-1 text-slate-300 hover:text-indigo-500 opacity-0 group-hover/batch:opacity-100 transition-opacity"
-                                    title="Link to shared machine"
-                                >
-                                    <Link2 size={12} />
-                                </button>
-                            )}
-
                             <button
                             onClick={() => {
                                 if (!canEditColors) {
@@ -4151,8 +4108,19 @@ const MemoizedOrderRow = React.memo(({
                             updatePlanWithAccessories(newPlan);
                           };
 
-                          const accSentDays = acc.dateSent ? Math.floor((new Date().getTime() - new Date(acc.dateSent).getTime()) / (1000 * 3600 * 24)) : null;
-                          const accFormaDays = acc.formationDate ? Math.floor((new Date().getTime() - new Date(acc.formationDate).getTime()) / (1000 * 3600 * 24)) : null;
+                          // For accessories, freeze days when parent batch is received
+                          const _accRev = batch.receiveEvents || [];
+                          const _accLastRecv = _accRev.length > 0
+                            ? _accRev.reduce((latest: string, e: any) => (e.date > latest ? e.date : latest), _accRev[0].date)
+                            : null;
+                          const _accTotalSent = (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0)
+                            + (batch.sentEvents || []).reduce((s: number, e: any) => s + (Number(e.quantity) || 0), 0);
+                          const _accTotalRecv = _accRev.reduce((s: number, e: any) => s + (Number(e.quantityRaw) || 0), 0) + (Number(batch.receivedQuantity) || 0);
+                          const _accRemPct = _accTotalSent > 0 ? ((_accTotalSent - _accTotalRecv) / _accTotalSent) * 100 : 100;
+                          const _accIsReceived = batch.isComplete === true || (Number(batch.scrapRaw) || 0) > 0 || (_accTotalRecv > 0 && _accRemPct <= 10);
+                          const _accEndDate = _accIsReceived ? new Date(_accLastRecv || new Date().toISOString().split('T')[0]) : new Date();
+                          const accSentDays = acc.dateSent ? Math.floor((_accEndDate.getTime() - new Date(acc.dateSent).getTime()) / (1000 * 3600 * 24)) : null;
+                          const accFormaDays = acc.formationDate ? Math.floor((_accEndDate.getTime() - new Date(acc.formationDate).getTime()) / (1000 * 3600 * 24)) : null;
 
                           elements.push(
                             <tr key={`acc-${batch.id || idx}-${acc.id || accIdx}`} className="bg-white hover:bg-slate-50 transition-colors group/acc text-xs">
@@ -4228,7 +4196,9 @@ const MemoizedOrderRow = React.memo(({
                               {visibleColumns['daysAfterFormation'] !== false && (
                                 <td className="p-0 border-r border-slate-100 text-center">
                                     {accFormaDays !== null && (
-                                        <span className="font-mono text-[10px] text-amber-600 font-bold">{accFormaDays}</span>
+                                        <span className={`font-mono text-xs font-bold ${_accIsReceived ? 'text-teal-600' : 'text-amber-600'}`}>
+                                          {_accIsReceived ? `✓ ${accFormaDays}` : accFormaDays}
+                                        </span>
                                     )}
                                 </td>
                               )}
@@ -4255,7 +4225,9 @@ const MemoizedOrderRow = React.memo(({
                               {visibleColumns['daysAfterSent'] !== false && (
                                 <td className="p-0 border-r border-slate-100 text-center">
                                     {accSentDays !== null && (
-                                        <span className="font-mono text-[10px] text-indigo-600 font-bold">{accSentDays}</span>
+                                        <span className={`font-mono text-xs font-bold ${_accIsReceived ? 'text-teal-600' : 'text-indigo-600'}`}>
+                                          {_accIsReceived ? `✓ ${accSentDays}` : accSentDays}
+                                        </span>
                                     )}
                                 </td>
                               )}
@@ -4930,14 +4902,6 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     batchIdx: number;
     batch: DyeingBatch | null;
   }>({ isOpen: false, orderId: '', batchIdx: -1, batch: null });
-
-  // Batch Linking Modal State
-  const [batchLinkModal, setBatchLinkModal] = useState<{
-      isOpen: boolean;
-      sourceRowId: string;
-      sourceBatchIdx: number;
-      sourceBatch: DyeingBatch | null;
-  }>({ isOpen: false, sourceRowId: '', sourceBatchIdx: -1, sourceBatch: null });
 
   // Production History Modal State
   const [selectedOrderForHistory, setSelectedOrderForHistory] = useState<OrderRow | null>(null);
@@ -5952,80 +5916,6 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             ...auditInfo
         });
     }
-  };
-
-  // --- Batch Linking Logic ---
-  const confirmBatchLink = async (targetRowId: string, targetBatchIdx: number, targetBatch: DyeingBatch) => {
-    // 1. Get Source Info
-    const { sourceRowId, sourceBatchIdx, sourceBatch } = batchLinkModal;
-    if (!sourceBatch) return;
-
-    // 2. Determine Group ID
-    let groupId = targetBatch.batchGroupId; // Prefer target's existing group
-    if (!groupId) {
-        groupId = `G-${Math.floor(Math.random() * 10000)}`;
-    }
-
-    // 3. Find Rows
-    const sourceRow = flatOrders.find(o => o.id === sourceRowId);
-    const targetRow = flatOrders.find(o => o.id === targetRowId);
-
-    if (!sourceRow || !targetRow) return;
-
-    // 4. Update Source
-    const newSourcePlan = [...(sourceRow.dyeingPlan || [])];
-    if (newSourcePlan[sourceBatchIdx]) {
-        newSourcePlan[sourceBatchIdx] = { 
-            ...newSourcePlan[sourceBatchIdx], 
-            batchGroupId: groupId,
-            // Sync dispatch if target has one
-            dispatchNumber: targetBatch.dispatchNumber || newSourcePlan[sourceBatchIdx].dispatchNumber 
-        };
-    }
-
-    // 5. Update Target
-    const newTargetPlan = [...(targetRow.dyeingPlan || [])];
-    if (newTargetPlan[targetBatchIdx]) {
-        newTargetPlan[targetBatchIdx] = { 
-            ...newTargetPlan[targetBatchIdx], 
-            batchGroupId: groupId,
-            // Sync dispatch if source has one
-            dispatchNumber: sourceBatch.dispatchNumber || newTargetPlan[targetBatchIdx].dispatchNumber
-        };
-    }
-    
-    // 6. Firestore Updates
-    try {
-        if (sourceRow.refPath) {
-            await updateDoc(doc(db, sourceRow.refPath), { dyeingPlan: newSourcePlan });
-        }
-        if (targetRow.refPath) {
-            await updateDoc(doc(db, targetRow.refPath), { dyeingPlan: newTargetPlan });
-        }
-        setBatchLinkModal({ ...batchLinkModal, isOpen: false });
-    } catch (err) {
-        console.error("Error linking batches:", err);
-        alert("Error linking batches");
-    }
-  };
-
-  const unlinkBatch = async (rowId: string, batchIdx: number) => {
-      const row = flatOrders.find(o => o.id === rowId);
-      if (!row || !row.dyeingPlan) return;
-      
-      if (!confirm('Are you sure you want to unlink this batch?')) return;
-
-      const newPlan = [...row.dyeingPlan];
-      // Simply remove groupId
-      const oldGroupId = newPlan[batchIdx].batchGroupId;
-      delete newPlan[batchIdx].batchGroupId;
-
-      if (row.refPath) {
-          await updateDoc(doc(db, row.refPath), { dyeingPlan: newPlan });
-      } else {
-        // Fallback for current customer legacy
-        handleUpdateOrder(rowId, { dyeingPlan: newPlan });
-      }
   };
 
   // === EXPORT/IMPORT REMOVED ===
@@ -9309,8 +9199,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                     اضافة استلام
                   </button>
                   
-                  {/* Mark Complete Button */}
-                  {!receiveModal.batch?.isComplete && (
+                  {/* Mark Complete Button / Undo Scrap */}
+                  {!receiveModal.batch?.isComplete ? (
                     <button
                       onClick={() => {
                         const currentOrder = flatOrders.find(o => o.id === receiveModal.orderId);
@@ -9341,6 +9231,27 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                     >
                       <CheckCircle2 size={16} />
                       اكتمال واحتساب الفاقد
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        const currentOrder = flatOrders.find(o => o.id === receiveModal.orderId);
+                        if (!currentOrder) return;
+                        const newPlan = [...(currentOrder.dyeingPlan || [])];
+                        const batch = newPlan[receiveModal.batchIdx];
+                        if (batch) {
+                          batch.isComplete = false;
+                          batch.scrapRaw = 0;
+                          batch.scrapAccessory = 0;
+                          batch.status = 'sent';
+                          handleUpdateOrder(receiveModal.orderId, { dyeingPlan: newPlan });
+                          setReceiveModal({ ...receiveModal, batch: { ...batch } });
+                        }
+                      }}
+                      className="px-4 py-2 bg-white border border-red-300 text-red-600 hover:bg-red-50 font-medium rounded-lg flex items-center gap-2"
+                    >
+                      <X size={16} />
+                      الغاء الهالك
                     </button>
                   )}
                 </div>
@@ -9791,16 +9702,6 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             selectedCustomerName={selectedCustomer?.name || ''}
           />
         )}
-
-        {/* Batch Linking Modal */}
-        <BatchLinkingModal 
-            isOpen={batchLinkModal.isOpen}
-            onClose={() => setBatchLinkModal({ ...batchLinkModal, isOpen: false })}
-            sourceRowId={batchLinkModal.sourceRowId}
-            sourceBatch={batchLinkModal.sourceBatch}
-            flatOrders={flatOrders}
-            onConfirm={confirmBatchLink}
-        />
 
         {/* Dyehouse Tracking Modal - Internal Status */}
         {dyehouseTrackingModal.isOpen && dyehouseTrackingModal.batch && (

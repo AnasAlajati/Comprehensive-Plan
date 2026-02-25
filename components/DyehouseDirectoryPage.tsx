@@ -19,6 +19,7 @@ import { DyehouseBalanceReport } from './DyehouseBalanceReport';
 import { DyehouseActiveWorkPage } from './DyehouseActiveWorkPage';
 import { DyehouseLateWorkPage } from './DyehouseLateWorkPage';
 import { DyehouseDailyMovement } from './DyehouseDailyMovement';
+import { DyehouseHistoryPage } from './DyehouseHistoryPage';
 import { 
   Plus, 
   Trash2, 
@@ -35,7 +36,8 @@ import {
   FileBarChart,
   Droplets,
   AlertTriangle,
-  Activity
+  Activity,
+  BarChart2
 } from 'lucide-react';
 
 interface DyehouseDirectoryPageProps {
@@ -56,7 +58,7 @@ export const DyehouseDirectoryPage: React.FC<DyehouseDirectoryPageProps> = ({ us
   const [editForm, setEditForm] = useState<Dyehouse | null>(null);
   
   // New State
-  const [viewMode, setViewMode] = useState<'directory' | 'global' | 'balance' | 'active-work' | 'late-work' | 'daily-movement'>('directory');
+  const [viewMode, setViewMode] = useState<'directory' | 'global' | 'balance' | 'active-work' | 'late-work' | 'daily-movement' | 'history'>('directory');
   const [selectedMachine, setSelectedMachine] = useState<{ dyehouse: string, capacity: number } | null>(null);
   const [machineCounts, setMachineCounts] = useState<Record<string, { sent: number, planned: number }>>({});
   const [dyehouseStock, setDyehouseStock] = useState<Record<string, number>>({});
@@ -323,6 +325,15 @@ export const DyehouseDirectoryPage: React.FC<DyehouseDirectoryPageProps> = ({ us
               <Activity size={16} />
               Daily Movement
             </button>
+            {userRole === 'admin' && (
+              <button 
+                onClick={() => setViewMode('history')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'history' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                <BarChart2 size={16} />
+                History
+              </button>
+            )}
           </div>
 
           {viewMode === 'directory' && (
@@ -373,13 +384,15 @@ export const DyehouseDirectoryPage: React.FC<DyehouseDirectoryPageProps> = ({ us
         {viewMode === 'global' ? (
           <DyehouseGlobalSchedule />
         ) : viewMode === 'balance' ? (
-          <DyehouseBalanceReport />
+          <DyehouseBalanceReport userRole={userRole} />
         ) : viewMode === 'active-work' ? (
           <DyehouseActiveWorkPage userRole={userRole} />
         ) : viewMode === 'late-work' ? (
           <DyehouseLateWorkPage />
         ) : viewMode === 'daily-movement' ? (
           <DyehouseDailyMovement />
+        ) : viewMode === 'history' ? (
+          <DyehouseHistoryPage userRole={userRole} />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {allDyehouses.map((dyehouse) => (
