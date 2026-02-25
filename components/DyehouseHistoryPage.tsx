@@ -87,6 +87,7 @@ export const DyehouseHistoryPage: React.FC<Props> = ({ userRole }) => {
   const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set());
   const [showOutliersOnly, setShowOutliersOnly] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'monthly' | 'dyehouses' | 'outliers'>('overview');
+  const [calcModalData, setCalcModalData] = useState<{ label: string; batches: ProcessedBatch[]; dyehouse: string } | null>(null);
 
   // Load all orders via collectionGroup
   useEffect(() => {
@@ -356,7 +357,11 @@ export const DyehouseHistoryPage: React.FC<Props> = ({ userRole }) => {
       if (b.isComplete && b.daysInDyehouse !== null) {
         const lastRecvDate = b.receiveEvents.map((e) => e.date).filter(Boolean).sort().at(-1);
         const mk = getMonthKey(lastRecvDate) || getMonthKey(b.dateSent);
-        if (mk) ensure(dh, mk).completedDays.push(b.daysInDyehouse!);
+        if (mk) {
+          const s = ensure(dh, mk);
+          s.completedDays.push(b.daysInDyehouse!);
+          s.batches.push(b);
+        }
       }
     });
 
@@ -994,10 +999,20 @@ export const DyehouseHistoryPage: React.FC<Props> = ({ userRole }) => {
                               </td>
                               <td className="px-4 py-2.5 font-mono text-indigo-600">
                                 {ms.avgDays !== null ? (
-                                  <span className="flex items-center justify-end gap-1">
+                                  <button
+                                    onClick={() =>
+                                      setCalcModalData({
+                                        label: `${dh} - ${ms.label}`,
+                                        batches: ms.batches.filter((b) => b.isComplete),
+                                        dyehouse: dh,
+                                      })
+                                    }
+                                    className="flex items-center justify-end gap-1 cursor-pointer hover:underline"
+                                    title="Click to see calculation breakdown"
+                                  >
                                     {ms.avgDays.toFixed(1)}d
                                     <span className="text-[10px] text-slate-400">({ms.completedDays.length})</span>
-                                  </span>
+                                  </button>
                                 ) : '—'}
                               </td>
                             </tr>
@@ -1109,6 +1124,140 @@ export const DyehouseHistoryPage: React.FC<Props> = ({ userRole }) => {
                 </table>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ════════════ CALCULATION BREAKDOWN MODAL ════════════ */}
+        {calcModalData && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto flex flex-col">
+              {/* Header */}
+              <div className="flex items-start justify-between mb-4 p-6 border-b border-slate-200 sticky top-0 bg-white">
+                <div>
+                  <h3 className="font-bold text-slate-800 text-lg">Average Days Calculation</h3>
+                  <p className="text-xs text-slate-500 mt-1">{calcModalData.label}</p>
+                </div>
+                <button
+                  onClick={() => setCalcModalData(null)}
+                  className="text-slate-400 hover:text-slate-600 text-xl leading-none"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 overflow-y-auto px-6">
+                {/* Summary stats */}
+                <div className="mb-6">
+                  <div className="grid grid-cols-4 gap-3 mb-4">
+                    {(() => {
+                      const days = calcModalData.batches
+                        .filter((b) => b.daysInDyehouse !== null)
+                        .map((b) => b.daysInDyehouse!);
+                      const avgDays = days.length ? days.reduce((a, b) => a + b, 0) / days.length : 0;
+                      const sortedDays = [...days].sort((a, b) => a - b);
+                      const median =
+                        days.length % 2 === 0
+                          ? (sortedDays[Math.floor(days.length / 2) - 1] + sortedDays[Math.floor(days.length / 2)]) / 2
+                          : sortedDays[Math.floor(days.length / 2)];
+                      return (
+                        <>
+                          <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3">
+                            <div className="text-xs text-indigo-600 font-semibold">Average</div>
+                            <div className="font-bold text-indigo-700 text-lg">{avgDays.toFixed(2)}d</div>
+                          </div>
+                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                            <div className="text-xs text-blue-600 font-semibold">Minimum</div>
+                            <div className="font-bold text-blue-700 text-lg">{Math.min(...days)}d</div>
+                          </div>
+                          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                            <div className="text-xs text-emerald-600 font-semibold">Median</div>
+                            <div className="font-bold text-emerald-700 text-lg">{median.toFixed(1)}d</div>
+                          </div>
+                          <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
+                            <div className="text-xs text-orange-600 font-semibold">Maximum</div>
+                            <div className="font-bold text-orange-700 text-lg">{Math.max(...days)}d</div>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Calculation formula */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+                    <p className="text-xs text-slate-600 font-semibold mb-2">Calculation Formula:</p>
+                    {(() => {
+                      const completedBatches = calcModalData.batches.filter((b) => b.isComplete && b.daysInDyehouse !== null);
+                      const days = completedBatches.map((b) => b.daysInDyehouse!);
+                      const sum = days.reduce((a, b) => a + b, 0);
+                      return (
+                        <div className="text-sm font-mono text-slate-700 space-y-2">
+                          <div>Sum: {days.join(' + ')} = {sum} days</div>
+                          <div>÷ Count: {days.length} batches</div>
+                          <div className="border-t border-slate-300 pt-2 font-bold text-indigo-700">
+                            = {(sum / days.length).toFixed(2)} days (displayed as {(sum / days.length).toFixed(1)}d)
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                {/* Batches table */}
+                <div className="mb-6">
+                  <h4 className="text-sm font-bold text-slate-800 mb-3">Completed Batches Details</h4>
+                  <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-slate-100 text-slate-600 border-b border-slate-200">
+                          <th className="px-3 py-2 text-left font-semibold">Customer</th>
+                          <th className="px-3 py-2 text-left font-semibold">Fabric</th>
+                          <th className="px-3 py-2 text-left font-semibold">Color</th>
+                          <th className="px-3 py-2 text-left font-semibold">Tasheekh Date</th>
+                          <th className="px-3 py-2 text-left font-semibold">Received Date</th>
+                          <th className="px-3 py-2 text-right font-semibold">Days</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {calcModalData.batches
+                          .filter((b) => b.isComplete)
+                          .sort((a, b) => (b.daysInDyehouse ?? 0) - (a.daysInDyehouse ?? 0))
+                          .map((batch) => {
+                            const lastReceiveDate =
+                              batch.receiveEvents.length > 0
+                                ? batch.receiveEvents[batch.receiveEvents.length - 1].date
+                                : null;
+                            return (
+                              <tr key={batch.id} className="hover:bg-slate-50">
+                                <td className="px-3 py-2 text-slate-700 font-medium">{batch.customerName || '—'}</td>
+                                <td className="px-3 py-2 text-slate-600">{batch.fabricName || '—'}</td>
+                                <td className="px-3 py-2 text-slate-600 font-semibold">{batch.color || '—'}</td>
+                                <td className="px-3 py-2 text-slate-500 font-mono">{batch.dateSent || '—'}</td>
+                                <td className="px-3 py-2 text-slate-500 font-mono">{lastReceiveDate || '—'}</td>
+                                <td className="px-3 py-2 text-right">
+                                  <span className="bg-indigo-100 text-indigo-700 font-bold px-2 py-1 rounded-md">
+                                    {batch.daysInDyehouse ?? '—'}d
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="border-t border-slate-200 p-6 bg-slate-50 flex justify-end">
+                <button
+                  onClick={() => setCalcModalData(null)}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-6 rounded-lg transition"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
