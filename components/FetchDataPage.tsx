@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { writeBatch, doc, getDoc, onSnapshot, collection, setDoc } from 'firebase/firestore';
+import { writeBatch, doc, getDoc, onSnapshot, collection, setDoc, collectionGroup, addDoc, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
 import { parseFabricName } from '../services/data';
@@ -7,7 +7,7 @@ import { PlanItem, MachineStatus, CustomerOrder, MachineRow, FabricDefinition } 
 import { LinkOrderModal } from './LinkOrderModal';
 import { toJpeg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
-import { CheckCircle, Send, Link, Truck, Layout, Factory, X, Check, Sparkles, Edit, ArrowRight, History, Plus, Search, Calendar, FileText, Book, Trash2 } from 'lucide-react';
+import { CheckCircle, Send, Link, Truck, Layout, Factory, X, Check, Sparkles, Edit, ArrowRight, History, Plus, Search, Calendar, FileText, Book, Trash2, AlertTriangle, ChevronDown, CheckCircle2, UserPlus, PlusCircle, User } from 'lucide-react';
 import { ProfessionalDatePicker } from './ProfessionalDatePicker';
 import { ExternalProductionSheet } from './ExternalProductionSheet'; // New Component - Force Refresh
 import { StandaloneFabricEditor } from './FabricEditor';
@@ -238,6 +238,7 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
       <input
         id={id}
         type="text"
+        autoComplete="off"
         value={inputValue}
         onChange={handleInputChange}
         onFocus={() => {
@@ -299,7 +300,7 @@ interface FetchDataPageProps {
   selectedDate?: string;
   machines?: any[];
   onNavigateToPlanning?: (mode: 'INTERNAL' | 'EXTERNAL') => void;
-  onNavigateToOrder?: (client: string, fabric?: string) => void;
+  onNavigateToOrder?: (client: string, fabric?: string, highlightAddOrder?: boolean) => void;
   userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | null;
 }
 
@@ -312,7 +313,9 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 }) => {
   // Viewer role is read-only
   const isReadOnly = userRole === 'viewer';
-  
+  const isAdmin = userRole === 'admin';
+
+  const [debugModal, setDebugModal] = useState<{ log: any } | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>(propSelectedDate || new Date().toISOString().split('T')[0]);
   const [reportDates, setReportDates] = useState<string[]>([]);
   const [activeDay, setActiveDay] = useState<string>('');
@@ -374,6 +377,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   }, [allLogs]);
   const [fabrics, setFabrics] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
+  const [scrapReasons, setScrapReasons] = useState<Array<{id: string; name: string}>>([]);
+  const [workers, setWorkers] = useState<Array<{id: string; name: string}>>([]);
 
   // Derive client+season options from the loaded clients list
   const clientSeasonOptions = React.useMemo(() => {
@@ -447,6 +452,10 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [hallScrap, setHallScrap] = useState<number>(0);
   const [labScrap, setLabScrap] = useState<number>(0);
   const [showExternalSheet, setShowExternalSheet] = useState(false); // Toggle for External Sheet
+  const [reasonModal, setReasonModal] = useState<{ isOpen: boolean; newName: string }>({ isOpen: false, newName: '' });
+  const [isAddingWorker, setIsAddingWorker] = useState(false);
+  const [newWorkerName, setNewWorkerName] = useState('');
+  const [workerSelectionModal, setWorkerSelectionModal] = useState<{ isOpen: boolean; machineId: string; logId: string; selectedWorker: string }>({ isOpen: false, machineId: '', logId: '', selectedWorker: '' });
   
   // Centralized fabric save handler using DataService.upsertFabric
   const handleFabricSaved = async (savedFabric: FabricDefinition) => {
@@ -509,6 +518,39 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     loadFabricsAndClients();
     handleFetchLogs(selectedDate);
   }, [selectedDate]);
+
+  // Load scrap reasons and workers on mount with REAL-TIME listener for workers
+  useEffect(() => {
+    // One-time load for scrap reasons
+    const loadScrapReasons = async () => {
+      try {
+        const reasons = await DataService.getScrapReasons();
+        setScrapReasons(reasons);
+      } catch (error) {
+        console.error('Error loading scrap reasons:', error);
+      }
+    };
+    
+    // Real-time listener for workers (more efficient and responsive)
+    const unsubscribeWorkers = onSnapshot(
+      collection(db, 'workers'),
+      (snapshot) => {
+        const workersList = snapshot.docs.map(doc => ({ 
+          id: doc.id, 
+          name: doc.data().name 
+        }));
+        setWorkers(workersList);
+      },
+      (error) => {
+        console.error('Error listening to workers:', error);
+      }
+    );
+    
+    loadScrapReasons();
+    
+    // Cleanup subscription on unmount
+    return () => unsubscribeWorkers();
+  }, []);
 
   // Filter logs when searchTerm or allLogs changes
   const filteredLogs = useMemo(() => {
@@ -711,6 +753,19 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   };
 
   const [customerOrders, setCustomerOrders] = useState<any[]>([]);
+  const [flatOrders, setFlatOrders] = useState<any[]>([]);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collectionGroup(db, 'orders'), (snapshot) => {
+      const orders = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data(),
+        customerId: d.ref.parent.parent?.id
+      }));
+      setFlatOrders(orders);
+    });
+    return () => unsub();
+  }, []);
 
   const loadFabricsAndClients = async () => {
     // 1. Load from Local Storage (Cache) first for offline support
@@ -949,6 +1004,90 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     } catch (error: any) {
       showMessage('❌ Error: ' + error.message, true);
       handleFetchLogs(selectedDate);
+    }
+  };
+
+  // Handle reason selection - check if it's "اهمال عامل" and open worker modal if needed
+  const handleReasonSelect = (val: string, machineId: string, logId: string) => {
+    const log = filteredLogs.find(l => l.machineId === machineId && l.id === logId);
+    if (!log) return;
+    
+    // If selecting "اهمال عامل", open worker selection modal instead of directly updating
+    if (val === 'اهمال عامل') {
+      setWorkerSelectionModal({
+        isOpen: true,
+        machineId,
+        logId,
+        selectedWorker: log.workerResponsible || ''
+      });
+    } else {
+      // For other reasons, directly update the log
+      if (log.reason !== val) {
+        handleUpdateLog(machineId, logId, 'reason', val);
+      }
+    }
+  };
+
+  // Handle worker selection when "اهمال عامل" is selected
+  const handleWorkerSelection = async (machineId: string, logId: string, workerName: string) => {
+    try {
+      const log = filteredLogs.find(l => l.machineId === machineId && l.id === logId);
+      if (!log) return;
+
+      // Update both reason and workerResponsible
+      await handleUpdateLog(machineId, logId, 'reason', 'اهمال عامل');
+      await handleUpdateLog(machineId, logId, 'workerResponsible', workerName);
+      
+      setWorkerSelectionModal({ isOpen: false, machineId: '', logId: '', selectedWorker: '' });
+      showMessage('✅ Worker linked to scrap');
+    } catch (error: any) {
+      showMessage('❌ Error: ' + error.message, true);
+    }
+  };
+
+  // Handle adding a new scrap reason
+  const handleAddScrapReason = async () => {
+    if (!reasonModal.newName.trim()) {
+      showMessage('❌ Please enter a reason name', true);
+      return;
+    }
+    try {
+      const id = await DataService.addScrapReason(reasonModal.newName);
+      const newReason = { id, name: reasonModal.newName };
+      setScrapReasons([...scrapReasons, newReason]);
+      setReasonModal({ isOpen: false, newName: '' });
+      showMessage('✅ Scrap reason added');
+    } catch (error: any) {
+      showMessage('❌ Error: ' + error.message, true);
+    }
+  };
+
+  // Handle adding a new worker - INLINE with real-time listeners
+  const handleAddWorker = async () => {
+    if (!newWorkerName.trim()) {
+      showMessage('❌ Please enter a worker name', true);
+      return;
+    }
+    
+    // Check for duplicates
+    if (workers.some(w => w.name.toLowerCase() === newWorkerName.toLowerCase())) {
+      showMessage('❌ This worker already exists', true);
+      return;
+    }
+
+    try {
+      // Just write to Firestore - the real-time listener will handle the UI update automatically
+      await addDoc(collection(db, 'workers'), {
+        name: newWorkerName.trim(),
+        createdAt: new Date().toISOString()
+      });
+      
+      // Close inline input and clear
+      setIsAddingWorker(false);
+      setNewWorkerName('');
+      showMessage('✅ Worker added successfully');
+    } catch (error: any) {
+      showMessage('❌ Error saving worker: ' + error.message, true);
     }
   };
 
@@ -2329,6 +2468,46 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             </>
                          )}
                       </button>
+                      {(() => {
+                        const sheet = clients.find((c: any) => c.name === log.client);
+                        const clientFlatOrders = sheet ? flatOrders.filter((o: any) => o.customerId === sheet.id) : [];
+                        const seasonMatchedOrders = log.clientSeason
+                          ? clientFlatOrders.filter((o: any) => o.seasonId === log.clientSeason || o.seasonName === log.clientSeason)
+                          : clientFlatOrders;
+                        const isLinked = !!(log.client && log.fabric && seasonMatchedOrders.some((o: any) => o.material === log.fabric));
+                        return (
+                          <div className="flex-1 flex items-center gap-1 relative">
+                            <button
+                              onClick={() => {
+                                if (isLinked) {
+                                  onNavigateToOrder?.(log.client, log.fabric);
+                                } else {
+                                  onNavigateToOrder?.(log.client, undefined, true);
+                                }
+                              }}
+                              title={isLinked ? `Linked to order: ${log.client} / ${log.fabric}` : 'Not linked to any order — click to add'}
+                              className={`flex-1 py-1.5 rounded-md text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 border ${
+                                !(log.client && log.fabric)
+                                  ? 'bg-slate-50 text-slate-300 border-slate-200 cursor-not-allowed'
+                                  : isLinked
+                                  ? 'bg-green-50 hover:bg-green-100 text-green-700 border-green-300'
+                                  : 'bg-orange-50 hover:bg-orange-100 text-orange-600 border-orange-300'
+                              }`}
+                              disabled={!(log.client && log.fabric)}
+                            >
+                              <Link size={12} />
+                              {isLinked ? 'Linked' : 'No Order'}
+                            </button>
+                            {isAdmin && log.client && log.fabric && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setDebugModal({ log }); }}
+                                className="w-4 h-4 rounded-full bg-slate-200 hover:bg-indigo-300 text-slate-500 hover:text-indigo-700 text-[9px] font-bold flex items-center justify-center flex-shrink-0"
+                                title="Debug: order link trace"
+                              >ⓘ</button>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                 );
@@ -2612,22 +2791,41 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         </td>
 
                         {/* Reason */}
-                        <td className="border border-slate-200 p-0 hidden md:table-cell">
-                          <input
-                            id={getCellId(log.machineId, 'reason')}
-                            type="text"
-                            defaultValue={log.reason || ''}
-                            data-force-nav="true"
-                            onFocus={() => {
-                              handleCellFocus(idx, 'reason');
-                              window.dispatchEvent(new Event('searchdropdown:forceclose'));
-                            }}
-                            onBlur={(e) => handleBlur(e, log.machineId, log.id, 'reason')}
-                            onKeyDown={(e) => handleKeyDown(e, idx, 'reason')}
-                            disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
-                            placeholder="السبب..."
-                            className="w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                          />
+                        <td className="border border-slate-200 p-0 hidden md:table-cell relative">
+                          <div className="flex items-center h-full w-full">
+                            <select
+                              id={getCellId(log.machineId, 'reason')}
+                              value={log.reason || ''}
+                              data-force-nav="true"
+                              onFocus={() => {
+                                handleCellFocus(idx, 'reason');
+                                window.dispatchEvent(new Event('searchdropdown:forceclose'));
+                              }}
+                              onChange={(e) => handleReasonSelect(e.target.value, log.machineId, log.id)}
+                              onKeyDown={(e) => handleKeyDown(e, idx, 'reason')}
+                              disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
+                              className={`flex-1 h-full p-2 bg-transparent focus:bg-blue-50 focus:outline-none border-none disabled:cursor-not-allowed disabled:opacity-60 text-sm text-center appearance-none cursor-pointer ${!log.reason ? 'text-slate-400' : 'text-slate-700'}`}
+                              style={{ textAlignLast: 'center' }}
+                            >
+                              <option value="" className="text-slate-400">---</option>
+                              {scrapReasons.map(reason => (
+                                <option key={reason.id} value={reason.name} className="text-slate-700">{reason.name}</option>
+                              ))}
+                            </select>
+                            <div className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                              <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                              </svg>
+                            </div>
+                            <button
+                              onClick={() => setReasonModal({ isOpen: true, newName: '' })}
+                              className="h-full px-2 hover:bg-blue-50 text-blue-600 font-bold border-r border-slate-200 transition-colors flex items-center justify-center"
+                              title="Add new reason"
+                              disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
+                            >
+                              +
+                            </button>
+                          </div>
                         </td>
 
                         {/* End Date (Calculated) */}
@@ -2680,6 +2878,42 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                                 <Plus size={16} />
                               )}
                             </button>
+                            {(() => {
+                              const sheet = clients.find((c: any) => c.name === log.client);
+                              const clientFlatOrders = sheet ? flatOrders.filter((o: any) => o.customerId === sheet.id) : [];
+                              const seasonMatchedOrders = log.clientSeason
+                                ? clientFlatOrders.filter((o: any) => o.seasonId === log.clientSeason || o.seasonName === log.clientSeason)
+                                : clientFlatOrders;
+                              const isLinked = !!(log.client && log.fabric && seasonMatchedOrders.some((o: any) => o.material === log.fabric));
+                              return log.client && log.fabric ? (
+                                <div className="flex items-center gap-0.5">
+                                  <button
+                                    onClick={() => {
+                                      if (isLinked) {
+                                        onNavigateToOrder?.(log.client, log.fabric);
+                                      } else {
+                                        onNavigateToOrder?.(log.client, undefined, true);
+                                      }
+                                    }}
+                                    title={isLinked ? `Order linked: ${log.client} / ${log.fabric}` : 'No order found — click to add'}
+                                    className={`p-1.5 rounded-full transition-all ${
+                                      isLinked
+                                        ? 'text-green-600 bg-green-50 hover:bg-green-100'
+                                        : 'text-orange-500 bg-orange-50 hover:bg-orange-100'
+                                    }`}
+                                  >
+                                    <Link size={13} />
+                                  </button>
+                                  {isAdmin && (
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); setDebugModal({ log }); }}
+                                      className="w-3.5 h-3.5 rounded-full bg-slate-200 hover:bg-indigo-300 text-slate-500 hover:text-indigo-700 text-[8px] font-bold flex items-center justify-center"
+                                      title="Debug: order link trace"
+                                    >ⓘ</button>
+                                  )}
+                                </div>
+                              ) : null;
+                            })()}
                             <button
                               onClick={() => setDetailsModal({ isOpen: true, log, index: idx })}
                               className="md:hidden px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-xs font-bold transition-colors"
@@ -3548,14 +3782,57 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 {/* Reason */}
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">Reason (السبب)</label>
-                  <input
-                    type="text"
-                    defaultValue={detailsModal.log.reason || ''}
-                    onBlur={(e) => handleBlur(e, detailsModal.log.machineId, detailsModal.log.id, 'reason')}
-                    placeholder="السبب..."
-                    className="w-full p-2 border border-slate-300 rounded text-right"
-                  />
+                  <div className="flex gap-2 relative">
+                    <select
+                      value={detailsModal.log.reason || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === 'اهمال عامل') {
+                          setWorkerSelectionModal({
+                            isOpen: true,
+                            machineId: detailsModal.log.machineId,
+                            logId: detailsModal.log.id,
+                            selectedWorker: detailsModal.log.workerResponsible || ''
+                          });
+                        } else {
+                          handleUpdateLog(detailsModal.log.machineId, detailsModal.log.id, 'reason', val);
+                        }
+                      }}
+                      className={`flex-1 p-2 border border-slate-300 rounded text-right appearance-none cursor-pointer ${!detailsModal.log.reason ? 'text-slate-400' : 'text-slate-700'}`}
+                    >
+                      <option value="" className="text-slate-400">---</option>
+                      {scrapReasons.map(reason => (
+                        <option key={reason.id} value={reason.name} className="text-slate-700">{reason.name}</option>
+                      ))}
+                    </select>
+                    <div className="absolute left-14 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                      <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </div>
+                    <button
+                      onClick={() => setReasonModal({ isOpen: true, newName: '' })}
+                      className="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 font-bold rounded transition-colors text-sm flex items-center justify-center"
+                      title="Add new reason"
+                    >
+                      +
+                    </button>
+                  </div>
                 </div>
+
+                {/* Worker Responsible (if reason is اهمال عامل) */}
+                {detailsModal.log.reason === 'اهمال عامل' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Worker Responsible (العامل المسؤول)</label>
+                    <input
+                      type="text"
+                      defaultValue={detailsModal.log.workerResponsible || ''}
+                      placeholder="Name of responsible worker"
+                      className="w-full p-2 border border-slate-300 rounded text-right bg-amber-50"
+                      disabled
+                    />
+                  </div>
+                )}
 
                 {/* End Date */}
                 <div>
@@ -3577,6 +3854,214 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
             </div>
           </div>
         )}
+        {/* ═══ DEBUG ORDER LINK MODAL (Admin only) ═══ */}
+        {debugModal && (() => {
+          const log = debugModal.log;
+          const logSeason: string = log.clientSeason || '';
+          const logClient: string = log.client || '';
+          const logFabric: string = log.fabric || '';
+
+          // Step 1: Find CustomerSheet by name
+          const sheet: any = clients.find((c: any) => c.name === logClient);
+
+          // Step 2: All order rows for this customer (CustomerSheets/{id}/orders subcollection)
+          const clientFlatOrders: any[] = sheet
+            ? flatOrders.filter((o: any) => o.customerId === sheet.id)
+            : [];
+
+          // Step 3: Season-matched orders
+          const seasonMatchedBySeasonId: any[] = clientFlatOrders.filter((o: any) =>
+            logSeason && o.seasonId === logSeason
+          );
+          const seasonMatchedBySeasonName: any[] = clientFlatOrders.filter((o: any) =>
+            logSeason && o.seasonName === logSeason
+          );
+          const seasonMatched: any[] = seasonMatchedBySeasonId.length > 0
+            ? seasonMatchedBySeasonId
+            : seasonMatchedBySeasonName.length > 0
+            ? seasonMatchedBySeasonName
+            : [];
+
+          // Step 4: Fabric match via material field
+          const searchPool = seasonMatched.length > 0 ? seasonMatched : clientFlatOrders;
+          const fabricMatchedOrder: any = searchPool.find((o: any) => o.material === logFabric);
+
+          const isLinked = !!(logClient && logFabric && fabricMatchedOrder);
+
+          return (
+            <div className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center p-4" onClick={() => setDebugModal(null)}>
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                {/* Header */}
+                <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50 rounded-t-2xl">
+                  <div>
+                    <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                      <span className="text-lg">🔍</span> Order Link Debug Trace
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-0.5">{log.machineName} &mdash; {log.date}</p>
+                  </div>
+                  <button onClick={() => setDebugModal(null)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition">
+                    <X size={16} />
+                  </button>
+                </div>
+
+                <div className="p-6 space-y-5">
+
+                  {/* What we're searching */}
+                  <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 space-y-2">
+                    <p className="text-xs font-bold text-indigo-700 uppercase tracking-wide mb-1">Search Inputs (from daily log)</p>
+                    <div className="grid grid-cols-3 gap-3 text-xs">
+                      <div className="bg-white border border-indigo-100 rounded-lg p-2">
+                        <div className="text-[10px] text-indigo-500 font-semibold mb-0.5">Client Name</div>
+                        <div className="font-mono font-bold text-slate-800">{logClient || <span className="text-slate-400">—</span>}</div>
+                      </div>
+                      <div className="bg-white border border-indigo-100 rounded-lg p-2">
+                        <div className="text-[10px] text-indigo-500 font-semibold mb-0.5">Season (clientSeason)</div>
+                        <div className="font-mono font-bold text-slate-800">{logSeason || <span className="text-slate-400">(none)</span>}</div>
+                      </div>
+                      <div className="bg-white border border-indigo-100 rounded-lg p-2">
+                        <div className="text-[10px] text-indigo-500 font-semibold mb-0.5">Fabric</div>
+                        <div className="font-mono font-bold text-slate-800 break-all">{logFabric || <span className="text-slate-400">—</span>}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Step 1: CustomerSheet lookup */}
+                  <div className="space-y-2">
+                    <p className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold">1</span>
+                      Find CustomerSheet for: <span className="font-mono text-slate-800">{logClient}</span>
+                    </p>
+                    {!sheet
+                      ? <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-xs text-red-700 font-semibold">❌ No CustomerSheet found with this name</div>
+                      : <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-xs text-green-700 font-semibold">✅ Found sheet ID: <span className="font-mono">{sheet.id}</span></div>
+                    }
+                  </div>
+
+                  {/* Step 2: Orders for this customer */}
+                  {sheet && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold">2</span>
+                        Orders in CustomerSheets subcollection — looking for season <span className="font-mono bg-amber-100 px-1 rounded text-amber-800">{logSeason || '(none)'}</span>
+                      </p>
+                      {clientFlatOrders.length === 0
+                        ? <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-2 text-xs text-yellow-700 font-semibold">⚠️ No order rows found for this customer</div>
+                        : (
+                          <div className="border border-slate-200 rounded-lg overflow-hidden">
+                            <table className="w-full text-xs">
+                              <thead className="bg-slate-100 text-slate-600">
+                                <tr>
+                                  <th className="px-3 py-2 text-left font-semibold">Order ID</th>
+                                  <th className="px-3 py-2 text-left font-semibold">seasonId</th>
+                                  <th className="px-3 py-2 text-left font-semibold">seasonName</th>
+                                  <th className="px-3 py-2 text-left font-semibold">material (fabric)</th>
+                                  <th className="px-3 py-2 text-center font-semibold">Season Match?</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {clientFlatOrders.map((o: any) => {
+                                  const seasonIdMatch = logSeason && o.seasonId === logSeason;
+                                  const seasonNameMatch = logSeason && o.seasonName === logSeason;
+                                  const anySeasonMatch = !!(seasonIdMatch || seasonNameMatch);
+                                  const isFabricMatch = o.material === logFabric;
+                                  return (
+                                    <tr key={o.id} className={anySeasonMatch ? 'bg-green-50' : ''}>
+                                      <td className="px-3 py-2 font-mono text-slate-500">{o.id || '—'}</td>
+                                      <td className="px-3 py-2">
+                                        <span className={`font-mono ${seasonIdMatch ? 'text-green-700 font-bold' : 'text-slate-600'}`}>
+                                          {o.seasonId || <span className="text-slate-400 italic">not set</span>}
+                                        </span>
+                                        {seasonIdMatch && <span className="ml-1 text-green-600">✅</span>}
+                                      </td>
+                                      <td className="px-3 py-2">
+                                        <span className={`font-mono ${seasonNameMatch ? 'text-green-700 font-bold' : 'text-slate-600'}`}>
+                                          {o.seasonName || <span className="text-slate-400 italic">not set</span>}
+                                        </span>
+                                        {seasonNameMatch && <span className="ml-1 text-green-600">✅</span>}
+                                      </td>
+                                      <td className="px-3 py-2">
+                                        <span className={`font-mono ${isFabricMatch ? 'text-blue-700 font-bold' : 'text-slate-500'}`}>
+                                          {o.material || <span className="text-slate-400 italic">not set</span>}
+                                        </span>
+                                        {isFabricMatch && <span className="ml-1 text-blue-600">🎯</span>}
+                                      </td>
+                                      <td className="px-3 py-2 text-center">
+                                        {!logSeason
+                                          ? <span className="text-slate-400 italic text-[10px]">no season on log</span>
+                                          : anySeasonMatch
+                                          ? <span className="text-green-700 font-bold">✅ Match</span>
+                                          : <span className="text-red-500">❌</span>
+                                        }
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )
+                      }
+                    </div>
+                  )}
+
+                  {/* Step 3: Fabric match result */}
+                  {sheet && clientFlatOrders.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold">3</span>
+                        Search for fabric (material) <span className="font-mono bg-blue-100 px-1 rounded text-blue-800">{logFabric}</span>
+                        {seasonMatched.length > 0
+                          ? <span className="text-[10px] text-slate-500">— within {seasonMatched.length} season-matched order(s)</span>
+                          : <span className="text-[10px] text-amber-600">— no season match, searching all {clientFlatOrders.length} order(s)</span>
+                        }
+                      </p>
+                      {fabricMatchedOrder
+                        ? <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-xs space-y-1">
+                            <p className="text-green-700 font-bold">✅ Fabric found</p>
+                            <p className="text-slate-600">Order ID: <span className="font-mono font-bold">{fabricMatchedOrder.id}</span></p>
+                            <p className="text-slate-600">material: <span className="font-mono font-bold">{fabricMatchedOrder.material}</span></p>
+                            <p className="text-slate-600">seasonId: <span className="font-mono font-bold">{fabricMatchedOrder.seasonId || '(not set)'}</span></p>
+                            <p className="text-slate-600">seasonName: <span className="font-mono font-bold">{fabricMatchedOrder.seasonName || '(not set)'}</span></p>
+                          </div>
+                        : <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-xs text-red-700 font-semibold">❌ Fabric "{logFabric}" not found as material in {seasonMatched.length > 0 ? 'season-matched' : 'any'} order(s)</div>
+                      }
+                    </div>
+                  )}
+
+                  {/* Final verdict */}
+                  <div className={`rounded-xl px-5 py-4 border-2 text-sm font-bold flex items-center gap-3 ${
+                    isLinked ? 'bg-green-50 border-green-400 text-green-800' : 'bg-orange-50 border-orange-400 text-orange-800'
+                  }`}>
+                    <span className="text-2xl">{isLinked ? '🟢' : '🟠'}</span>
+                    <div>
+                      <div>{isLinked ? 'LINKED' : 'NOT LINKED'}</div>
+                      <div className="text-xs font-normal mt-0.5 opacity-75">
+                        {isLinked
+                          ? `Matched order ${fabricMatchedOrder.id} — material: ${fabricMatchedOrder.material} (season: ${fabricMatchedOrder.seasonId || fabricMatchedOrder.seasonName || 'n/a'})`
+                          : !sheet
+                          ? `Customer "${logClient}" not found in CustomerSheets`
+                          : clientFlatOrders.length === 0
+                          ? 'No order rows found for this customer'
+                          : seasonMatched.length === 0 && logSeason
+                          ? `Season "${logSeason}" not matched in any order's seasonId or seasonName`
+                          : `Fabric "${logFabric}" not found as material in matching orders`
+                        }
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+
+                <div className="border-t border-slate-200 px-6 py-3 bg-slate-50 rounded-b-2xl flex justify-end">
+                  <button onClick={() => setDebugModal(null)} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-lg transition">
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Link Order Modal */}
         <LinkOrderModal
           isOpen={linkModalOpen.isOpen}
@@ -3727,6 +4212,167 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           <div className="animate-spin rounded-full h-16 w-16 border-4 border-white/20 border-t-white mb-4"></div>
           <h3 className="text-xl font-bold">Generating PDF...</h3>
           <p className="text-slate-300 mt-2">Please wait while we prepare your document.</p>
+        </div>
+      )}
+
+      {/* Add Scrap Reason Modal */}
+      {reasonModal.isOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
+          <div className="bg-white rounded-lg p-6 w-96 shadow-xl">
+            <h2 className="text-xl font-bold text-slate-800 mb-4">إضافة سبب جديد</h2>
+            <input
+              type="text"
+              value={reasonModal.newName}
+              onChange={(e) => setReasonModal({ ...reasonModal, newName: e.target.value })}
+              placeholder="اسم السبب..."
+              className="w-full px-4 py-2 border border-slate-300 rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              onKeyDown={(e) => e.key === 'Enter' && handleAddScrapReason()}
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={handleAddScrapReason}
+                className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors"
+              >
+                إضافة
+              </button>
+              <button
+                onClick={() => setReasonModal({ isOpen: false, newName: '' })}
+                className="flex-1 py-2 bg-slate-300 hover:bg-slate-400 text-slate-800 font-bold rounded-lg transition-colors"
+              >
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+
+      {/* Worker Selection Modal (for اهمال عامل) - SIMPLIFIED with inline add */}
+      {workerSelectionModal.isOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden transform transition-all scale-100">
+            {/* Header */}
+            <div className="bg-slate-50 px-6 py-4 border-b border-slate-100 flex justify-between items-center">
+              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <span className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center text-red-600">
+                   <AlertTriangle size={18} />
+                </span>
+                تحديد العامل المسؤول
+              </h2>
+              <button 
+                onClick={() => setWorkerSelectionModal({ isOpen: false, machineId: '', logId: '', selectedWorker: '' })}
+                className="text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6">
+              <p className="text-slate-500 text-sm mb-4">يرجى اختيار العامل المسؤول عن السقط لهذا السجل.</p>
+              
+              {/* Worker Selection / Add Section */}
+              <div className="mb-6">
+                {isAddingWorker ? (
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <User className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                      <input
+                        autoFocus
+                        type="text"
+                        placeholder="اسم العامل الجديد..."
+                        value={newWorkerName}
+                        onChange={(e) => setNewWorkerName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleAddWorker();
+                          if (e.key === 'Escape') setIsAddingWorker(false);
+                        }}
+                        className="w-full pr-9 pl-4 py-2.5 bg-slate-50 border border-blue-400 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:bg-white transition-all"
+                      />
+                    </div>
+                    <button
+                      onClick={handleAddWorker}
+                      disabled={!newWorkerName.trim()}
+                      className={`p-2.5 rounded-xl transition-all flex items-center justify-center ${
+                        newWorkerName.trim()
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-md'
+                          : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      }`}
+                      title="حفظ العامل"
+                    >
+                      <Check size={18} />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setIsAddingWorker(false);
+                        setNewWorkerName('');
+                      }}
+                      className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition-all"
+                      title="إلغاء"
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <select
+                        value={workerSelectionModal.selectedWorker}
+                        onChange={(e) => setWorkerSelectionModal({ ...workerSelectionModal, selectedWorker: e.target.value })}
+                        className="w-full pl-4 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all appearance-none cursor-pointer hover:bg-slate-100"
+                      >
+                        <option value="" className="text-slate-400">اختر عامل من القائمة...</option>
+                        {workers.map(worker => (
+                          <option key={worker.id} value={worker.name} className="py-2">{worker.name}</option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
+                    </div>
+                    
+                    <button
+                      onClick={() => setIsAddingWorker(true)}
+                      className="px-3 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 rounded-xl transition-all flex items-center justify-center shadow-sm hover:shadow active:scale-95 whitespace-nowrap"
+                      title="إضافة عامل جديد"
+                    >
+                      <Plus size={18} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setWorkerSelectionModal({ isOpen: false, machineId: '', logId: '', selectedWorker: '' })}
+                  className="flex-1 py-2.5 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 hover:text-slate-800 transition-all active:scale-[0.98]"
+                >
+                  إلغاء
+                </button>
+                <button
+                  disabled={!workerSelectionModal.selectedWorker}
+                  onClick={() => {
+                    if (workerSelectionModal.selectedWorker) {
+                      handleWorkerSelection(
+                        workerSelectionModal.machineId,
+                        workerSelectionModal.logId,
+                        workerSelectionModal.selectedWorker
+                      );
+                    }
+                  }}
+                  className={`flex-1 py-2.5 text-white font-bold rounded-xl shadow-md transition-all flex items-center justify-center gap-2
+                    ${workerSelectionModal.selectedWorker 
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 hover:shadow-lg transform hover:-translate-y-0.5 active:translate-y-0' 
+                      : 'bg-slate-300 cursor-not-allowed shadow-none'}`}
+                >
+                  <CheckCircle2 size={16} />
+                  تأكيد وربط
+                </button>
+              </div>
+            </div>
+            
+            <div className="bg-slate-50 px-6 py-3 border-t border-slate-100 text-center">
+               <p className="text-xs text-slate-400">سيتم تسجيل هذا السقط في تقرير أداء العامل</p>
+            </div>
+          </div>
         </div>
       )}
     </div>

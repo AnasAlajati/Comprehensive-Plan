@@ -1295,19 +1295,19 @@ const MemoizedOrderRow = React.memo(({
   const { internalActive, internalPlanned, externalMatches, directMachine, hasAnyPlan } = useMemo(() => {
     // 1. Internal Active & Planned
     const rawActive = (statusInfo && statusInfo.active) ? statusInfo.active : [];
-    const internalActive = rawActive.filter((m: string) => !m.endsWith('(Ext)'));
+    const internalActive = rawActive.filter((m: string) => m && !m.endsWith('(Ext)'));
     const internalPlanned = (statusInfo && statusInfo.planned) ? statusInfo.planned : [];
 
     // 2. External Matches
     const externalMatches: { factoryName: string; status: string }[] = [];
     if (statusInfo && statusInfo.active) {
         statusInfo.active.forEach((m: string) => {
-           if (m.endsWith('(Ext)')) externalMatches.push({ factoryName: m.replace(' (Ext)', ''), status: 'Active' });
+           if (m && m.endsWith('(Ext)')) externalMatches.push({ factoryName: m.replace(' (Ext)', ''), status: 'Active' });
         });
     }
     if (statusInfo && statusInfo.planned) {
         statusInfo.planned.forEach((m: string) => {
-           if (m.endsWith('(Ext)')) externalMatches.push({ factoryName: m.replace(' (Ext)', ''), status: 'Planned' });
+           if (m && m.endsWith('(Ext)')) externalMatches.push({ factoryName: m.replace(' (Ext)', ''), status: 'Planned' });
         });
     }
 
@@ -4610,16 +4610,18 @@ const MemoizedOrderRow = React.memo(({
 
 interface ClientOrdersPageProps {
   userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
-  highlightTarget?: { client: string; fabric?: string } | null;
+  highlightTarget?: { client: string; fabric?: string; highlightAddOrder?: boolean } | null;
   onHighlightComplete?: () => void;
   userName?: string;
+  highlightAddOrder?: boolean;
 }
 
 export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ 
   userRole,
   highlightTarget,
   onHighlightComplete,
-  userName: propUserName
+  userName: propUserName,
+  highlightAddOrder: highlightAddOrderProp
 }) => {
   const [customers, setCustomers] = useState<CustomerSheet[]>([]);
   const [rawCustomers, setRawCustomers] = useState<CustomerSheet[]>([]);
@@ -4691,6 +4693,19 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
   const [searchTerm, setSearchTerm] = useState('');
 
+  const [pulsingAddOrder, setPulsingAddOrder] = useState(false);
+
+  // Pulse ADD ORDER button when navigated to without a linked fabric
+  useEffect(() => {
+    const shouldHighlight = highlightAddOrderProp || highlightTarget?.highlightAddOrder;
+    if (!shouldHighlight) return;
+    setTimeout(() => {
+      setPulsingAddOrder(true);
+      setTimeout(() => setPulsingAddOrder(false), 2500);
+      if (onHighlightComplete) onHighlightComplete();
+    }, 400);
+  }, [highlightAddOrderProp, highlightTarget?.highlightAddOrder]);
+
   // NEW: Handle Highlight Navigation from Daily Summary
   useEffect(() => {
     if (highlightTarget && customers.length > 0) {
@@ -4703,7 +4718,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         setSelectedCustomerId(targetClient.id);
         
         // 2. Highlight Specific Fabric
-        if (highlightTarget.fabric) {
+        if (highlightTarget.fabric && !highlightTarget.highlightAddOrder) {
              // We delay to allow the state change (setSelectedCustomerId) to trigger a re-render 
              // and the DOM to update with the new client's orders.
              setTimeout(() => {
@@ -8179,8 +8194,13 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                     </button>
 
                     <button 
+                        id="add-order-btn"
                         onClick={handleAddRow}
-                        className="flex items-center gap-2 px-4 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-all shadow-sm hover:shadow text-xs font-bold tracking-wide"
+                        className={`flex items-center gap-2 px-4 py-1.5 rounded-md transition-all shadow-sm hover:shadow text-xs font-bold tracking-wide ${
+                          pulsingAddOrder
+                            ? 'bg-amber-400 text-white ring-4 ring-amber-300 ring-offset-1 scale-105 animate-pulse'
+                            : 'bg-blue-600 text-white hover:bg-blue-700'
+                        }`}
                     >
                         <Plus className="w-4 h-4" />
                         ADD ORDER

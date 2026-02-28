@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Factory, Layout, Upload, FileSpreadsheet, AlertCircle, Check, X } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import ExternalProductionSheet from './ExternalProductionSheet';
+import { ExternalProductionSheet } from './ExternalProductionSheet';
 import {
   collection,
   getDocs,
@@ -76,16 +76,10 @@ type FilterType = 'ALL' | 'WARNINGS' | 'ERRORS' | 'SAFE' | 'MISSING';
 const MachineSS: React.FC = () => {
   const [machines, setMachines] = useState<(MachineSSD & { id: string })[]>([]);
   const [loading, setLoading] = useState(false);
-  const [showAddMachine, setShowAddMachine] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importDate, setImportDate] = useState(new Date().toISOString().split('T')[0]); // Default to today
   const [importPreview, setImportPreview] = useState<StagedLog[]>([]);
   const [filter, setFilter] = useState<FilterType>('ALL');
-  const [newMachine, setNewMachine] = useState({
-    name: '',
-    brand: '',
-    machineid: '',
-  });
   const [viewMode, setViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
 
   // Load machines on mount
@@ -110,28 +104,6 @@ const MachineSS: React.FC = () => {
 
   const refreshMachines = async () => {
     // Legacy function kept for compatibility
-  };
-
-  const addMachine = async () => {
-    if (!newMachine.name || !newMachine.brand || !newMachine.machineid) {
-      alert('Please fill in all fields');
-      return;
-    }
-
-    try {
-      await addDoc(collection(db, 'MachineSS'), {
-        name: newMachine.name,
-        brand: newMachine.brand,
-        machineid: parseInt(newMachine.machineid),
-        dailyLogs: [],
-      });
-      setNewMachine({ name: '', brand: '', machineid: '' });
-      setShowAddMachine(false);
-      await refreshMachines();
-    } catch (error) {
-      console.error('Error adding machine:', error);
-      alert('Error adding machine');
-    }
   };
 
   const addDailyLog = async (machineId: string) => {
@@ -523,12 +495,6 @@ const MachineSS: React.FC = () => {
                 >
                   🔄 تحديث
                 </button>
-                <button
-                  onClick={() => setShowAddMachine(true)}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
-                >
-                  ➕ إضافة ماكينة
-                </button>
               </>
             )}
           </div>
@@ -536,64 +502,12 @@ const MachineSS: React.FC = () => {
 
         {viewMode === 'INTERNAL' ? (
           <>
-            {/* Add Machine Modal */}
-            {showAddMachine && (
-              <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-                <div className="bg-white rounded-lg shadow-2xl p-6 w-full max-w-md border border-slate-200">
-                  <h2 className="text-xl font-bold text-slate-800 mb-4">إضافة ماكينة جديدة</h2>
-                  <div className="space-y-4">
-                    <input
-                      type="text"
-                      placeholder="اسم الماكينة"
-                      value={newMachine.name}
-                      onChange={(e) => setNewMachine({ ...newMachine, name: e.target.value })}
-                      className="w-full border border-slate-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                    <input
-                      type="text"
-                      placeholder="الماركة"
-                      value={newMachine.brand}
-                      onChange={(e) => setNewMachine({ ...newMachine, brand: e.target.value })}
-                      className="w-full border border-slate-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                    <input
-                      type="number"
-                      placeholder="رقم الماكينة"
-                      value={newMachine.machineid}
-                      onChange={(e) => setNewMachine({ ...newMachine, machineid: e.target.value })}
-                      className="w-full border border-slate-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                  </div>
-                  <div className="flex gap-3 mt-6">
-                    <button
-                      onClick={() => setShowAddMachine(false)}
-                      className="flex-1 bg-slate-300 hover:bg-slate-400 text-slate-800 px-4 py-2 rounded font-medium transition-colors"
-                    >
-                      إلغاء
-                    </button>
-                    <button
-                      onClick={addMachine}
-                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded font-medium transition-colors"
-                    >
-                      حفظ
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
             {/* Table */}
             {loading ? (
               <div className="text-center text-slate-500 py-8">جاري التحميل...</div>
             ) : machines.length === 0 ? (
               <div className="text-center text-slate-400 py-12">
                 <p className="text-lg mb-4">لا توجد ماكينات</p>
-                <button
-                  onClick={() => setShowAddMachine(true)}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg font-medium"
-                >
-                  إضافة الماكينة الأولى
-                </button>
               </div>
             ) : (
               <>

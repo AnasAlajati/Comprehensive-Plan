@@ -120,15 +120,15 @@ const App: React.FC = () => {
   }, [viewMode, user?.email, isAuthorized]);
   
   // Navigation State
-  const [highlightTarget, setHighlightTarget] = useState<{client: string, fabric?: string} | null>(null);
+  const [highlightTarget, setHighlightTarget] = useState<{client: string, fabric?: string, highlightAddOrder?: boolean} | null>(null);
 
   const handleNavigateToPlanning = (mode: 'INTERNAL' | 'EXTERNAL') => {
     setPlanningInitialViewMode(mode);
     setViewMode('planning');
   };
 
-  const handleNavigateToOrder = (client: string, fabric?: string) => {
-    setHighlightTarget({ client, fabric });
+  const handleNavigateToOrder = (client: string, fabric?: string, highlightAddOrder?: boolean) => {
+    setHighlightTarget({ client, fabric, highlightAddOrder });
     setViewMode('orders');
   };
   
@@ -936,13 +936,15 @@ const App: React.FC = () => {
                           <div className={`p-2 rounded-md ${viewMode === 'compare' ? 'bg-purple-100 text-purple-600' : 'bg-slate-100 text-slate-500'}`}><GitCompare size={20} /></div>
                           <div className="font-semibold text-sm">Compare Days</div>
                         </button>
-                        <button 
-                          onClick={() => { setViewMode('history'); setIsMenuOpen(false); }}
-                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'history' ? 'bg-teal-50 text-teal-700 ring-1 ring-teal-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
-                        >
-                          <div className={`p-2 rounded-md ${viewMode === 'history' ? 'bg-teal-100 text-teal-600' : 'bg-slate-100 text-slate-500'}`}><History size={20} /></div>
-                          <div className="font-semibold text-sm">Production History</div>
-                        </button>
+                        {(userRole === 'admin' || userRole === 'daily_planner') && (
+                          <button 
+                            onClick={() => { setViewMode('history'); setIsMenuOpen(false); }}
+                            className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'history' ? 'bg-teal-50 text-teal-700 ring-1 ring-teal-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                          >
+                            <div className={`p-2 rounded-md ${viewMode === 'history' ? 'bg-teal-100 text-teal-600' : 'bg-slate-100 text-slate-500'}`}><History size={20} /></div>
+                            <div className="font-semibold text-sm">Production History</div>
+                          </button>
+                        )}
                         <button 
                           onClick={() => { setViewMode('fabric-history'); setIsMenuOpen(false); }}
                           className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'fabric-history' ? 'bg-orange-50 text-orange-700 ring-1 ring-orange-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
@@ -989,6 +991,7 @@ const App: React.FC = () => {
                            <div className={`p-2 rounded-md ${viewMode === 'fabrics' ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-500'}`}><FileSpreadsheet size={20} /></div>
                            <div className="font-semibold text-sm">Fabrics DB</div>
                         </button>
+                        {userRole === 'admin' && (
                         <button 
                           onClick={() => { setViewMode('machines'); setIsMenuOpen(false); }}
                           className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'machines' ? 'bg-slate-100 text-slate-800 ring-1 ring-slate-300' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
@@ -996,6 +999,7 @@ const App: React.FC = () => {
                            <div className={`p-2 rounded-md ${viewMode === 'machines' ? 'bg-slate-200 text-slate-700' : 'bg-slate-100 text-slate-500'}`}><Settings size={20} /></div>
                            <div className="font-semibold text-sm">Machines</div>
                         </button>
+                        )}
                         <button 
                           onClick={() => { setViewMode('idle'); setIsMenuOpen(false); }}
                           className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'idle' ? 'bg-red-50 text-red-700 ring-1 ring-red-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
@@ -1073,6 +1077,7 @@ const App: React.FC = () => {
                 userRole={userRole} 
                 highlightTarget={highlightTarget}
                 onHighlightComplete={() => setHighlightTarget(null)}
+                highlightAddOrder={highlightTarget?.highlightAddOrder}
               />
             )}
 
@@ -1087,9 +1092,10 @@ const App: React.FC = () => {
               />
             )}
 
-            {viewMode === 'history' && (
+            {viewMode === 'history' && (userRole === 'admin' || userRole === 'daily_planner') && (
               <ProductionHistoryPage 
                 machines={machines}
+                userRole={userRole}
               />
             )}
 
@@ -1103,7 +1109,7 @@ const App: React.FC = () => {
               <FabricsPage userRole={userRole} />
             )}
 
-            {viewMode === 'machines' && (
+            {viewMode === 'machines' && userRole === 'admin' && (
               <MachinesPage machines={machines} userRole={userRole} />
             )}
 
