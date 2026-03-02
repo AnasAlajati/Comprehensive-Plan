@@ -559,9 +559,11 @@ export interface FuturePlanEntry {
 }
 
 export interface MachineSS {
+  id?: string;          // Firestore doc ID (always set by snapshot listener)
+  firestoreId?: string; // Alias for id — used by CreatePlanModal
   name: string; // Machine name (static, doesn't change)
   brand: string; // Machine brand (static, doesn't change)
-  machineid: number; // Machine ID (static, doesn't change)
+  machineid?: number; // Machine ID (static, doesn't change — optional for auto-ID docs)
   // Technical Specs
   needles?: number; // عدد الإبر
   gauge?: number;   // جوج

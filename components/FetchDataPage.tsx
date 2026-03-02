@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { writeBatch, doc, getDoc, onSnapshot, collection, setDoc, collectionGroup, addDoc, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
@@ -632,6 +633,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
              fabric: prevLog.fabric,
              client: prevLog.client,
              clientSeason: prevLog.clientSeason || '',
+             orderId: prevLog.orderId || '',
              avgProduction: prevLog.avgProduction || machine.avgProduction || 0,
              remainingMfg: newRemaining,
              customStatusNote: prevLog.customStatusNote || '',
@@ -661,6 +663,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 fabric: newLogEntry.fabric,
                 client: newLogEntry.client,
                 clientSeason: newLogEntry.clientSeason,
+                orderId: newLogEntry.orderId,
                 remainingMfg: newLogEntry.remainingMfg,
                 reason: newLogEntry.reason,
                 customStatusNote: newLogEntry.customStatusNote
@@ -755,6 +758,15 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [customerOrders, setCustomerOrders] = useState<any[]>([]);
   const [flatOrders, setFlatOrders] = useState<any[]>([]);
 
+  // ── Fabric Lookup modal state ──
+  const [showFabricLookup, setShowFabricLookup] = useState(false);
+  const [flSeason, setFlSeason] = useState<string>('');
+  const [flClient, setFlClient] = useState<string>('');
+  const [flFabric, setFlFabric] = useState<string>('');
+  const [flOrderId, setFlOrderId] = useState<string>('');
+  const [flMachineId, setFlMachineId] = useState<string>('');
+  const [flLogId, setFlLogId] = useState<string>('');
+
   useEffect(() => {
     const unsub = onSnapshot(collectionGroup(db, 'orders'), (snapshot) => {
       const orders = snapshot.docs.map(d => ({
@@ -766,6 +778,124 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     });
     return () => unsub();
   }, []);
+
+  // Unique seasons derived from flatOrders
+  const flSeasonOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    flatOrders.forEach(o => {
+      if (o.seasonId && !seen.has(o.seasonId)) {
+        seen.set(o.seasonId, o.seasonName || o.seasonId);
+      }
+    });
+    return Array.from(seen.entries()).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [flatOrders]);
+
+  const openFabricLookup = (machineId: string, logId: string) => {
+    const log = allLogs.find(l => l.machineId === machineId && l.id === logId);
+    const currentClientId = clients.find((c: any) => c.name === log?.client)?.id || '';
+    const currentSeasonId = log?.clientSeason
+      ? (flSeasonOptions.find(s => s.name === log.clientSeason || s.id === log.clientSeason)?.id || '')
+      : '';
+    const currentOrderId = log?.orderId || '';
+    setFlMachineId(machineId);
+    setFlLogId(logId);
+    setFlSeason(currentSeasonId);
+    setFlClient(currentClientId);
+    setFlFabric(log?.fabric || '');
+    setFlOrderId(currentOrderId);
+    setShowFabricLookup(true);
+  };
+
+  const handleClientFabricSelect = async (clientId: string, fabricName: string, orderId: string) => {
+    const matchingClient = clients.find((c: any) => c.id === clientId);
+    const clientName = matchingClient?.name || '';
+    const seasonId = flSeason;
+    const seasonOption = flSeasonOptions.find(s => s.id === seasonId);
+    const seasonName = seasonOption?.name || '';
+
+    // Optimistic update
+    setAllLogs(prev => prev.map(l =>
+      (l.machineId === flMachineId && l.id === flLogId)
+        ? { ...l, client: clientName, clientSeason: seasonName, fabric: fabricName, orderId }
+        : l
+    ));
+    setShowFabricLookup(false);
+
+    try {
+      const machines = await DataService.getMachinesFromMachineSS();
+      const machine = machines.find((m: any) => m.id === flMachineId);
+      if (!machine) return;
+
+      const updatedLogs = [...(machine.dailyLogs || [])];
+      let logIndex = updatedLogs.findIndex((l: any) => l.date === selectedDate);
+
+      if (logIndex < 0) {
+        const newLog: any = {
+          id: selectedDate,
+          date: selectedDate,
+          dayProduction: 0,
+          scrap: 0,
+          status: machine.status || '',
+          client: clientName,
+          clientSeason: seasonName,
+          fabric: fabricName,
+          orderId,
+          avgProduction: machine.avgProduction || 0,
+          remainingMfg: 0,
+          reason: '',
+          timestamp: new Date().toISOString(),
+        };
+        updatedLogs.push(newLog);
+        logIndex = updatedLogs.length - 1;
+      } else {
+        updatedLogs[logIndex] = { ...updatedLogs[logIndex], client: clientName, clientSeason: seasonName, fabric: fabricName, orderId };
+      }
+
+      const updatePayload: any = { dailyLogs: updatedLogs, lastUpdated: new Date().toISOString() };
+      if (updatedLogs[logIndex].date === activeDay) {
+        updatePayload.client = clientName;
+        updatePayload.material = fabricName;
+        updatePayload.orderId = orderId;
+      }
+
+      await DataService.updateMachineInMachineSS(flMachineId, updatePayload);
+      await DataService.updateDailyLog(flMachineId, selectedDate, updatedLogs[logIndex]);
+      checkSmartLink(flMachineId, flLogId, clientName, fabricName);
+      showMessage('✅ Client & Fabric updated');
+    } catch (error: any) {
+      showMessage('❌ Error: ' + error.message, true);
+    }
+  };
+
+  const handleClearClientFabric = async (machineId: string, logId: string) => {
+    // Optimistic update
+    setAllLogs(prev => prev.map(l =>
+      (l.machineId === machineId && l.id === logId)
+        ? { ...l, client: '', clientSeason: '', fabric: '', orderId: '' }
+        : l
+    ));
+    try {
+      const machines = await DataService.getMachinesFromMachineSS();
+      const machine = machines.find((m: any) => m.id === machineId);
+      if (!machine) return;
+      const updatedLogs = [...(machine.dailyLogs || [])];
+      const logIndex = updatedLogs.findIndex((l: any) => l.date === selectedDate);
+      if (logIndex >= 0) {
+        updatedLogs[logIndex] = { ...updatedLogs[logIndex], client: '', clientSeason: '', fabric: '', orderId: '' };
+        const updatePayload: any = { dailyLogs: updatedLogs, lastUpdated: new Date().toISOString() };
+        if (updatedLogs[logIndex].date === activeDay) {
+          updatePayload.client = '';
+          updatePayload.material = '';
+          updatePayload.orderId = '';
+        }
+        await DataService.updateMachineInMachineSS(machineId, updatePayload);
+        await DataService.updateDailyLog(machineId, selectedDate, updatedLogs[logIndex]);
+      }
+      showMessage('✅ Client & Fabric cleared');
+    } catch (error: any) {
+      showMessage('❌ Error: ' + error.message, true);
+    }
+  };
 
   const loadFabricsAndClients = async () => {
     // 1. Load from Local Storage (Cache) first for offline support
@@ -1172,6 +1302,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           fabric: defaultFabric,
           client: defaultClient,
           clientSeason: defaultClientSeason,
+          orderId: '',
           avgProduction: machine.avgProduction || 0,
           remainingMfg: lastLog ? (Number(lastLog.remainingMfg) || 0) : 0,
           reason: '',
@@ -2688,37 +2819,64 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         </td>
 
                         {/* Fabric */}
-                        <td className="border border-slate-200 p-0 relative">
-                          <SearchDropdown
+                        <td className="border border-slate-200 p-0 relative group/fab">
+                          <button
                             id={getCellId(log.machineId, 'fabric')}
-                            options={fabrics}
-                            value={log.fabric || ''}
-                            onChange={(val) => handleBlur({ target: { value: val, type: 'text' } } as any, log.machineId, log.id, 'fabric')}
+                            onClick={() => (userRole === 'admin' || userRole === 'daily_planner') && openFabricLookup(log.machineId, log.id)}
                             onFocus={() => handleCellFocus(idx, 'fabric')}
+                            onKeyDown={(e) => handleKeyDown(e, idx, 'fabric')}
                             disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
-                            placeholder="---"
-                            strict={true}
-                          />
+                            className={`w-full h-full min-h-[36px] px-2 py-1.5 pr-5 text-left bg-transparent hover:bg-blue-50 focus:bg-blue-50 focus:outline-none transition-colors ${
+                              userRole !== 'admin' && userRole !== 'daily_planner' ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+                            } ${log.fabric ? 'text-slate-800' : 'text-slate-400'}`}
+                            title={log.fabric || 'Click to select fabric'}
+                          >
+                            {log.fabric
+                              ? <span className="block whitespace-normal break-words leading-snug text-xs">{parseFabricName(log.fabric).shortName || log.fabric}</span>
+                              : <span className="italic">---</span>
+                            }
+                            {log.fabric && (log as any).orderId && (
+                              <span className="block text-[10px] text-slate-400 font-mono mt-0.5">#{((log as any).orderId as string).slice(0, 8)}</span>
+                            )}
+                          </button>
+                          {log.fabric && (userRole === 'admin' || userRole === 'daily_planner') && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleClearClientFabric(log.machineId, log.id); }}
+                              className="absolute top-0.5 right-0.5 opacity-0 group-hover/fab:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded text-slate-400 hover:text-red-500 hover:bg-red-50 text-[10px] leading-none"
+                              title="Clear fabric & client"
+                            >✕</button>
+                          )}
                         </td>
 
                         {/* Client */}
-                        <td className="border border-slate-200 p-0 relative group">
-                          <SearchDropdown
+                        <td className="border border-slate-200 p-0 relative group group/cli">
+                          <button
                             id={getCellId(log.machineId, 'client')}
-                            options={clientSeasonOptions}
-                            value={(log.clientSeason ? `${log.client}-${log.clientSeason}` : log.client) || ''}
-                            onChange={(val) => handleClientSelect(val, log.machineId, log.id)}
+                            onClick={() => (userRole === 'admin' || userRole === 'daily_planner') && openFabricLookup(log.machineId, log.id)}
                             onFocus={() => handleCellFocus(idx, 'client')}
+                            onKeyDown={(e) => handleKeyDown(e, idx, 'client')}
                             disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
-                            placeholder="---"
-                            strict={true}
-                          />
+                            className={`w-full h-full min-h-[36px] px-2 py-1.5 pr-5 text-left bg-transparent hover:bg-blue-50 focus:bg-blue-50 focus:outline-none transition-colors ${
+                              userRole !== 'admin' && userRole !== 'daily_planner' ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+                            } ${log.client ? 'text-slate-800' : 'text-slate-400'}`}
+                          >
+                            {log.client
+                              ? <span className="block whitespace-normal break-words leading-snug text-xs">{log.client}</span>
+                              : <span className="italic">---</span>
+                            }
+                          </button>
+                          {log.client && (userRole === 'admin' || userRole === 'daily_planner') && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleClearClientFabric(log.machineId, log.id); }}
+                              className="absolute top-0.5 right-0.5 opacity-0 group-hover/cli:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded text-slate-400 hover:text-red-500 hover:bg-red-50 text-[10px] leading-none"
+                              title="Clear client & fabric"
+                            >✕</button>
+                          )}
                           {log.clientSeason && (
-                            <div className="text-[10px] text-slate-400 px-1 pb-0.5 leading-none pointer-events-none select-none">
+                            <div className="text-[10px] text-slate-400 px-2 pb-0.5 leading-none pointer-events-none select-none">
                               {log.clientSeason}
                             </div>
                           )}
-                          
                           {/* Reference Code Tooltip */}
                           {log.client && log.fabric && (
                             <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 bg-slate-800 text-white text-xs rounded shadow-lg z-20 whitespace-nowrap pointer-events-none">
@@ -2726,19 +2884,6 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                               <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
                             </div>
                           )}
-                          
-                        {/* Link Indicator (Read-only) */}
-                        <div className="absolute top-0 right-0 h-full flex items-center pr-1 pointer-events-auto z-10">
-                          {log.orderReference && (
-                            <div
-                              className="flex items-center gap-1 text-[9px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded-full border border-blue-200 transition-all font-medium shadow-sm cursor-default"
-                              title={`Linked to Order: ${log.orderReference}`}
-                            >
-                              <Link size={10} className="text-blue-500" />
-                              {log.orderReference}
-                            </div>
-                          )}
-                        </div>
                         </td>
 
                         {/* Remaining */}
@@ -4375,6 +4520,191 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           </div>
         </div>
       )}
+
+      {showFabricLookup && createPortal((() => {
+        const targetLog = allLogs.find(l => l.machineId === flMachineId && l.id === flLogId);
+        const machineName = targetLog?.machineName || flMachineId;
+        const selectedSeasonName = flSeasonOptions.find(s => s.id === flSeason)?.name || '';
+
+        const filteredClients = flSeason
+          ? clients.filter((c: any) =>
+              flatOrders.some(o =>
+                o.customerId === c.id &&
+                (o.seasonId === flSeason || o.seasonName === selectedSeasonName)
+              )
+            )
+          : clients;
+        const sortedClients = [...filteredClients].sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
+
+        const clientOrders = flClient
+          ? flatOrders.filter(o =>
+              o.customerId === flClient &&
+              (!flSeason || o.seasonId === flSeason || o.seasonName === selectedSeasonName)
+            )
+          : [];
+
+        const selectedClientName = clients.find((c: any) => c.id === flClient)?.name || '';
+        const canApply = !!(flClient && flFabric && flOrderId);
+
+        return (
+          <div
+            className="fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center p-4"
+            onClick={() => setShowFabricLookup(false)}
+          >
+            <div
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-5 py-4 flex items-center justify-between">
+                <div>
+                  <p className="text-blue-200 text-xs font-medium uppercase tracking-wide">Assign to Machine</p>
+                  <h2 className="text-white font-bold text-lg leading-tight">{machineName}</h2>
+                </div>
+                <button
+                  onClick={() => setShowFabricLookup(false)}
+                  className="p-2 text-blue-200 hover:text-white hover:bg-white/20 rounded-full transition"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 overflow-auto">
+
+                {/* Season */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Season</label>
+                  <div className="flex flex-wrap gap-2">
+                    {flSeasonOptions.length === 0 && (
+                      <span className="text-sm text-slate-400 italic">No seasons found</span>
+                    )}
+                    {flSeasonOptions.map(s => (
+                      <button
+                        key={s.id}
+                        onClick={() => { setFlSeason(s.id); setFlClient(''); setFlFabric(''); setFlOrderId(''); }}
+                        className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                          flSeason === s.id
+                            ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                            : 'bg-white text-slate-600 border-slate-300 hover:border-blue-400 hover:text-blue-600'
+                        }`}
+                      >
+                        {s.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Client */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">
+                    Client
+                    {flSeason && sortedClients.length > 0 && (
+                      <span className="ml-2 text-slate-400 font-normal normal-case">{sortedClients.length} available</span>
+                    )}
+                  </label>
+                  {!flSeason ? (
+                    <p className="text-sm text-slate-400 italic">Select a season first</p>
+                  ) : sortedClients.length === 0 ? (
+                    <p className="text-sm text-amber-600">No clients have orders in this season.</p>
+                  ) : (
+                    <select
+                      value={flClient}
+                      onChange={e => { setFlClient(e.target.value); setFlFabric(''); setFlOrderId(''); }}
+                      className="w-full border-2 border-slate-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-blue-500 transition-colors"
+                    >
+                      <option value="">— Choose client —</option>
+                      {sortedClients.map((c: any) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* Fabric / Order */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">
+                    Fabric / Order
+                    {flClient && clientOrders.length > 0 && (
+                      <span className="ml-2 text-slate-400 font-normal normal-case">{clientOrders.filter((o: any) => o.material).length} order{clientOrders.filter((o: any) => o.material).length !== 1 ? 's' : ''}</span>
+                    )}
+                  </label>
+                  {!flClient ? (
+                    <p className="text-sm text-slate-400 italic">Select a client first</p>
+                  ) : clientOrders.length === 0 ? (
+                    <p className="text-sm text-amber-600">No orders found for this client &amp; season.</p>
+                  ) : (
+                    <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto pr-1">
+                      {clientOrders.filter((o: any) => o.material).map((o: any) => {
+                        const isSelected = flFabric === o.material && flOrderId === o.id;
+                        return (
+                          <button
+                            key={o.id}
+                            onClick={() => { setFlFabric(o.material); setFlOrderId(o.id); }}
+                            className={`w-full text-left px-4 py-3 rounded-xl border-2 transition-all ${
+                              isSelected
+                                ? 'border-blue-500 bg-blue-50 shadow-sm'
+                                : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className={`font-semibold text-sm leading-snug ${isSelected ? 'text-blue-700' : 'text-slate-800'}`}>{o.material}</div>
+                            <div className="flex gap-3 mt-1 flex-wrap">
+                              <span className="text-[11px] text-slate-400 font-mono">#{o.id.slice(0, 8)}</span>
+                              {o.requiredQty > 0 && (
+                                <span className="text-[11px] text-slate-500">Req: <span className="font-medium">{Number(o.requiredQty).toLocaleString()} kg</span></span>
+                              )}
+                              {o.remainingQty > 0 && (
+                                <span className="text-[11px] text-slate-500">Rem: <span className="font-medium text-amber-600">{Number(o.remainingQty).toLocaleString()} kg</span></span>
+                              )}
+                              {o.endDate && (
+                                <span className="text-[11px] text-slate-500">Due: <span className="font-medium">{o.endDate}</span></span>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Preview */}
+                {canApply && (
+                  <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl px-4 py-3 flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] text-blue-500 font-bold uppercase tracking-wide mb-0.5">Will be saved as</p>
+                      <p className="text-sm font-bold text-blue-800 truncate">{selectedClientName}</p>
+                      <p className="text-xs text-blue-600 truncate">{flFabric}</p>
+                      {flOrderId && <p className="text-[10px] text-blue-400 font-mono mt-0.5">Order #{flOrderId.slice(0, 8)}</p>}
+                    </div>
+                    <div className="text-blue-400 text-xl">→</div>
+                    <div className="shrink-0 font-bold text-blue-700 text-sm">{machineName}</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="border-t border-slate-100 px-5 py-4 flex gap-3">
+                <button
+                  onClick={() => setShowFabricLookup(false)}
+                  className="flex-1 py-2.5 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold text-sm hover:bg-slate-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => canApply && handleClientFabricSelect(flClient, flFabric, flOrderId)}
+                  disabled={!canApply}
+                  className={`flex-1 py-2.5 rounded-xl font-bold text-sm transition ${
+                    canApply
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                  }`}
+                >
+                  Apply
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })(), document.body)}
     </div>
     </div>
   );

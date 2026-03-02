@@ -68,6 +68,15 @@ export const UserManagementPage: React.FC = () => {
   const [migrationRunning, setMigrationRunning] = useState(false);
   const [migrationResult, setMigrationResult] = useState<string | null>(null);
 
+  // Machine ID Fix tool
+  const [machineFixOpen, setMachineFixOpen] = useState(false);
+  interface MachineFixRow { docId: string; name: string; brand: string; currentId: any; willBe: string; }
+  const [machineFixRows, setMachineFixRows] = useState<MachineFixRow[] | null>(null);
+  const [machineFixScanning, setMachineFixScanning] = useState(false);
+  const [machineFixRunning, setMachineFixRunning] = useState(false);
+  const [machineFixConfirm, setMachineFixConfirm] = useState('');
+  const [machineFixResult, setMachineFixResult] = useState<string | null>(null);
+
   // Season Migration: scan clients without a season
   const handleScanMigration = async () => {
     setMigrationScanning(true);
@@ -132,6 +141,59 @@ export const UserManagementPage: React.FC = () => {
       setMigrationResult('❌ Migration failed. Check console.');
     }
     setMigrationRunning(false);
+  };
+
+  const handleScanMachineIds = async () => {
+    setMachineFixScanning(true);
+    setMachineFixRows(null);
+    setMachineFixResult(null);
+    try {
+      const snap = await getDocs(collection(db, 'MachineSS'));
+      const missing: MachineFixRow[] = snap.docs
+        .filter(d => {
+          const data = d.data();
+          return data.id === undefined || data.id === null || data.id === '';
+        })
+        .map(d => ({
+          docId: d.id,
+          name: d.data().machineName || d.data().name || '—',
+          brand: d.data().brand || '—',
+          currentId: d.data().id ?? null,
+          willBe: d.id,
+        }));
+      setMachineFixRows(missing);
+    } catch (err) {
+      console.error('Machine scan error:', err);
+      setMachineFixResult('❌ Scan failed. Check console.');
+    }
+    setMachineFixScanning(false);
+  };
+
+  const handleFixMachineIds = async () => {
+    if (!machineFixRows || machineFixRows.length === 0) return;
+    setMachineFixRunning(true);
+    setMachineFixResult(null);
+    try {
+      const chunkSize = 500;
+      let total = 0;
+      for (let i = 0; i < machineFixRows.length; i += chunkSize) {
+        const chunk = machineFixRows.slice(i, i + chunkSize);
+        const batch = writeBatch(db);
+        chunk.forEach(row => {
+          const ref = doc(db, 'MachineSS', row.docId);
+          batch.update(ref, { id: row.docId, firestoreId: row.docId });
+        });
+        await batch.commit();
+        total += chunk.length;
+      }
+      setMachineFixResult(`✅ Fixed ${total} machine${total !== 1 ? 's' : ''} — id & firestoreId now set to their Firestore document ID.`);
+      setMachineFixRows([]);
+      setMachineFixConfirm('');
+    } catch (err) {
+      console.error('Machine fix error:', err);
+      setMachineFixResult('❌ Fix failed. Check console.');
+    }
+    setMachineFixRunning(false);
   };
 
   // Load user activities when expanded
@@ -891,6 +953,121 @@ export const UserManagementPage: React.FC = () => {
             )}
           </div>
         )}
+
+        {/* ── Machine ID Fix Tool ── */}
+        <div className="border border-slate-200 rounded-xl overflow-hidden">
+          <button
+            onClick={() => { setMachineFixOpen(v => !v); setMachineFixRows(null); setMachineFixResult(null); setMachineFixConfirm(''); }}
+            className="w-full flex items-center justify-between px-5 py-4 bg-slate-50 hover:bg-slate-100 transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <Database size={18} className="text-blue-600" />
+              <div className="text-left">
+                <p className="font-semibold text-slate-800 text-sm">Machine ID Fix</p>
+                <p className="text-xs text-slate-500">Write missing <span className="font-mono">id</span> &amp; <span className="font-mono">firestoreId</span> fields into MachineSS documents</p>
+              </div>
+            </div>
+            {machineFixOpen ? <ChevronUp size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
+          </button>
+
+          {machineFixOpen && (
+            <div className="p-5 space-y-4 border-t border-slate-200">
+              <p className="text-sm text-slate-600">
+                Some machines in <span className="font-mono font-semibold">MachineSS</span> are missing the <span className="font-mono bg-slate-100 px-1 rounded">id</span> field inside the document.
+                This tool scans for them and writes <span className="font-mono bg-slate-100 px-1 rounded">id = firestoreId = doc.id</span> to fix the issue.
+              </p>
+
+              {/* Step 1: Scan */}
+              <button
+                onClick={handleScanMachineIds}
+                disabled={machineFixScanning}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50"
+              >
+                {machineFixScanning
+                  ? <><RefreshCw size={14} className="animate-spin" /> Scanning...</>
+                  : <><Database size={14} /> Scan MachineSS</>}
+              </button>
+
+              {machineFixRows !== null && (
+                machineFixRows.length === 0 ? (
+                  <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
+                    <Check size={15} className="text-green-600 shrink-0" />
+                    All machines already have an <span className="font-mono mx-1">id</span> field — nothing to fix!
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                      <AlertTriangle size={16} className="text-amber-600 mt-0.5 shrink-0" />
+                      <p className="text-sm text-amber-800">
+                        <span className="font-bold">{machineFixRows.length} machine{machineFixRows.length !== 1 ? 's' : ''}</span> are missing the <span className="font-mono">id</span> field.
+                        Each will have <span className="font-mono">id</span> and <span className="font-mono">firestoreId</span> set to their Firestore document ID.
+                      </p>
+                    </div>
+
+                    {/* Preview table */}
+                    <div className="border border-slate-200 rounded-lg overflow-hidden">
+                      <div className="bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-600 uppercase tracking-wide border-b border-slate-200">
+                        Machines to be updated ({machineFixRows.length})
+                      </div>
+                      <div className="max-h-56 overflow-y-auto">
+                        <table className="w-full text-xs border-collapse">
+                          <thead className="sticky top-0 bg-slate-100">
+                            <tr>
+                              <th className="px-3 py-2 text-left text-slate-500 font-semibold border-b border-slate-200">Machine Name</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-semibold border-b border-slate-200">Brand</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-semibold border-b border-slate-200">Current id field</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-semibold border-b border-slate-200">Will be set to</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {machineFixRows.map(row => (
+                              <tr key={row.docId} className="border-b border-slate-100 hover:bg-slate-50">
+                                <td className="px-3 py-2 font-medium text-slate-800">{row.name}</td>
+                                <td className="px-3 py-2 text-slate-500">{row.brand}</td>
+                                <td className="px-3 py-2 font-mono text-red-500">{row.currentId === null ? 'null' : '—'}</td>
+                                <td className="px-3 py-2 font-mono text-blue-700 font-bold">{row.willBe}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Confirm + Run */}
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <div>
+                        <p className="text-sm font-medium text-slate-700 mb-1">Type <span className="font-mono bg-slate-100 px-1 rounded">CONFIRM</span> to apply</p>
+                        <input
+                          type="text"
+                          value={machineFixConfirm}
+                          onChange={e => setMachineFixConfirm(e.target.value)}
+                          placeholder="Type CONFIRM"
+                          className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 w-40"
+                        />
+                      </div>
+                      <button
+                        onClick={handleFixMachineIds}
+                        disabled={machineFixConfirm !== 'CONFIRM' || machineFixRunning}
+                        className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-4"
+                      >
+                        {machineFixRunning
+                          ? <><RefreshCw size={14} className="animate-spin" /> Fixing...</>
+                          : <><Database size={14} /> Fix {machineFixRows.length} Machine{machineFixRows.length !== 1 ? 's' : ''}</>}
+                      </button>
+                    </div>
+                  </>
+                )
+              )}
+
+              {machineFixResult && (
+                <div className={`p-3 rounded-lg text-sm font-medium ${machineFixResult.startsWith('✅') ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'}`}>
+                  {machineFixResult}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
       </div>
     </div>
   );

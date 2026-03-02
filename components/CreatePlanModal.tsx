@@ -18,6 +18,16 @@ interface CreatePlanModalProps {
   customerName: string;
   machines?: any[]; // Optional, can be passed from parent
   externalFactories?: any[]; // Optional, for external planning
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | null;
+}
+
+interface MachineDebugEntry {
+  rawId: any;
+  firestoreId: any;
+  machineid: any;
+  name: any;
+  resolvedId: string | null;
+  skipped: boolean;
 }
 
 interface MachineRecommendation {
@@ -74,7 +84,8 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
   order,
   customerName,
   machines: propMachines,
-  externalFactories: propExternalFactories
+  externalFactories: propExternalFactories,
+  userRole
 }) => {
   // Data State
   const [machines, setMachines] = useState<MachineRow[]>([]);
@@ -89,6 +100,8 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
   const [targetFabric, setTargetFabric] = useState<FabricDefinition | null>(null);
   const [inferredSpecs, setInferredSpecs] = useState<{gauge?: string, dia?: string}[]>([]);
   const [showDebugDetails, setShowDebugDetails] = useState(false);
+  const [showMachineDebug, setShowMachineDebug] = useState(false);
+  const [machineDebugLog, setMachineDebugLog] = useState<MachineDebugEntry[]>([]);
   
   // Schedule Editing State
   const [expandedMachineId, setExpandedMachineId] = useState<string | null>(null);
@@ -141,39 +154,38 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
       }
       
       // Normalize Machines to ensure ID and Name exist
+      const debugLog: MachineDebugEntry[] = [];
       const normalizedMachines: MachineRow[] = rawMachines.map((m: any, idx: number) => {
-          // Use firestoreId as the most reliable fallback since it's always set from doc.id
-          // Use index as last resort to ensure unique IDs
-          const machineId = m.id ?? m.machineid ?? m.firestoreId ?? `temp-${idx}`;
+          // Always prefer firestoreId (explicitly set from doc.id in the snapshot listener),
+          // then fall back to m.id. NEVER use a temp-N fallback — that creates ghost
+          // documents in Firestore when plans are saved.
+          const machineId = m.firestoreId || m.id || m.machineid;
+          const entry: MachineDebugEntry = {
+            rawId: m.id,
+            firestoreId: m.firestoreId,
+            machineid: m.machineid,
+            name: m.machineName || m.name || null,
+            resolvedId: machineId ? String(machineId) : null,
+            skipped: !machineId,
+          };
+          debugLog.push(entry);
+          if (!machineId) {
+            console.warn('[CreatePlanModal] Skipping machine with no resolvable ID:', m);
+            return null;
+          }
           const mName = m.machineName || m.name || `Machine ${machineId}`;
           const mType = m.type || 'Unknown';
           return {
             ...m,
             id: machineId,
+            firestoreId: machineId,
             machineName: mName,
             type: mType,
             avgProduction: Number(m.avgProduction) || getDefaultProduction(mName, mType),
             remainingMfg: Number(m.remainingMfg) || 0,
           };
-      });
-
-      // DEBUG: Log machines with problematic IDs
-      const problematicMachines = normalizedMachines.filter(m => 
-        String(m.id).startsWith('temp-') || 
-        m.machineName.includes('undefined') ||
-        !m.id
-      );
-      if (problematicMachines.length > 0) {
-        console.warn('[CreatePlanModal] ⚠️ Machines with missing/invalid IDs detected:', 
-          problematicMachines.map(m => ({
-            id: m.id,
-            firestoreId: m.firestoreId,
-            machineid: (m as any).machineid,
-            machineName: m.machineName,
-            rawData: m
-          }))
-        );
-      }
+      }).filter(Boolean) as MachineRow[];
+      setMachineDebugLog(debugLog);
 
       setMachines(normalizedMachines);
 
@@ -684,9 +696,81 @@ export const CreatePlanModal: React.FC<CreatePlanModalProps> = ({
                       <span className="font-mono bg-slate-100 px-1.5 rounded">{order.requiredQty} kg</span>
                    </div>
                 </div>
-                <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-red-500 transition-colors">
-                    <X size={24} />
-                </button>
+                <div className="flex items-center gap-2">
+                  {(
+                    <div className="relative">
+                      <button
+                        onClick={() => setShowMachineDebug(v => !v)}
+                        title="Machine ID Debug"
+                        className={`p-2 rounded-full transition-colors ${
+                          machineDebugLog.some(e => e.skipped)
+                            ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                            : 'bg-slate-100 text-slate-400 hover:bg-slate-200 hover:text-slate-600'
+                        }`}
+                      >
+                        <AlertTriangle size={16} />
+                        {machineDebugLog.some(e => e.skipped) && (
+                          <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                            {machineDebugLog.filter(e => e.skipped).length}
+                          </span>
+                        )}
+                      </button>
+
+                      {showMachineDebug && (
+                        <div className="absolute right-0 top-10 z-50 w-[600px] bg-white border border-slate-200 rounded-xl shadow-2xl text-[11px]">
+                          <div className={`flex items-center justify-between px-3 py-2 rounded-t-xl font-bold border-b ${
+                            machineDebugLog.some(e => e.skipped)
+                              ? 'bg-red-50 border-red-200 text-red-700'
+                              : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                          }`}>
+                            <span className="flex items-center gap-1.5">
+                              <AlertTriangle size={12} />
+                              Machine ID Resolver —
+                              {machineDebugLog.some(e => e.skipped)
+                                ? ` ${machineDebugLog.filter(e => e.skipped).length} skipped, ${machineDebugLog.filter(e => !e.skipped).length} loaded`
+                                : ` All ${machineDebugLog.length} machines OK`
+                              }
+                            </span>
+                            <button onClick={() => setShowMachineDebug(false)} className="ml-4 text-slate-400 hover:text-slate-700">✕</button>
+                          </div>
+                          <div className="overflow-auto max-h-64">
+                            <table className="w-full border-collapse">
+                              <thead>
+                                <tr className="bg-slate-100 text-slate-500 text-left sticky top-0">
+                                  <th className="px-2 py-1.5 border-b border-slate-200">Status</th>
+                                  <th className="px-2 py-1.5 border-b border-slate-200">Name</th>
+                                  <th className="px-2 py-1.5 border-b border-slate-200">firestoreId</th>
+                                  <th className="px-2 py-1.5 border-b border-slate-200">id (field)</th>
+                                  <th className="px-2 py-1.5 border-b border-slate-200">machineid</th>
+                                  <th className="px-2 py-1.5 border-b border-slate-200">Resolved as</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {machineDebugLog.map((e, i) => (
+                                  <tr key={i} className={e.skipped ? 'bg-red-50' : 'bg-white'}>
+                                    <td className="px-2 py-1 border-b border-slate-100 font-bold">
+                                      {e.skipped ? <span className="text-red-600">✕ SKIPPED</span> : <span className="text-emerald-600">✓ OK</span>}
+                                    </td>
+                                    <td className="px-2 py-1 border-b border-slate-100 text-slate-700">{e.name ?? <span className="text-slate-400 italic">—</span>}</td>
+                                    <td className="px-2 py-1 border-b border-slate-100 font-mono text-slate-500">{e.firestoreId != null ? String(e.firestoreId) : <span className="text-red-400">null</span>}</td>
+                                    <td className="px-2 py-1 border-b border-slate-100 font-mono text-slate-500">{e.rawId != null ? String(e.rawId) : <span className="text-red-400">null</span>}</td>
+                                    <td className="px-2 py-1 border-b border-slate-100 font-mono text-slate-500">{e.machineid != null ? String(e.machineid) : <span className="text-red-400">null</span>}</td>
+                                    <td className="px-2 py-1 border-b border-slate-100 font-mono font-bold">
+                                      {e.resolvedId ? <span className="text-blue-700">{e.resolvedId}</span> : <span className="text-red-500">— no ID —</span>}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-red-500 transition-colors">
+                      <X size={24} />
+                  </button>
+                </div>
             </div>
 
             {/* Progress Bar */}
