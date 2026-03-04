@@ -77,6 +77,8 @@ const App: React.FC = () => {
   const [userRole, setUserRole] = useState<'admin' | 'schedule_editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [loadProgress, setLoadProgress] = useState(0);
+  const loadProgressRef = useRef(0);
   const [rawMachines, setRawMachines] = useState<any[]>([]);
   const [todaysLogs, setTodaysLogs] = useState<any[]>([]); // NEW: Store logs from sub-collection
   const [machines, setMachines] = useState<MachineRow[]>([]);
@@ -677,10 +679,117 @@ const App: React.FC = () => {
     setShowInsights(true);
   };
 
+  // Animate load progress bar while authLoading is true
+  useEffect(() => {
+    if (!authLoading) {
+      setLoadProgress(100);
+      return;
+    }
+    loadProgressRef.current = 0;
+    setLoadProgress(0);
+    const interval = setInterval(() => {
+      loadProgressRef.current = loadProgressRef.current + (100 - loadProgressRef.current) * 0.06;
+      const capped = Math.min(loadProgressRef.current, 92); // never reach 100 until truly done
+      setLoadProgress(Math.round(capped));
+    }, 80);
+    return () => clearInterval(interval);
+  }, [authLoading]);
+
+  // Track elapsed seconds since auth started — to surface timeout messages
+  const [loadSeconds, setLoadSeconds] = useState(0);
+  useEffect(() => {
+    if (!authLoading) { setLoadSeconds(0); return; }
+    setLoadSeconds(0);
+    const t = setInterval(() => setLoadSeconds(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [authLoading]);
+
+  const loadStageLabel = loadProgress < 25
+    ? 'Connecting to server...'
+    : loadProgress < 50
+    ? 'Authenticating...'
+    : loadProgress < 75
+    ? 'Loading your workspace...'
+    : loadProgress < 92
+    ? 'Fetching permissions...'
+    : 'Almost ready...';
+
+  const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+  const loadSlowWarning = loadSeconds >= 3 && loadSeconds < 6;
+  const loadTimedOut = loadSeconds >= 6;
+
   if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-indigo-50 to-slate-100">
+        <div className="flex flex-col items-center gap-6 w-72">
+          {/* Logo / Icon */}
+          <div className="w-16 h-16 rounded-2xl bg-indigo-600 flex items-center justify-center shadow-lg">
+            <LayoutGrid size={32} className="text-white" />
+          </div>
+
+          {/* Title */}
+          <div className="text-center">
+            <h1 className="text-xl font-bold text-slate-800">Production Manager</h1>
+            <p className="text-sm text-slate-500 mt-1">
+              {loadTimedOut
+                ? (!isOnline ? 'No internet connection detected.' : 'Server is taking too long to respond.')
+                : loadSlowWarning
+                ? 'This is taking longer than usual...'
+                : loadStageLabel}
+            </p>
+          </div>
+
+          {/* Progress Bar */}
+          <div className="w-full">
+            <div className="flex justify-between text-xs text-slate-400 mb-1.5">
+              <span>Loading <span className="tabular-nums">{loadSeconds}s</span></span>
+              <span className="font-semibold text-indigo-600">{loadProgress}%</span>
+            </div>
+            <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-indigo-500 rounded-full transition-all duration-150 ease-out"
+                style={{ width: `${loadProgress}%` }}
+              />
+            </div>
+          </div>
+
+          {/* Stage dots */}
+          <div className="flex items-center gap-2">
+            {['Connect', 'Auth', 'Workspace', 'Permissions'].map((label, i) => {
+              const threshold = [0, 25, 50, 75][i];
+              const done = loadProgress >= threshold + 20;
+              const active = loadProgress >= threshold && !done;
+              return (
+                <div key={label} className="flex flex-col items-center gap-1">
+                  <div className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                    done ? 'bg-indigo-500' : active ? 'bg-indigo-300 animate-pulse' : 'bg-slate-200'
+                  }`} />
+                  <span className={`text-[10px] ${
+                    done ? 'text-indigo-500' : active ? 'text-indigo-300' : 'text-slate-300'
+                  }`}>{label}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Timeout action */}
+          {loadTimedOut && (
+            <div className="w-full flex flex-col items-center gap-2 pt-1">
+              <p className="text-xs text-center px-3 py-2 rounded-lg border bg-amber-50 border-amber-200 text-amber-600">
+                {!isOnline
+                  ? 'Check your internet connection and try again.'
+                  : 'Still connecting — please wait a moment longer.'}
+              </p>
+            </div>
+          )}
+
+          {/* Slow warning (3–6 s) */}
+          {loadSlowWarning && !loadTimedOut && (
+            <p className="text-xs text-slate-400 text-center animate-pulse">
+              Waiting for server response...
+            </p>
+          )}
+        </div>
       </div>
     );
   }
@@ -1078,6 +1187,7 @@ const App: React.FC = () => {
                 highlightTarget={highlightTarget}
                 onHighlightComplete={() => setHighlightTarget(null)}
                 highlightAddOrder={highlightTarget?.highlightAddOrder}
+                initialMachinesData={rawMachines}
               />
             )}
 

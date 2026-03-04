@@ -12,6 +12,7 @@ interface OrderProductionHistoryModalProps {
   machines: MachineSS[];
   seasonId?: string;
   seasonName?: string;
+  forceOrderIdOnly?: boolean; // When true, skip legacy matching regardless of order.reorderOfId
 }
 
 interface ProductionLog {
@@ -57,7 +58,8 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
   clientName,
   machines,
   seasonId,
-  seasonName
+  seasonName,
+  forceOrderIdOnly = false
 }) => {
   const [logs, setLogs] = useState<ProductionLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -74,8 +76,13 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
   const fetchLogs = async () => {
     setLoading(true);
     const debug: string[] = [];
-    debug.push(`Searching for Client: "${clientName}"`);
-    debug.push(`Searching for Fabric: "${order.material}"`);
+    const isReOrder = forceOrderIdOnly || !!order.reorderOfId;
+    if (isReOrder) {
+      debug.push(`[ReOrder] Searching by Order ID only: "${order.id}"`);
+    } else {
+      debug.push(`Searching for Client: "${clientName}"`);
+      debug.push(`Searching for Fabric: "${order.material}"`);
+    }
     debug.push(`Total Machines Scanned: ${machines.length}`);
     if (seasonId) debug.push(`Season Filter: "${seasonName || seasonId}"`);
 
@@ -112,8 +119,11 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
                   fabricFoundOnMachines.add(machine.name || 'Unknown');
               }
 
-              const isMatch = (logClient === targetClient && logFabric === targetFabric) ||
-                              (log.client === clientName && log.fabric === order.material); // Fallback to exact match
+              // For ReOrders: only match by orderId — no legacy client+fabric match
+              const isMatch = isReOrder
+                ? (log as any).orderId === order.id
+                : (logClient === targetClient && logFabric === targetFabric) ||
+                  (log.client === clientName && log.fabric === order.material); // Fallback to exact match
 
               if (isMatch) {
                   const entry: ProductionLog = {
@@ -139,14 +149,18 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
 
       // 2. External Production Logs
       try {
-        const extDocs = await getDocs(query(
-            collection(db, 'externalProduction'),
-            where('client', '==', clientName), 
-        ));
+        // ReOrder: search by orderId only; regular orders: search by client
+        const extQuery = isReOrder
+          ? query(collection(db, 'externalProduction'), where('orderId', '==', order.id))
+          : query(collection(db, 'externalProduction'), where('client', '==', clientName));
+
+        const extDocs = await getDocs(extQuery);
 
         extDocs.forEach(doc => {
             const data = doc.data();
-            if (normalize(data.fabric) === targetFabric) {
+            // For ReOrder: already filtered by orderId, no fabric check needed
+            // For regular orders: filter by fabric
+            if (isReOrder || normalize(data.fabric) === targetFabric) {
                 const scrapVal = Number(data.scrap) || Number(data.scrapQty) || 0;
                 const entry: ProductionLog = {
                     id: doc.id,

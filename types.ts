@@ -396,6 +396,11 @@ export interface OrderRow {
   seasonId?: string;   // Season ID this order row belongs to
   seasonName?: string; // Season display name (e.g. "Summer 2026")
   noMachineDataNote?: string; // NEW: User explanation when finished but no machine data found
+  reorderOfId?: string; // NEW: Tracks parent order when this row is a reorder
+  reorderType?: 'طلب عميل' | 'استعواض'; // NEW: Classification for reorder (client request vs restock)
+  reorderReason?: string; // NEW: Optional reason when reorderType is restock
+  createdAt?: string;
+  createdBy?: string;
   
   // Audit Info
   lastUpdatedBy?: string;

@@ -766,8 +766,13 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [flOrderId, setFlOrderId] = useState<string>('');
   const [flMachineId, setFlMachineId] = useState<string>('');
   const [flLogId, setFlLogId] = useState<string>('');
+  const flatOrdersLoadedRef = useRef(false);
 
+  // Only subscribe to orders when the lookup modal is first opened — not on mount
   useEffect(() => {
+    if (!showFabricLookup) return;           // don't run at all while modal is closed
+    if (flatOrdersLoadedRef.current) return; // already fetched in this session — reuse data
+    flatOrdersLoadedRef.current = true;
     const unsub = onSnapshot(collectionGroup(db, 'orders'), (snapshot) => {
       const orders = snapshot.docs.map(d => ({
         id: d.id,
@@ -777,7 +782,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       setFlatOrders(orders);
     });
     return () => unsub();
-  }, []);
+  }, [showFabricLookup]);
 
   // Unique seasons derived from flatOrders
   const flSeasonOptions = useMemo(() => {

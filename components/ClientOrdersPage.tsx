@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+﻿import React, { useState, useEffect, useRef, useMemo } from 'react';
 import * as XLSX from 'xlsx-js-style';
 import { createPortal } from 'react-dom';
 import { toJpeg } from 'html-to-image';
@@ -84,7 +84,8 @@ import {
   LayoutGrid,
   List,
   Printer,
-  ArrowUpDown
+  ArrowUpDown,
+  Link2
 } from 'lucide-react';
 import { OrderSummaryCard } from './OrderSummaryCard';
 
@@ -904,46 +905,64 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
   return (
     <div className="relative w-full h-full" ref={containerRef}>
       <div className="relative w-full h-full flex items-center">
-        <input
-            id={id}
-            type="text"
-            value={inputValue}
-            onChange={handleInputChange}
-            onFocus={() => {
-            setIsOpen(true);
-            if (onFocus) onFocus();
-            }}
-            onKeyDown={(e) => {
-            if (e.key === 'Enter' && filteredOptions.length > 0) {
-                handleSelect(filteredOptions[0]);
-            } else if (e.key === 'Enter' && onCreateNew && searchTerm) {
-                onCreateNew(searchTerm);
-                setIsOpen(false);
-            }
-            if (onKeyDown) onKeyDown(e);
-            }}
-            placeholder={placeholder}
-            className={className || "w-full h-full px-2 py-1 bg-transparent outline-none focus:bg-blue-50 text-center pr-6"} // Added pr-6
-            autoComplete="off"
-            title={title}
-        />
-        {/* Edit Button - Visible only when a value is selected */}
-        {value && onCreateNew && (
-            <button
+        {!isOpen && inputValue ? (
+          <div
+            className="w-full px-2 py-1 text-xs text-slate-700 whitespace-normal break-words leading-snug cursor-pointer hover:bg-blue-50 rounded pr-6"
+            onClick={() => { setIsOpen(true); setSearchTerm(''); if (onFocus) onFocus(); }}
+            title={title || inputValue}
+          >
+            {inputValue}
+            {value && onCreateNew && (
+              <button
                 type="button"
-                onClick={(e) => {
-                    e.stopPropagation();
-                    // Open edit modal for the CURRENT fabric
-                    // Assuming onCreateNew handles opening the modal - usually for "New", but we can reuse for "Edit" 
-                    // if we pass the current name.
-                    onCreateNew(value); 
-                }}
-                className="absolute right-1 text-slate-400 hover:text-blue-600 p-0.5 rounded transition-colors"
+                onClick={(e) => { e.stopPropagation(); onCreateNew(value); }}
+                className="absolute right-1 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-600 p-0.5 rounded transition-colors"
                 title="Edit Fabric Details"
-                tabIndex={-1} // Prevent tabbing to it easily while typing
-            >
+                tabIndex={-1}
+              >
                 <EditIcon size={10} />
-            </button>
+              </button>
+            )}
+          </div>
+        ) : (
+          <>
+            <input
+                id={id}
+                type="text"
+                value={isOpen ? searchTerm : inputValue}
+                onChange={handleInputChange}
+                onFocus={() => {
+                  setIsOpen(true);
+                  setSearchTerm('');
+                  if (onFocus) onFocus();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && filteredOptions.length > 0) {
+                      handleSelect(filteredOptions[0]);
+                  } else if (e.key === 'Enter' && onCreateNew && searchTerm) {
+                      onCreateNew(searchTerm);
+                      setIsOpen(false);
+                  }
+                  if (onKeyDown) onKeyDown(e);
+                }}
+                placeholder={isOpen ? 'Search...' : placeholder}
+                className={className || "w-full h-full px-2 py-1 bg-blue-50 outline-none text-center pr-6 text-xs rounded"}
+                autoComplete="off"
+                title={title}
+                autoFocus={isOpen}
+            />
+            {value && onCreateNew && (
+              <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onCreateNew(value); }}
+                  className="absolute right-1 text-slate-400 hover:text-blue-600 p-0.5 rounded transition-colors"
+                  title="Edit Fabric Details"
+                  tabIndex={-1}
+              >
+                  <EditIcon size={10} />
+              </button>
+            )}
+          </>
         )}
       </div>
       {isOpen && (searchTerm || filteredOptions.length > 0) && (
@@ -1008,6 +1027,11 @@ const formatDateShort = (dateStr: string) => {
 const MemoizedOrderRow = React.memo(({
   row,
   statusInfo,
+  statusMatchType,
+  flashNew,
+  groupDepth,
+  isGroupParent,
+  isGrouped,
   fabrics,
   isSelected,
   toggleSelectRow,
@@ -1044,10 +1068,16 @@ const MemoizedOrderRow = React.memo(({
   setNoMachineDataModal,
   selectedCustomerSeasonId,
   selectedCustomerSeasonName,
-  ordersColVis
+  ordersColVis,
+  onReorder
 }: {
   row: OrderRow;
   statusInfo: any;
+  statusMatchType: 'orderId' | 'legacy';
+  flashNew?: boolean;
+  groupDepth?: number;
+  isGroupParent?: boolean;
+  isGrouped?: boolean;
   fabrics: FabricDefinition[];
   isSelected: boolean;
   toggleSelectRow: (id: string) => void;
@@ -1085,6 +1115,7 @@ const MemoizedOrderRow = React.memo(({
   selectedCustomerSeasonId?: string;
   selectedCustomerSeasonName?: string;
   ordersColVis?: Record<string, boolean>;
+  onReorder: (row: OrderRow, reorderType?: 'طلب عميل' | 'استعواض') => Promise<void>;
 }) => {
   // Viewer role is read-only
   const isReadOnly = userRole === 'viewer';
@@ -1105,10 +1136,26 @@ const MemoizedOrderRow = React.memo(({
   const [showYarnModal, setShowYarnModal] = useState(false);
   const [showOrderDebug, setShowOrderDebug] = useState(false);
   const [selectedBatchForDetails, setSelectedBatchForDetails] = useState<number>(-1);
+  const [showReorderMenu, setShowReorderMenu] = useState(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const reorderMenuRef = useRef<HTMLDivElement>(null);
   const refCode = row.material ? `${selectedCustomerName}-${row.material}` : '-';
   const hasActive = statusInfo && statusInfo.active.length > 0;
   const displayRemaining = hasActive ? statusInfo.remaining : row.remainingQty;
+
+  useEffect(() => {
+    if (!showReorderMenu) return;
+    const handleClick = (e: MouseEvent) => {
+      if (reorderMenuRef.current && !reorderMenuRef.current.contains(e.target as Node)) {
+        setShowReorderMenu(false);
+      }
+    };
+    window.addEventListener('click', handleClick);
+    return () => window.removeEventListener('click', handleClick);
+  }, [showReorderMenu]);
+
+  const parentOrder = useMemo(() => allOrders.find(o => o.id === row.reorderOfId), [allOrders, row.reorderOfId]);
+  const childReorders = useMemo(() => allOrders.filter(o => o.reorderOfId === row.id), [allOrders, row.id]);
 
   // Calculate Total Yarn for this order if fabric has composition
   const fabricDetails = fabrics.find(f => f.name === row.material);
@@ -1145,6 +1192,7 @@ const MemoizedOrderRow = React.memo(({
 
   // Calculate Produced from Machine Logs (matches History Modal)
   const totalProducedFromLogs = useMemo(() => {
+    const isReOrder = !!row.reorderOfId;
     const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
     const targetClient = normalize(selectedCustomerName);
     const targetFabric = normalize(row.material);
@@ -1171,7 +1219,10 @@ const MemoizedOrderRow = React.memo(({
       machine.dailyLogs.forEach((log) => {
         const logFabric = normalize(log.fabric);
         
-        const isMatch = clientOk(log.client) && logFabric === targetFabric && logSeasonOk(log);
+        // ReOrders: only match by orderId; skip legacy client/fabric matching
+        const isMatch = isReOrder
+          ? (log as any).orderId === row.id
+          : clientOk(log.client) && logFabric === targetFabric && logSeasonOk(log);
         
         if (isMatch) {
           total += Number(log.dayProduction) || 0;
@@ -1180,7 +1231,7 @@ const MemoizedOrderRow = React.memo(({
     });
     
     return total;
-  }, [machines, selectedCustomerName, row.material, selectedCustomerSeasonId, selectedCustomerSeasonName]);
+  }, [machines, selectedCustomerName, row.material, row.id, row.reorderOfId, selectedCustomerSeasonId, selectedCustomerSeasonName]);
 
   // Calculate Assigned Machines Summary & Total Capacity
   const { summary: assignedMachinesSummary, totalCapacity, totalSent, totalReceived, totalDelivered, scrapPercentage, scrapQuantity, groupedBatches } = useMemo(() => {
@@ -1248,6 +1299,8 @@ const MemoizedOrderRow = React.memo(({
 
   // Calculate Finished Details (SIMPLIFIED - no logs)
   const finishedDetails = useMemo(() => {
+      // Reorders must not inherit parent's history via fabric-name matching
+      if (row.reorderOfId) return null;
       const hasAnyPlan = (statusInfo?.active?.length > 0) || (statusInfo?.planned?.length > 0);
       
       // Only show if truly finished
@@ -1325,6 +1378,8 @@ const MemoizedOrderRow = React.memo(({
 
   // When !hasAnyPlan but remaining > 0, scan logs to find any prior production outside active day
   const historyFallback = useMemo(() => {
+    // Reorders must not inherit parent's history via fabric-name matching
+    if (row.reorderOfId) return null;
     if (hasAnyPlan) return null; // active/planned already covers it
     if ((row.remainingQty || 0) <= 0) return null; // finished branch handles this
 
@@ -1453,8 +1508,44 @@ const MemoizedOrderRow = React.memo(({
         reasons.push(`directMachine = ${directMachine.name} (row.machine field)`);
       }
     }
-    return { machineRows, finalStatus, reasons, totalMachinesScanned: machines.length, machinesWithAnyMatch: machineRows.length };
-  }, [machines, row.material, row.requiredQty, selectedCustomerName, selectedCustomerSeasonId, selectedCustomerSeasonName, statusInfo, historyFallback, finishedDetails, hasAnyPlan, internalActive, internalPlanned, externalMatches, directMachine, displayRemaining, hasHistory]);
+    // ── Match Source Analysis ──────────────────────────────────────────────
+    // Scan every machine's dailyLogs for logs that carry orderId === row.id
+    type OrderIdLogRow = { machineName: string; date: string; status: string; clientSeason: string; remaining: number; fabric: string; client: string; };
+    const orderIdMatchedLogs: OrderIdLogRow[] = [];
+    machines.forEach(machine => {
+      (machine.dailyLogs || []).forEach((log: any) => {
+        if (log.orderId === row.id) {
+          orderIdMatchedLogs.push({
+            machineName: machine.name,
+            date: log.date || '-',
+            status: log.status || '-',
+            clientSeason: log.clientSeason || '(none)',
+            remaining: Number(log.remainingMfg) || 0,
+            fabric: log.fabric || '-',
+            client: log.client || '-',
+          });
+        }
+      });
+    });
+    orderIdMatchedLogs.sort((a, b) => b.date.localeCompare(a.date));
+
+    // Why was orderId match chosen vs legacy?
+    const isReorder = !!row.reorderOfId;
+    let resolvedMatchType: 'orderId-logs' | 'orderId-forced-reorder' | 'legacy';
+    let matchSourceReason: string;
+    if (orderIdMatchedLogs.length > 0) {
+      resolvedMatchType = 'orderId-logs';
+      matchSourceReason = `Found ${orderIdMatchedLogs.length} machine log(s) with orderId = "${row.id}". Using Order ID match.`;
+    } else if (isReorder) {
+      resolvedMatchType = 'orderId-forced-reorder';
+      matchSourceReason = `This order is a reorder (reorderOfId = "${row.reorderOfId}"). Legacy fabric matching is skipped for reorders to avoid inheriting status from the parent order. No orderId logs found yet → status shows empty/Not Planned.`;
+    } else {
+      resolvedMatchType = 'legacy';
+      matchSourceReason = `No orderId logs found for orderId = "${row.id}". Falling back to legacy client+fabric match.`;
+    }
+
+    return { machineRows, finalStatus, reasons, totalMachinesScanned: machines.length, machinesWithAnyMatch: machineRows.length, orderIdMatchedLogs, resolvedMatchType, matchSourceReason };
+  }, [machines, row.material, row.requiredQty, row.id, row.reorderOfId, selectedCustomerName, selectedCustomerSeasonId, selectedCustomerSeasonName, statusInfo, historyFallback, finishedDetails, hasAnyPlan, internalActive, internalPlanned, externalMatches, directMachine, displayRemaining, hasHistory]);
 
   // Get completion status indicator for Dyehouse Info (simple search through delivery data)
   const getDyehouseCompletionStatus = useMemo(() => {
@@ -1494,7 +1585,7 @@ const MemoizedOrderRow = React.memo(({
     <>
     <tr 
       data-fabric-name={row.material}
-      className={`transition-colors group text-sm table-view hidden sm:table-row ${isSelected ? 'bg-blue-50' : 'hover:bg-blue-50/30'}`}
+      className={`transition-colors group text-sm table-view hidden sm:table-row ${flashNew ? 'ring-2 ring-indigo-300 bg-indigo-50/60' : isSelected ? 'bg-blue-50' : isGrouped ? 'bg-indigo-50/40' : ''} ${isGroupParent ? 'border-l-4 border-indigo-400' : (isGrouped ? 'border-l-4 border-indigo-200' : '')} ${isGrouped ? 'hover:bg-indigo-50/60' : 'hover:bg-blue-50/30'}`}
     >
       {/* Checkbox */}
       <td className="p-0 border-r border-slate-200 text-center align-middle">
@@ -1507,7 +1598,7 @@ const MemoizedOrderRow = React.memo(({
         <>
           {/* Fabric (Read-only in Dyehouse View) */}
           <td className="p-0 border-r border-slate-200 relative group/fabric" title={refCode}>
-             <div className="flex items-center h-full w-full px-3 py-2 gap-2">
+             <div className={`flex items-center h-full w-full px-3 py-2 gap-2 ${groupDepth ? 'pl-6' : ''}`}>
                 {/* Fabric Image */}
                 {fabricDetails?.imageUrl && (
                   <img 
@@ -1516,11 +1607,48 @@ const MemoizedOrderRow = React.memo(({
                     className="w-8 h-8 object-cover rounded border border-slate-200 shadow-sm flex-shrink-0"
                   />
                 )}
-                <div className="text-slate-700 font-medium truncate flex-1">
-                    {(() => {
-                      const fabricDef = fabrics.find(f => f.name === row.material);
-                      return fabricDef ? (fabricDef.shortName || fabricDef.name) : (row.material || '-');
-                    })()}
+                <div className="flex flex-col flex-1 min-w-0 gap-0.5">
+                    <div className="text-slate-700 font-medium truncate">
+                      {(() => {
+                        const fabricDef = fabrics.find(f => f.name === row.material);
+                        return fabricDef ? (fabricDef.shortName || fabricDef.name) : (row.material || '-');
+                      })()}
+                    </div>
+                    {hasComposition && (
+                       <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
+                         <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                         <span>Verified</span>
+                       </div>
+                    )}
+                </div>
+                <div className="absolute top-2 right-2 flex items-center gap-2 opacity-0 group-hover/fabric:opacity-100 transition-opacity">
+                  <span className="font-mono text-[10px] text-slate-600 bg-white border border-slate-200 rounded px-2 py-0.5 shadow-sm" title={row.id}>Order: {row.id.slice(0, 8)}</span>
+                  {row.reorderOfId && (
+                    <span className="inline-flex items-center gap-1 text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-full px-2 py-0.5" title="Reorder of another order">
+                      <Link2 size={10} />
+                      {isReadOnly ? (
+                        row.reorderType || 'Reorder'
+                      ) : (
+                        <select
+                          className="bg-transparent text-indigo-700 text-[10px] font-semibold border-none focus:ring-0 focus:outline-none cursor-pointer"
+                          value={row.reorderType || 'طلب عميل'}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            handleUpdateOrder(row.id, { reorderType: e.target.value as 'طلب عميل' | 'استعواض' });
+                          }}
+                        >
+                          <option value="طلب عميل">طلب عميل</option>
+                          <option value="استعواض">استعواض</option>
+                        </select>
+                      )}
+                    </span>
+                  )}
+                  {!row.reorderOfId && childReorders.length > 0 && (
+                    <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5" title="Has linked reorders">
+                      <Link2 size={10} /> {childReorders.length}
+                    </span>
+                  )}
                 </div>
                 <button 
                   onClick={(e) => {
@@ -1694,7 +1822,7 @@ const MemoizedOrderRow = React.memo(({
         <>
           {/* Fabric */}
           <td className="p-0 border-r border-slate-200 relative group/fabric" title={refCode}>
-            <div className="flex items-center h-full w-full gap-3">
+            <div className={`flex items-center h-full w-full gap-2 px-2 py-1.5 rounded-lg border border-slate-100 bg-white shadow-sm ${groupDepth ? 'pl-6' : ''}`}>
               {/* Fabric Image Thumbnail with Hover Popup */}
               <div className="relative flex-shrink-0 ml-2 group/img">
                 {fabricDetails?.imageUrl ? (
@@ -1781,7 +1909,7 @@ const MemoizedOrderRow = React.memo(({
                 )}
               </div>
               
-              <div className="flex-1 h-full flex flex-col justify-center">
+              <div className="flex-1 h-full flex flex-col justify-center gap-1 relative min-h-[60px]">
                 <SearchDropdown
                   id={`fabric-${row.id}`}
                   options={fabrics}
@@ -1793,6 +1921,7 @@ const MemoizedOrderRow = React.memo(({
                   onCreateNew={(name) => handleCreateFabric(name, row.id)}
                   placeholder="Select Fabric..."
                 />
+                <span className="font-mono text-[10px] text-slate-400 px-1" title={row.id}>#{row.id.slice(0, 8)}</span>
                 
                 {/* Variant Selector */}
                 {fabricDetails && fabricDetails.variants && fabricDetails.variants.length > 1 && (
@@ -1830,9 +1959,30 @@ const MemoizedOrderRow = React.memo(({
                             <Calculator size={10} />
                             Yarn Info
                           </button>
-                          {totalYarnForOrder > 0 && (
-                            <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200" title="Total Yarn Required including scrap">
-                              Total: {totalYarnForOrder.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+                          {row.reorderOfId && (
+                            <span className="inline-flex items-center gap-1 text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-full px-2 py-0.5" title="This order was created as a reorder">
+                              <Link2 size={10} />
+                              {isReadOnly ? (
+                                row.reorderType || 'Reorder'
+                              ) : (
+                                <select
+                                  className="bg-transparent text-indigo-700 text-[10px] font-semibold border-none focus:ring-0 focus:outline-none cursor-pointer"
+                                  value={row.reorderType || 'طلب عميل'}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onChange={(e) => {
+                                    e.stopPropagation();
+                                    handleUpdateOrder(row.id, { reorderType: e.target.value as 'طلب عميل' | 'استعواض' });
+                                  }}
+                                >
+                                  <option value="طلب عميل">طلب عميل</option>
+                                  <option value="استعواض">استعواض</option>
+                                </select>
+                              )}
+                            </span>
+                          )}
+                          {!row.reorderOfId && childReorders.length > 0 && (
+                            <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5" title="This order has reorders linked to it">
+                              <Link2 size={10} /> {childReorders.length} reorder{childReorders.length > 1 ? 's' : ''}
                             </span>
                           )}
                         </>
@@ -1916,7 +2066,7 @@ const MemoizedOrderRow = React.memo(({
 
       {!showDyehouse && (
         <>
-          {ordersColVis?.['status'] !== false && <td className="p-2 border-r border-slate-200 align-middle">
+          {ordersColVis?.['status'] !== false && <td className="p-2 border-r border-slate-200 align-middle relative group/statuscell">
             <div className="flex items-center justify-between gap-2">
               <div className="flex flex-col gap-1 flex-1 min-w-0">
                 {(() => {
@@ -2191,6 +2341,12 @@ const MemoizedOrderRow = React.memo(({
                 </button>
               )}
             </div>
+            {/* Match type indicator — visible on hover */}
+            <div className="absolute bottom-0.5 right-1 opacity-0 group-hover/statuscell:opacity-100 transition-opacity pointer-events-none">
+              <span className={`text-[8px] font-mono px-1 py-0.5 rounded ${statusMatchType === 'orderId' ? 'bg-purple-100 text-purple-600' : 'bg-slate-100 text-slate-400'}`} title={statusMatchType === 'orderId' ? `Matched via Order ID (${row.id}) — open 🪲 debug for details` : `Matched via fabric name (${row.material}) — open 🪲 debug for details`}>
+                {statusMatchType === 'orderId' ? 'OrderID' : 'Legacy'}
+              </span>
+            </div>
           </td>}
 
           {ordersColVis?.['dyehousePlan'] !== false && <DyehousePlanCell
@@ -2364,6 +2520,56 @@ const MemoizedOrderRow = React.memo(({
               rows={1}
             />
           </td>}
+
+          {ordersColVis?.['reorder'] !== false && (
+            <td className="p-1 border-r border-slate-200 text-center align-middle">
+              <div className="relative inline-block" ref={reorderMenuRef}>
+                <button
+                  onClick={() => {
+                    if (!isReadOnly) setShowReorderMenu(!showReorderMenu);
+                  }}
+                  disabled={isReadOnly}
+                  className={`px-3 py-1 text-[11px] rounded-full border font-semibold transition-colors shadow-sm inline-flex items-center gap-1 ${
+                    isReadOnly
+                      ? 'bg-slate-50 text-slate-300 border-slate-200 cursor-not-allowed'
+                      : 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50 hover:border-indigo-300'
+                  }`}
+                  title={isReadOnly ? 'View only mode' : 'Create reorder with same fabric'}
+                >
+                  <Link2 size={12} />
+                  Reorder
+                </button>
+                
+                {showReorderMenu && !isReadOnly && (
+                  <div className="absolute bottom-full right-0 mb-2 bg-white border border-slate-200 rounded-lg shadow-xl z-50 flex gap-1">
+                    <button
+                      className="px-3 py-2 text-sm hover:bg-indigo-50 flex items-center justify-center whitespace-nowrap rounded-l-lg first:rounded-r-none"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowReorderMenu(false);
+                        onReorder(row, 'طلب عميل');
+                      }}
+                      title="طلب عميل - Client Request"
+                    >
+                      <span className="text-slate-700 font-medium">طلب عميل</span>
+                    </button>
+                    <div className="border-r border-slate-200"></div>
+                    <button
+                      className="px-3 py-2 text-sm hover:bg-indigo-50 flex items-center justify-center whitespace-nowrap rounded-r-lg"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowReorderMenu(false);
+                        onReorder(row, 'استعواض');
+                      }}
+                      title="استعواض - Restock"
+                    >
+                      <span className="text-slate-700 font-medium">استعواض</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </td>
+          )}
 
         </>
       )}
@@ -4497,6 +4703,61 @@ const MemoizedOrderRow = React.memo(({
               ))}
             </div>
 
+            {/* ── Match Source Panel ── */}
+            <div className={`border rounded-lg p-4 ${
+              orderDebugData.resolvedMatchType === 'orderId-logs' ? 'bg-indigo-50 border-indigo-200' :
+              orderDebugData.resolvedMatchType === 'orderId-forced-reorder' ? 'bg-amber-50 border-amber-200' :
+              'bg-slate-50 border-slate-200'
+            }`}>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[10px] font-bold uppercase tracking-wide text-slate-600">Match Source</span>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                  orderDebugData.resolvedMatchType === 'orderId-logs' ? 'bg-indigo-100 text-indigo-700 border-indigo-300' :
+                  orderDebugData.resolvedMatchType === 'orderId-forced-reorder' ? 'bg-amber-100 text-amber-700 border-amber-300' :
+                  'bg-slate-100 text-slate-600 border-slate-300'
+                }`}>
+                  {orderDebugData.resolvedMatchType === 'orderId-logs' ? '✓ Order ID Match (logs found)' :
+                   orderDebugData.resolvedMatchType === 'orderId-forced-reorder' ? '⚠ Order ID (forced – reorder, no logs yet)' :
+                   '↩ Legacy Fabric Match'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-700 mb-3">{orderDebugData.matchSourceReason}</p>
+              {orderDebugData.orderIdMatchedLogs.length > 0 ? (
+                <div>
+                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">Logs with orderId = "{row.id}"</div>
+                  <div className="border border-slate-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-100 text-slate-600 font-semibold">
+                        <tr>
+                          <th className="px-3 py-1.5 text-left">Machine</th>
+                          <th className="px-3 py-1.5 text-left">Date</th>
+                          <th className="px-3 py-1.5 text-left">Status</th>
+                          <th className="px-3 py-1.5 text-left">Season</th>
+                          <th className="px-3 py-1.5 text-right">Remaining</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {orderDebugData.orderIdMatchedLogs.map((l: any, i: number) => (
+                          <tr key={i} className="border-t border-slate-100">
+                            <td className="px-3 py-1.5 font-mono">{l.machineName}</td>
+                            <td className="px-3 py-1.5 font-mono">{l.date}</td>
+                            <td className="px-3 py-1.5">{l.status}</td>
+                            <td className="px-3 py-1.5 font-mono text-slate-500">{l.clientSeason}</td>
+                            <td className="px-3 py-1.5 font-mono text-right">{l.remaining || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-xs text-slate-400 italic bg-white border border-dashed border-slate-200 rounded-lg p-3 text-center">
+                  No machine logs found with orderId = "{row.id}"<br/>
+                  <span className="text-slate-500">(logs carrying this orderId are created when operators enter it in the daily plan)</span>
+                </div>
+              )}
+            </div>
+
             {/* Final Status + Decision Path */}
             <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
               <div className="text-[10px] font-bold text-purple-700 uppercase tracking-wide mb-1">Final Status Determined</div>
@@ -4614,6 +4875,8 @@ interface ClientOrdersPageProps {
   onHighlightComplete?: () => void;
   userName?: string;
   highlightAddOrder?: boolean;
+  /** Pass rawMachines from App.tsx to avoid a duplicate MachineSS subscription */
+  initialMachinesData?: any[];
 }
 
 export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ 
@@ -4621,13 +4884,22 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   highlightTarget,
   onHighlightComplete,
   userName: propUserName,
-  highlightAddOrder: highlightAddOrderProp
+  highlightAddOrder: highlightAddOrderProp,
+  initialMachinesData
 }) => {
   const [customers, setCustomers] = useState<CustomerSheet[]>([]);
   const [rawCustomers, setRawCustomers] = useState<CustomerSheet[]>([]);
   const [flatOrders, setFlatOrders] = useState<OrderRow[]>([]);
   const [userName, setUserName] = useState<string>(propUserName || ''); // NEW: Store display name from Firestore
-  
+
+  // --- Progressive Orders Loading ---
+  // Tracks which customer IDs have had their orders listener attached
+  const loadedCustomerIdSet = useRef<Set<string>>(new Set());
+  // Stores per-customer onSnapshot unsubscribe functions
+  const perCustomerUnsubs = useRef<Map<string, () => void>>(new Map());
+  // Background loading progress for cross-customer views indicator
+  const [ordersProgress, setOrdersProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 });
+
   // Loading state tracker
   const [loadingState, setLoadingState] = useState({
     customers: false,
@@ -4649,10 +4921,31 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   
   const isFullyLoaded = loadingPercentage === 100;
 
+  // --- Load Timer ---
+  const loadStartRef = useRef<number>(Date.now());
+  const [loadTimeMs, setLoadTimeMs] = useState<number | null>(null);
+  const [showLoadTime, setShowLoadTime] = useState(false);
+  useEffect(() => {
+    if (isFullyLoaded && loadTimeMs === null) {
+      const elapsed = Date.now() - loadStartRef.current;
+      setLoadTimeMs(elapsed);
+      setShowLoadTime(true);
+      const t = setTimeout(() => setShowLoadTime(false), 20000);
+      return () => clearTimeout(t);
+    }
+  }, [isFullyLoaded, loadTimeMs]);
+
   // Sync with prop
   useEffect(() => {
     if (propUserName) setUserName(propUserName);
   }, [propUserName]);
+
+  // Sync machines from parent (App.tsx) — avoids duplicate MachineSS listener
+  useEffect(() => {
+    if (!initialMachinesData) return;
+    setMachines(initialMachinesData as MachineSS[]);
+    setLoadingState(prev => ({ ...prev, machines: true }));
+  }, [initialMachinesData]);
 
   // Fetch User Name if not provided via prop
   useEffect(() => {
@@ -4824,6 +5117,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       return localStorage.getItem('selectedSeasonId') || null;
   });
   const [showAddSeason, setShowAddSeason] = useState(false);
+  const [newRowFlashId, setNewRowFlashId] = useState<string | null>(null);
   const [newSeasonName, setNewSeasonName] = useState('');
 
   // Machine Filter State
@@ -5021,24 +5315,20 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       setLoadingState(prev => ({ ...prev, customers: true }));
     });
 
-    // 2. All Orders (Sub-collections) - Optimized for Global View
-    const unsubOrders = onSnapshot(query(collectionGroup(db, 'orders')), (snapshot) => {
-      const orders = snapshot.docs.map(d => ({ 
-        id: d.id, 
-        ...d.data(),
-        refPath: d.ref.path,
-        customerId: d.ref.parent.parent?.id 
-      } as OrderRow));
-      setFlatOrders(orders);
-      setLoadingState(prev => ({ ...prev, orders: true }));
-    });
+    // 2. Orders — loaded progressively per-customer in the background.
+    // Mark orders as ready immediately so the loading screen clears fast.
+    // Actual order data populates via the progressive loader effect below.
+    setLoadingState(prev => ({ ...prev, orders: true }));
 
-    // Machines (for active status)
-    const unsubMachines = onSnapshot(collection(db, 'MachineSS'), (snapshot) => {
-      const data = snapshot.docs.map(d => d.data() as MachineSS);
-      setMachines(data);
-      setLoadingState(prev => ({ ...prev, machines: true }));
-    });
+    // Machines (for active status) — skip if parent already provides machines via prop
+    let unsubMachines = () => {};
+    if (!initialMachinesData) {
+      unsubMachines = onSnapshot(collection(db, 'MachineSS'), (snapshot) => {
+        const data = snapshot.docs.map(d => d.data() as MachineSS);
+        setMachines(data);
+        setLoadingState(prev => ({ ...prev, machines: true }));
+      });
+    }
 
     // External Plans
     const unsubExternal = onSnapshot(collection(db, 'ExternalPlans'), (snapshot) => {
@@ -5082,13 +5372,79 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
     return () => {
       unsubCustomers();
-      unsubOrders();
       unsubMachines();
       unsubInventory();
       unsubSettings();
       unsubExternal();
     };
   }, []);
+
+  // --- Progressive Orders Loader ---
+  // Helper: attach a real-time listener for a single customer's orders.
+  // Idempotent — safe to call multiple times for the same customer.
+  const ensureCustomerOrdersLoaded = (customerId: string) => {
+    if (loadedCustomerIdSet.current.has(customerId)) return;
+    loadedCustomerIdSet.current.add(customerId);
+
+    const unsub = onSnapshot(
+      collection(db, 'CustomerSheets', customerId, 'orders'),
+      (snapshot) => {
+        const orders = snapshot.docs.map(d => ({
+          id: d.id,
+          ...d.data(),
+          refPath: d.ref.path,
+          customerId,
+        } as OrderRow));
+        setFlatOrders(prev => {
+          const without = prev.filter(o => o.customerId !== customerId);
+          return [...without, ...orders];
+        });
+        setOrdersProgress(prev => ({ ...prev, loaded: loadedCustomerIdSet.current.size }));
+      }
+    );
+
+    perCustomerUnsubs.current.set(customerId, unsub);
+  };
+
+  // Phase 2 & 3: When customer list arrives, load selected customer first (priority),
+  // then load the rest in the background with a stagger so the UI stays snappy.
+  useEffect(() => {
+    if (rawCustomers.length === 0) return;
+
+    setOrdersProgress({ loaded: 0, total: rawCustomers.length });
+
+    // Priority: load selected customer immediately
+    if (selectedCustomerId) {
+      ensureCustomerOrdersLoaded(selectedCustomerId);
+    }
+
+    // Background: load remaining customers with a 300ms stagger each
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    let delay = 800; // start after a short grace period
+    rawCustomers.forEach(customer => {
+      if (customer.id === selectedCustomerId) return; // already loaded above
+      const t = setTimeout(() => ensureCustomerOrdersLoaded(customer.id), delay);
+      timers.push(t);
+      delay += 300;
+    });
+
+    return () => {
+      timers.forEach(clearTimeout);
+      // Full cleanup on unmount
+      perCustomerUnsubs.current.forEach(unsub => unsub());
+      perCustomerUnsubs.current.clear();
+      loadedCustomerIdSet.current.clear();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawCustomers]);
+
+  // Phase 2 (on-demand): If user selects a customer before background loader reaches them, load immediately.
+  useEffect(() => {
+    if (selectedCustomerId) {
+      ensureCustomerOrdersLoaded(selectedCustomerId);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCustomerId]);
 
   // Listen for fabric-saved events from GlobalFabricButton
   useEffect(() => {
@@ -5510,6 +5866,109 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     return finalMap;
   }, [selectedCustomer, machines, externalFactories, customers, activeDay, seasons]);
 
+  // OrderID-based status map — for logs that already carry an orderId field.
+  // Priority: checked first before legacy fabric-based matching.
+  const orderIdStatsMap = useMemo(() => {
+    if (!selectedCustomer) return new Map<string, any>();
+
+    const orderIds = new Set(selectedCustomer.orders.map((o: OrderRow) => o.id).filter(Boolean));
+    const intermediateMap = new Map<string, {
+      active: string[];
+      planned: string[];
+      logDates: string[];
+      planStarts: string[];
+      planEnds: string[];
+      totalScrap: number;
+      remainingFromMachine: number;
+    }>();
+
+    orderIds.forEach((id: string) => {
+      intermediateMap.set(id, { active: [], planned: [], logDates: [], planStarts: [], planEnds: [], totalScrap: 0, remainingFromMachine: 0 });
+    });
+
+    machines.forEach(m => {
+      // Active day log with orderId
+      const activeLog = m.dailyLogs?.find((l: any) => l.date === activeDay && l.orderId && orderIds.has(l.orderId));
+      if (activeLog) {
+        const entry = intermediateMap.get(activeLog.orderId);
+        if (entry) {
+          const lowerStatus = (activeLog.status || '').trim().toLowerCase();
+          const hasProduction = Number(activeLog.dayProduction) > 0;
+          const isActiveState = hasProduction || ['working', 'active', 'under operation', 'تعمل', 'تشغيل', 'تحت التشغيل'].includes(lowerStatus);
+          const isFinishedState = !hasProduction && ['finished', 'completed', 'done', 'منتهي', 'تم', 'finish'].includes(lowerStatus);
+          if (isActiveState || isFinishedState) {
+            const displayName = isFinishedState ? `${m.name} (Finished)` : m.name;
+            if (!entry.active.includes(displayName)) entry.active.push(displayName);
+            const remaining = Number(activeLog.remainingMfg || m.remainingMfg || 0);
+            if (remaining) entry.remainingFromMachine += remaining;
+          }
+        }
+      }
+
+      // All history logs with orderId
+      m.dailyLogs?.forEach((log: any) => {
+        if (!log.orderId || !orderIds.has(log.orderId)) return;
+        const entry = intermediateMap.get(log.orderId);
+        if (!entry) return;
+        if (log.date) entry.logDates.push(log.date);
+        if (log.scrap) entry.totalScrap += Number(log.scrap);
+        const logStatus = (log.status || '').toLowerCase();
+        if (['finished', 'completed', 'done', 'منتهي', 'تم', 'finish'].includes(logStatus)) {
+          const finishedLabel = `${m.name} (Finished)`;
+          if (!entry.active.includes(finishedLabel)) {
+            const idx = entry.active.indexOf(m.name);
+            if (idx !== -1) entry.active.splice(idx, 1);
+            entry.active.push(finishedLabel);
+          }
+        }
+      });
+
+      // Future plans with orderId
+      m.futurePlans?.forEach((plan: any) => {
+        if (!plan.orderId || !orderIds.has(plan.orderId)) return;
+        const entry = intermediateMap.get(plan.orderId);
+        if (!entry) return;
+        if (!entry.planned.includes(m.name)) entry.planned.push(m.name);
+        if (plan.startDate) entry.planStarts.push(plan.startDate);
+        if (plan.endDate) entry.planEnds.push(plan.endDate);
+      });
+    });
+
+    const finalMap = new Map<string, any>();
+    intermediateMap.forEach((data, orderId) => {
+      // Only store entries that have actual log/plan data
+      if (data.active.length === 0 && data.planned.length === 0 && data.logDates.length === 0) return;
+
+      data.logDates.sort();
+      data.planStarts.sort();
+      data.planEnds.sort();
+
+      const earliestPlan = data.planStarts[0] || null;
+      const earliestLog = data.logDates[0] || null;
+      const latestPlan = data.planEnds[data.planEnds.length - 1] || null;
+      const latestLog = data.logDates[data.logDates.length - 1] || null;
+
+      const startDate = (earliestPlan && earliestLog)
+        ? (earliestPlan < earliestLog ? earliestPlan : earliestLog)
+        : (earliestPlan || earliestLog || '-');
+      const endDate = (latestPlan && latestLog)
+        ? (latestPlan > latestLog ? latestPlan : latestLog)
+        : (latestPlan || latestLog || '-');
+
+      finalMap.set(orderId, {
+        active: data.active,
+        planned: data.planned,
+        remaining: data.remainingFromMachine > 0 ? data.remainingFromMachine : 0,
+        scrap: data.totalScrap,
+        startDate,
+        endDate,
+        others: ''
+      });
+    });
+
+    return finalMap;
+  }, [selectedCustomer, machines, activeDay]);
+
   const allClientsStats = useMemo(() => {
     if (selectedCustomerId !== ALL_CLIENTS_ID) return [];
 
@@ -5798,8 +6257,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       scrapQty: 0,
       others: '',
       notes: '',
-      batchDeliveries: '',
-      accessoryDeliveries: '',
+      batchDeliveries: 0,
+      accessoryDeliveries: 0,
       customerId: selectedCustomerId, // Link to parent
       seasonId: selectedSeasonId || '2025-summer', // Add Season ID
       createdAt: new Date().toISOString() // Add creation timestamp for ordering
@@ -5817,20 +6276,76 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     };
 
     if (hasLegacyData) {
-        // Legacy Mode: Append to array
-        const updatedOrders = [...selectedCustomer.orders, newRow];
-        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { 
-            orders: updatedOrders,
-            ...auditInfo
-        });
+      // Legacy Mode: Append to array
+      const updatedOrders = [...selectedCustomer.orders, newRow];
+      await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { 
+        orders: updatedOrders,
+        ...auditInfo
+      });
     } else {
-        // Optimized Mode: Add to sub-collection
-        await setDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', newRow.id), {
-            ...newRow,
-            ...auditInfo
-        });
+      // Optimized Mode: Add to sub-collection
+      await setDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', newRow.id), {
+        ...newRow,
+        ...auditInfo
+      });
     }
+
+    setNewRowFlashId(newRow.id);
+    setTimeout(() => setNewRowFlashId(null), 2000);
   };
+
+    const handleReorderRow = async (sourceRow: OrderRow, reorderType?: 'طلب عميل' | 'استعواض') => {
+    if (!selectedCustomerId || !selectedCustomer) return;
+
+    const newRow: OrderRow = {
+      id: crypto.randomUUID(),
+      material: sourceRow.material,
+      machine: '',
+      requiredQty: 0,
+      accessory: '',
+      manufacturedQty: 0,
+      remainingQty: 0,
+      orderReceiptDate: new Date().toISOString().split('T')[0],
+      startDate: '',
+      endDate: '',
+      scrapQty: 0,
+      others: '',
+      notes: '',
+      batchDeliveries: 0,
+      accessoryDeliveries: 0,
+      customerId: selectedCustomerId,
+      seasonId: selectedSeasonId || '2025-summer',
+      createdAt: new Date().toISOString(),
+      reorderOfId: sourceRow.id,
+      reorderType: reorderType || 'طلب عميل',
+    };
+
+    const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
+    const hasLegacyData = selectedCustomer.orders && selectedCustomer.orders.length > 0 && !hasSubCollectionData;
+
+    const user = auth.currentUser;
+    const auditInfo = {
+      lastUpdatedBy: userName || user?.displayName || 'Unknown',
+      lastUpdatedByEmail: user?.email || 'Unknown',
+      lastUpdated: new Date().toISOString()
+    };
+
+    if (hasLegacyData) {
+      const updatedOrders = [...selectedCustomer.orders, newRow];
+      await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { 
+        orders: updatedOrders,
+        ...auditInfo
+      });
+    } else {
+      await setDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', newRow.id), {
+        ...newRow,
+        ...auditInfo
+      });
+    }
+
+    setNewRowFlashId(newRow.id);
+    setTimeout(() => setNewRowFlashId(null), 2000);
+    };
 
   const handleUpdateOrder = async (rowId: string, updates: Partial<OrderRow>) => {
     if (!selectedCustomerId || !selectedCustomer) return;
@@ -6633,6 +7148,44 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
           return createdA - createdB;
       });
   }, [selectedCustomer, machineFilter, machines, externalFactories, fabricSearchTerm, sortByDyehouseStatus]);
+
+  // Group rows so reorders render immediately beneath their parent order
+  const groupedOrders = useMemo(() => {
+    const childrenMap = new Map<string, OrderRow[]>();
+
+    filteredOrders.forEach(row => {
+      if (!row.reorderOfId) return;
+      const arr = childrenMap.get(row.reorderOfId) || [];
+      arr.push(row);
+      childrenMap.set(row.reorderOfId, arr);
+    });
+
+    const ordered: OrderRow[] = [];
+    const seen = new Set<string>();
+
+    // Parent rows first, followed by their children
+    filteredOrders.forEach(row => {
+      if (row.reorderOfId) return;
+      ordered.push(row);
+      seen.add(row.id);
+      const kids = childrenMap.get(row.id);
+      if (kids) {
+        kids.forEach(child => {
+          ordered.push(child);
+          seen.add(child.id);
+        });
+      }
+    });
+
+    // Orphaned children (parent filtered out) remain visible
+    filteredOrders.forEach(row => {
+      if (seen.has(row.id)) return;
+      ordered.push(row);
+      seen.add(row.id);
+    });
+
+    return { ordered, childrenMap };
+  }, [filteredOrders]);
 
   const usedFabricNames = useMemo(() => {
       if (!selectedCustomer || selectedCustomerId === ALL_CLIENTS_ID || selectedCustomerId === ALL_YARNS_ID) {
@@ -7850,6 +8403,41 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     <div className="flex flex-col min-h-[calc(100vh-100px)] bg-slate-50 rounded-xl border border-slate-200 shadow-sm">
       <style>{globalStyles}</style>
       
+      {/* Load Time Badge — shown for 20s after first full load */}
+      {showLoadTime && loadTimeMs !== null && (
+        <div className="fixed top-20 right-6 z-[9999] animate-in slide-in-from-right fade-in duration-300">
+          <div className="bg-emerald-50 border-2 border-emerald-400 rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 min-w-[200px]">
+            <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-xs font-bold text-emerald-700">Initial Load Complete</span>
+              <span className="text-xs text-emerald-600">
+                {loadTimeMs >= 1000
+                  ? `${(loadTimeMs / 1000).toFixed(2)}s`
+                  : `${loadTimeMs}ms`}
+              </span>
+            </div>
+            <button
+              onClick={() => setShowLoadTime(false)}
+              className="ml-auto hover:bg-emerald-100 rounded-full p-1 transition-colors"
+            >
+              <X className="w-3 h-3 text-emerald-500" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Background Orders Progress Badge */}
+      {ordersProgress.total > 0 && ordersProgress.loaded < ordersProgress.total && (
+        <div className="fixed bottom-6 right-6 z-[9998]">
+          <div className="bg-white border border-slate-200 rounded-xl shadow-lg px-3 py-2 flex items-center gap-2 text-xs text-slate-500">
+            <div className="w-3 h-3 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin flex-shrink-0" />
+            <span>Loading orders… {ordersProgress.loaded}/{ordersProgress.total}</span>
+          </div>
+        </div>
+      )}
+
       {/* Loading Progress Indicator */}
       {!isFullyLoaded && (
         <div className="fixed top-20 right-6 z-[9999] animate-in slide-in-from-right fade-in duration-300">
@@ -8424,6 +9012,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                               { id: 'others', label: 'Others' },
                                               { id: 'delivery', label: 'Delivery' },
                                               { id: 'notes', label: 'Notes' },
+                                              { id: 'reorder', label: 'Reorder' },
                                             ].map(col => (
                                               <label key={col.id} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-slate-50 cursor-pointer">
                                                 <input
@@ -8461,6 +9050,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                   {ordersVisibleCols['others'] !== false && <th className="p-3 text-left border-b border-r border-slate-200 min-w-[100px]">Others</th>}
                                   {ordersVisibleCols['delivery'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-24">Delivery</th>}
                                   {ordersVisibleCols['notes'] !== false && <th className="p-3 text-left border-b border-r border-slate-200 w-32">Notes</th>}
+                                  {ordersVisibleCols['reorder'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-24">Reorder</th>}
                                 </>
                               )}
                               {showDyehouse && (
@@ -8496,15 +9086,27 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                 </tr>
                               ))
                             ) : (
-                              filteredOrders.map((row) => {
-                                const statusInfo = row.material ? statsMap.get(row.material) : null;
+                              groupedOrders.ordered.map((row) => {
+                                const orderIdStatus = orderIdStatsMap.get(row.id);
+                                const statusInfoBase = row.reorderOfId ? null : (row.material ? statsMap.get(row.material) : null);
+                                const statusInfo = orderIdStatus ?? statusInfoBase;
+                                const statusMatchType: 'orderId' | 'legacy' = (orderIdStatus || row.reorderOfId) ? 'orderId' : 'legacy';
                                 const isSelected = selectedRows.has(row.id);
+                                const flashNew = newRowFlashId === row.id;
+                                const hasChildren = !!groupedOrders.childrenMap.get(row.id);
+                                const groupDepth = row.reorderOfId ? 1 : 0;
+                                const isGrouped = hasChildren || !!row.reorderOfId;
 
                                 return (
                                   <MemoizedOrderRow
                                     key={row.id}
                                     row={row}
                                     statusInfo={statusInfo}
+                                    statusMatchType={statusMatchType}
+                                    flashNew={flashNew}
+                                    groupDepth={groupDepth}
+                                    isGroupParent={hasChildren}
+                                    isGrouped={isGrouped}
                                     fabrics={fabrics}
                                     isSelected={isSelected}
                                     toggleSelectRow={toggleSelectRow}
@@ -8541,7 +9143,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                       });
                                     }}
                                     onOpenHistory={(order) => setSelectedOrderForHistory(order)}
-                                    hasHistory={historySet.has(row.material || '')}
+                                    hasHistory={row.reorderOfId ? false : historySet.has(row.material || '')}
                                     onFilterMachine={(cap) => setMachineFilter(cap)}
                                     onOpenReceiveModal={(orderId, batchIdx, batch) => {
                                       setReceiveModal({ isOpen: true, orderId, batchIdx, batch });
@@ -8562,6 +9164,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                     inventory={inventory}
                                     setNoMachineDataModal={setNoMachineDataModal}
                                     ordersColVis={ordersVisibleCols}
+                                    onReorder={handleReorderRow}
                                   />
                                 );
                               })
@@ -8591,8 +9194,10 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                   <div key={idx} className="bg-white p-6 rounded-xl border border-slate-200 animate-pulse h-40"></div>
                                 ))
                            ) : (
-                               filteredOrders.map(order => {
-                                   const statusInfo = order.material ? statsMap.get(order.material) : null;
+                                 filteredOrders.map(order => {
+                                   const orderIdStatus = orderIdStatsMap.get(order.id);
+                                   const statusInfoBase = order.reorderOfId ? null : (order.material ? statsMap.get(order.material) : null);
+                                   const statusInfo = orderIdStatus ?? statusInfoBase;
                                    const fabricDef = fabrics.find(f => f.name === order.material);
                                    const imageUrl = fabricDef ? fabricDef.imageUrl : undefined;
                                    const hasHistory = historySet.has(order.material || '');
@@ -9706,6 +10311,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             machines={machines}
             seasonId={selectedCustomer?.createdSeasonId || ''}
             seasonName={(selectedCustomer as any)?.createdSeasonName || (selectedCustomer?.createdSeasonId ? (seasons.find(s => s.id === selectedCustomer.createdSeasonId)?.name || '') : '')}
+            forceOrderIdOnly={!!selectedOrderForHistory?.reorderOfId}
           />
         )}
 

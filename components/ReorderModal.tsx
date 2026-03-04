@@ -19,7 +19,7 @@ export const ReorderModal: React.FC<ReorderModalProps> = ({
   fabrics,
   onCreateReorder,
 }) => {
-  const [reorderType, setReorderType] = useState<'طلب عميل' | 'استعواد'>('طلب عميل');
+  const [reorderType, setReorderType] = useState<'طلب عميل' | 'استعواض'>('طلب عميل');
   const [reorderReason, setReorderReason] = useState('');
   const [requiredQty, setRequiredQty] = useState('');
   const [variantId, setVariantId] = useState('');
@@ -35,7 +35,7 @@ export const ReorderModal: React.FC<ReorderModalProps> = ({
       return;
     }
 
-    if (reorderType === 'استعواد' && !reorderReason.trim()) {
+    if (reorderType === 'استعواض' && !reorderReason.trim()) {
       alert('الرجاء إدخال السبب لإعادة الطلب');
       return;
     }
@@ -51,7 +51,7 @@ export const ReorderModal: React.FC<ReorderModalProps> = ({
         dyehouse: selectedDyehouse,
         parentOrderId: parentOrder.id,
         reorderType,
-        reorderReason: reorderType === 'استعواد' ? reorderReason : undefined,
+        reorderReason: reorderType === 'استعواض' ? reorderReason : undefined,
         // Fresh start for these fields
         machine: '',
         accessory: '',
@@ -129,12 +129,12 @@ export const ReorderModal: React.FC<ReorderModalProps> = ({
               className="w-full border-2 border-slate-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-indigo-500 transition-colors"
             >
               <option value="طلب عميل">📋 طلب عميل (طلب من العميل)</option>
-              <option value="استعواد">🔄 استعواد (إعادة تخزين)</option>
+              <option value="استعواض">🔄 استعواض (إعادة تخزين)</option>
             </select>
           </div>
 
-          {/* Reason - Show only for استعواد */}
-          {reorderType === 'استعواد' && (
+          {/* Reason - Show only for استعواض */}
+          {reorderType === 'استعواض' && (
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">
                 سبب إعادة الطلب *
