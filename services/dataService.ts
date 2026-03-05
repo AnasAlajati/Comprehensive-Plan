@@ -176,7 +176,7 @@ export const DataService = {
     const docRef = await addDoc(collection(db, 'orders'), {
       ...order,
       createdAt: Timestamp.now()
-    }); v 
+    }); 
     return docRef.id;
   },
 
@@ -227,65 +227,37 @@ export const DataService = {
     fabricId?: string, 
     orderId?: string
   ): Promise<string> {
+    const date = logData.date || new Date().toISOString().split('T')[0];
+    const newLog = {
+      id: date,
+      ...logData,
+      timestamp: new Date().toISOString()
+    };
+
+    // Write to sub-collection (no array read needed)
+    const logRef = doc(db, 'MachineSS', machineId, 'dailyLogs', date);
+    await setDoc(logRef, newLog, { merge: true });
+
+    // Update root machine fields
     const machineRef = doc(db, 'MachineSS', machineId);
-
-    return await runTransaction(db, async (transaction) => {
-      const machineSnap = await transaction.get(machineRef);
-      
-      if (!machineSnap.exists()) {
-        throw new Error(`Machine ${machineId} not found`);
-      }
-
-      const machineData = machineSnap.data();
-      const currentLogs = machineData.dailyLogs || [];
-      
-      // Check if log for this date already exists
-      const existingLogIndex = currentLogs.findIndex((l: any) => l.date === logData.date);
-      
-      const newLog = {
-        id: logData.date || new Date().toISOString().split('T')[0],
-        ...logData,
-        timestamp: new Date().toISOString()
+    const machineSnap = await getDoc(machineRef);
+    const machineData = machineSnap.exists() ? machineSnap.data() : {};
+    const rootUpdates: any = { lastUpdated: new Date().toISOString() };
+    if (!machineData.lastLogDate || date >= machineData.lastLogDate) {
+      rootUpdates.lastLogDate = date;
+      rootUpdates.lastLogData = {
+        date,
+        dayProduction: newLog.dayProduction || 0,
+        scrap: newLog.scrap || 0,
+        status: newLog.status,
+        fabric: newLog.fabric || '',
+        client: newLog.client || ''
       };
-
-      let updatedLogs;
-      if (existingLogIndex >= 0) {
-        // Update existing log
-        updatedLogs = [...currentLogs];
-        updatedLogs[existingLogIndex] = { ...updatedLogs[existingLogIndex], ...newLog };
-      } else {
-        // Add new log
-        updatedLogs = [...currentLogs, newLog];
-      }
-
-      // Update machine with new logs and update lastLogData if it's the latest log
-      const updates: any = {
-        dailyLogs: updatedLogs,
-        lastUpdated: new Date().toISOString()
-      };
-
-      // If this log is for today or newer than last log, update current status
-      if (!machineData.lastLogDate || newLog.date >= machineData.lastLogDate) {
-        updates.lastLogDate = newLog.date;
-        updates.lastLogData = {
-          date: newLog.date,
-          dayProduction: newLog.dayProduction || 0,
-          scrap: newLog.scrap || 0,
-          status: newLog.status,
-          fabric: newLog.fabric || '',
-          client: newLog.client || ''
-        };
-        // Also update top-level fields for backward compatibility/easy access
-        updates.status = newLog.status;
-        updates.dayProduction = newLog.dayProduction;
-      }
-
-      transaction.update(machineRef, updates);
-      return newLog.id;
-    })
-
-    await setDoc(machineRef, updates, { merge: true });
-    return newLog.id;
+      rootUpdates.status = newLog.status;
+      rootUpdates.dayProduction = newLog.dayProduction;
+    }
+    await setDoc(machineRef, rootUpdates, { merge: true });
+    return date;
   },
 
   async updateClient(clientId: string, updates: Partial<Client>): Promise<void> {

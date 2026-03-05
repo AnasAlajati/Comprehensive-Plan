@@ -371,6 +371,32 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [allLogs, setAllLogs] = useState<any[]>([]);
   // filteredLogs is derived via useMemo below
 
+  // Sub-collection daily logs listener — used for all reads so array can be removed later
+  const [allFPSubLogs, setAllFPSubLogs] = useState<any[]>([]);
+  const fpSubLogsMapRef = useRef<Map<string, any[]>>(new Map());
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collectionGroup(db, 'dailyLogs'),
+      (snapshot) => {
+        const logs = snapshot.docs.map(d => ({
+          ...d.data(),
+          _machineId: d.ref.parent.parent?.id ?? '',
+        }));
+        const map = new Map<string, any[]>();
+        logs.forEach(log => {
+          const key = log._machineId as string;
+          if (!key) return;
+          if (!map.has(key)) map.set(key, []);
+          map.get(key)!.push(log);
+        });
+        fpSubLogsMapRef.current = map;
+        setAllFPSubLogs(logs); // triggers re-render so processLogs re-runs
+      },
+      (error) => { console.warn('FetchDataPage dailyLogs listener error:', error); }
+    );
+    return () => unsub();
+  }, []);
+
 
   const availableTypes = React.useMemo(() => {
     const types = new Set(allLogs.map(m => m.machineType));
@@ -495,24 +521,13 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
   // Fetch all days that have reports for the calendar highlighting
   useEffect(() => {
-    const fetchReportDates = async () => {
-      try {
-        const machines = await DataService.getMachinesFromMachineSS();
-        const dates = new Set<string>();
-        machines.forEach(m => {
-          if (m.dailyLogs) {
-            m.dailyLogs.forEach((log: any) => {
-              if (log.date) dates.add(log.date);
-            });
-          }
-        });
-        setReportDates(Array.from(dates));
-      } catch (error) {
-        console.error("Error fetching report dates:", error);
-      }
-    };
-    fetchReportDates();
-  }, []);
+    // Build report dates directly from the sub-collection map — no extra Firestore fetch needed
+    const dates = new Set<string>();
+    fpSubLogsMapRef.current.forEach(logs => {
+      logs.forEach(log => { if (log.date) dates.add(log.date); });
+    });
+    setReportDates(Array.from(dates));
+  }, [allFPSubLogs]); // re-run whenever sub-collection updates
 
   // Load machines, fabrics, and clients on mount
   useEffect(() => {
@@ -617,7 +632,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       let updatedCount = 0;
 
       for (const machine of machines) {
-        const prevLog = (machine.dailyLogs || []).find((l: any) => l.date === previousDate);
+        const prevLog = (fpSubLogsMapRef.current.get(String(machine.id)) || []).find((l: any) => l.date === previousDate);
         
         if (prevLog) {
            const prevRemaining = Number(prevLog.remainingMfg) || Number(prevLog.remaining) || 0;
@@ -640,19 +655,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
              timestamp: new Date().toISOString()
            };
 
-           const currentLogs = machine.dailyLogs || [];
-           const existingLogIndex = currentLogs.findIndex((l: any) => l.date === selectedDate);
-           
-           let updatedLogs = [...currentLogs];
-           if (existingLogIndex >= 0) {
-             updatedLogs[existingLogIndex] = { ...updatedLogs[existingLogIndex], ...newLogEntry };
-           } else {
-             updatedLogs.push(newLogEntry);
-           }
-
-           // 1. Update Array (Legacy Support)
+           // Update MachineSS Root Document
            const updatePromise = DataService.updateMachineInMachineSS(String(machine.id), {
-             dailyLogs: updatedLogs,
              lastLogDate: selectedDate,
              avgProduction: newLogEntry.avgProduction,
              lastLogData: {
@@ -671,8 +675,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
              lastUpdated: new Date().toISOString()
            });
 
-           // 2. Update Sub-collection (New Architecture)
-           // This ensures App.tsx sees the data even if it prioritizes sub-collections
+           // Update Sub-collection
            const subCollectionPromise = DataService.updateDailyLog(String(machine.id), selectedDate, newLogEntry);
 
            updatePromises.push(Promise.all([updatePromise, subCollectionPromise]).then(() => {}));
@@ -831,40 +834,21 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       const machine = machines.find((m: any) => m.id === flMachineId);
       if (!machine) return;
 
-      const updatedLogs = [...(machine.dailyLogs || [])];
-      let logIndex = updatedLogs.findIndex((l: any) => l.date === selectedDate);
+      const existingLog = fpSubLogsMapRef.current.get(String(flMachineId))?.find((l: any) => l.date === selectedDate);
+      const logData: any = existingLog
+        ? { ...existingLog, client: clientName, clientSeason: seasonName, fabric: fabricName, orderId }
+        : { id: selectedDate, date: selectedDate, dayProduction: 0, scrap: 0, status: machine.status || '', client: clientName, clientSeason: seasonName, fabric: fabricName, orderId, avgProduction: machine.avgProduction || 0, remainingMfg: 0, reason: '', timestamp: new Date().toISOString() };
+      delete logData._machineId;
 
-      if (logIndex < 0) {
-        const newLog: any = {
-          id: selectedDate,
-          date: selectedDate,
-          dayProduction: 0,
-          scrap: 0,
-          status: machine.status || '',
-          client: clientName,
-          clientSeason: seasonName,
-          fabric: fabricName,
-          orderId,
-          avgProduction: machine.avgProduction || 0,
-          remainingMfg: 0,
-          reason: '',
-          timestamp: new Date().toISOString(),
-        };
-        updatedLogs.push(newLog);
-        logIndex = updatedLogs.length - 1;
-      } else {
-        updatedLogs[logIndex] = { ...updatedLogs[logIndex], client: clientName, clientSeason: seasonName, fabric: fabricName, orderId };
-      }
-
-      const updatePayload: any = { dailyLogs: updatedLogs, lastUpdated: new Date().toISOString() };
-      if (updatedLogs[logIndex].date === activeDay) {
+      const updatePayload: any = { lastUpdated: new Date().toISOString() };
+      if (selectedDate === activeDay) {
         updatePayload.client = clientName;
         updatePayload.material = fabricName;
         updatePayload.orderId = orderId;
       }
 
       await DataService.updateMachineInMachineSS(flMachineId, updatePayload);
-      await DataService.updateDailyLog(flMachineId, selectedDate, updatedLogs[logIndex]);
+      await DataService.updateDailyLog(flMachineId, selectedDate, logData);
       checkSmartLink(flMachineId, flLogId, clientName, fabricName);
       showMessage('✅ Client & Fabric updated');
     } catch (error: any) {
@@ -883,18 +867,18 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       const machines = await DataService.getMachinesFromMachineSS();
       const machine = machines.find((m: any) => m.id === machineId);
       if (!machine) return;
-      const updatedLogs = [...(machine.dailyLogs || [])];
-      const logIndex = updatedLogs.findIndex((l: any) => l.date === selectedDate);
-      if (logIndex >= 0) {
-        updatedLogs[logIndex] = { ...updatedLogs[logIndex], client: '', clientSeason: '', fabric: '', orderId: '' };
-        const updatePayload: any = { dailyLogs: updatedLogs, lastUpdated: new Date().toISOString() };
-        if (updatedLogs[logIndex].date === activeDay) {
+      const existingLog = fpSubLogsMapRef.current.get(String(machineId))?.find((l: any) => l.date === selectedDate);
+      if (existingLog) {
+        const logData = { ...existingLog, client: '', clientSeason: '', fabric: '', orderId: '' };
+        delete (logData as any)._machineId;
+        const updatePayload: any = { lastUpdated: new Date().toISOString() };
+        if (selectedDate === activeDay) {
           updatePayload.client = '';
           updatePayload.material = '';
           updatePayload.orderId = '';
         }
         await DataService.updateMachineInMachineSS(machineId, updatePayload);
-        await DataService.updateDailyLog(machineId, selectedDate, updatedLogs[logIndex]);
+        await DataService.updateDailyLog(machineId, selectedDate, logData);
       }
       showMessage('✅ Client & Fabric cleared');
     } catch (error: any) {
@@ -1099,41 +1083,22 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       const machine = machines.find((m: any) => m.id === machineId);
       if (!machine) return;
 
-      const updatedLogs = [...(machine.dailyLogs || [])];
-      let logIndex = updatedLogs.findIndex((l: any) => l.date === selectedDate);
-
-      if (logIndex < 0) {
-        const newLog: any = {
-          id: selectedDate,
-          date: selectedDate,
-          dayProduction: 0,
-          scrap: 0,
-          status: machine.status || '',
-          client: clientName,
-          clientSeason: seasonName,
-          fabric: log.fabric || '',
-          avgProduction: machine.avgProduction || 0,
-          remainingMfg: 0,
-          reason: '',
-          timestamp: new Date().toISOString()
-        };
-        updatedLogs.push(newLog);
-        logIndex = updatedLogs.length - 1;
-      } else {
-        updatedLogs[logIndex] = { ...updatedLogs[logIndex], client: clientName, clientSeason: seasonName };
-      }
+      const existingLog = fpSubLogsMapRef.current.get(String(machineId))?.find((l: any) => l.date === selectedDate);
+      const logData: any = existingLog
+        ? { ...existingLog, client: clientName, clientSeason: seasonName }
+        : { id: selectedDate, date: selectedDate, dayProduction: 0, scrap: 0, status: machine.status || '', client: clientName, clientSeason: seasonName, fabric: log.fabric || '', avgProduction: machine.avgProduction || 0, remainingMfg: 0, reason: '', timestamp: new Date().toISOString() };
+      delete logData._machineId;
 
       const updatePayload: any = {
-        dailyLogs: updatedLogs,
         lastUpdated: new Date().toISOString()
       };
 
-      if (updatedLogs[logIndex].date === activeDay) {
+      if (selectedDate === activeDay) {
         updatePayload.client = clientName;
       }
 
       await DataService.updateMachineInMachineSS(machineId, updatePayload);
-      await DataService.updateDailyLog(machineId, selectedDate, updatedLogs[logIndex]);
+      await DataService.updateDailyLog(machineId, selectedDate, logData);
       checkSmartLink(machineId, logId, clientName, log.fabric || '');
       showMessage('✅ Updated');
     } catch (error: any) {
@@ -1265,13 +1230,14 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   useEffect(() => {
     if (rawMachines.length === 0) return;
     processLogs(rawMachines, selectedDate);
-  }, [rawMachines, selectedDate, reportStarted]);
+  }, [rawMachines, selectedDate, reportStarted, allFPSubLogs]);
 
   const processLogs = useCallback(async (machines: any[], date: string) => {
     const startTime = performance.now();
-    
-    // Check if we have ANY real logs for this date
-    const hasRealLogs = machines.some(m => (m.dailyLogs || []).some((l: any) => l.date === date));
+    const subMap = fpSubLogsMapRef.current;
+
+    // Check if we have ANY real logs for this date (from sub-collection)
+    const hasRealLogs = [...subMap.values()].some((logs: any[]) => logs.some((l: any) => l.date === date));
     
     // Auto-start report (skip modal)
     // setIsNewDay(false);
@@ -1284,13 +1250,14 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     }
     setLastValidDate(date);
 
-    // Check if any machine is missing a log for this date and create it
+    // Check if any machine is missing a log for this date and create a virtual one
     const updatedMachines = machines.map((machine) => {
-      const logsForDate = (machine.dailyLogs || []).filter((log: any) => log.date === date);
+      const machineLogs = subMap.get(String(machine.id)) || [];
+      const logsForDate = machineLogs.filter((log: any) => log.date === date);
       
       if (logsForDate.length === 0) {
         // Machine doesn't have a log for this date, create a virtual one
-        const sortedLogs = (machine.dailyLogs || []).sort((a: any, b: any) => b.date.localeCompare(a.date));
+        const sortedLogs = machineLogs.slice().sort((a: any, b: any) => b.date.localeCompare(a.date));
         const lastLog = sortedLogs.find((l: any) => l.date < date);
         
         const defaultClient = lastLog ? lastLog.client : (machine.client || '');
@@ -1314,9 +1281,9 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           timestamp: new Date().toISOString()
         };
         
-        return { ...machine, dailyLogs: [...(machine.dailyLogs || []), newLog] };
+        return { ...machine, _virtualLogs: [newLog] };
       }
-      return machine;
+      return { ...machine, _virtualLogs: logsForDate };
     });
 
     updatedMachines.sort((a: any, b: any) => {
@@ -1327,7 +1294,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     
     const flattenedLogs: any[] = [];
     updatedMachines.forEach(machine => {
-      const logsForDate = (machine.dailyLogs || []).filter((log: any) => log.date === date);
+      const logsForDate = machine._virtualLogs || [];
       
       logsForDate.forEach((log: any) => {
         flattenedLogs.push({
@@ -1335,9 +1302,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           machineName: machine.name,
           machineType: machine.type,
           machineBrand: machine.brand,
-          futurePlans: machine.futurePlans, // Include future plans to show "Next Up" in summary
+          futurePlans: machine.futurePlans,
           ...log,
-          // Use machineId as the unique ID for the row as there is only one log per machine per day
           id: machine.id
         });
       });
@@ -1522,99 +1488,70 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       const machine = machines.find(m => m.id === machineId);
       if (!machine) return;
 
-      const updatedLogs = [...(machine.dailyLogs || [])];
-      
-      // Check if log exists for the selected date
-      let logIndex = updatedLogs.findIndex(log => log.date === selectedDate);
-      
-      if (logIndex < 0) {
-        // Create new log for this date
-        const newLog = {
-          id: selectedDate, // Use date as ID
-          date: selectedDate,
-          dayProduction: 0,
-          scrap: 0,
-          status: effectiveStatus || machine.status || '',
-          fabric: effectiveFabric,
-          client: effectiveClient,
-          avgProduction: machine.avgProduction || 0,
-          remainingMfg: 0,
-          reason: '',
-          timestamp: new Date().toISOString()
-        };
-        newLog[field] = newValue;
-        
-        if (field === 'dayProduction' && calculatedRemaining !== undefined) {
-             newLog.remainingMfg = calculatedRemaining;
-        }
+      // Get existing log from sub-collection state (no array read needed)
+      const rawLog = fpSubLogsMapRef.current.get(String(machineId))?.find((l: any) => l.date === selectedDate);
 
-        updatedLogs.push(newLog);
-        logIndex = updatedLogs.length - 1;
-      } else {
-        // Update existing log
-        updatedLogs[logIndex][field] = newValue;
+      // Build the log: start from sub-collection data or create fresh
+      const logData: any = rawLog
+        ? { ...rawLog }
+        : { id: selectedDate, date: selectedDate, dayProduction: 0, scrap: 0, status: effectiveStatus || machine.status || '', fabric: effectiveFabric, client: effectiveClient, avgProduction: machine.avgProduction || 0, remainingMfg: 0, reason: '', timestamp: new Date().toISOString() };
+      // Remove listener-injected key before saving
+      delete logData._machineId;
 
-        if (field === 'dayProduction' && calculatedRemaining !== undefined) {
-             updatedLogs[logIndex].remainingMfg = calculatedRemaining;
-        }
+      // Apply the field change
+      logData[field] = newValue;
+      if (field === 'dayProduction' && calculatedRemaining !== undefined) {
+        logData.remainingMfg = calculatedRemaining;
       }
-      
+
       // Trigger Smart Link Check if Client or Fabric changed
       if (field === 'client' || field === 'fabric') {
          checkSmartLink(machineId, logId, currentClient, currentFabric);
       }
 
-      // Sanitize Numeric Fields for Firestore (keep UI state flexible for typing)
-      const sanitizedLog = { ...updatedLogs[logIndex] };
+      // Sanitize Numeric Fields for Firestore
       if (['remainingMfg', 'dayProduction', 'avgProduction', 'scrap'].includes(field)) {
-          sanitizedLog[field] = Number(newValue) || 0;
-          // Apply to the log in array
-          updatedLogs[logIndex][field] = Number(newValue) || 0;
+          logData[field] = Number(newValue) || 0;
       }
-      
+
       // Persist the remainingOverride flag to Firestore when remaining is manually edited
       if (field === 'remainingMfg') {
-          updatedLogs[logIndex].remainingOverride = true;
+          logData.remainingOverride = true;
       }
       // Also ensure remainingMfg is number if it was recalculated
       if (calculatedRemaining !== undefined) {
-          updatedLogs[logIndex].remainingMfg = Number(calculatedRemaining);
+          logData.remainingMfg = Number(calculatedRemaining);
       }
 
       const updatePayload: any = {
-        dailyLogs: updatedLogs,
-        lastLogDate: updatedLogs[logIndex].date,
+        lastLogDate: logData.date,
         lastLogData: {
-          date: updatedLogs[logIndex].date,
-          dayProduction: updatedLogs[logIndex].dayProduction,
-          scrap: updatedLogs[logIndex].scrap,
-          status: updatedLogs[logIndex].status,
-          fabric: updatedLogs[logIndex].fabric,
-          client: updatedLogs[logIndex].client,
-          remainingMfg: updatedLogs[logIndex].remainingMfg,
-          reason: updatedLogs[logIndex].reason,
-          customStatusNote: updatedLogs[logIndex].customStatusNote
+          date: logData.date,
+          dayProduction: logData.dayProduction,
+          scrap: logData.scrap,
+          status: logData.status,
+          fabric: logData.fabric,
+          client: logData.client,
+          remainingMfg: logData.remainingMfg,
+          reason: logData.reason,
+          customStatusNote: logData.customStatusNote
         },
         lastUpdated: new Date().toISOString()
       };
 
       // Sync with Root Machine Fields if this is the Active Day
-      if (updatedLogs[logIndex].date === activeDay) {
-          updatePayload.status = updatedLogs[logIndex].status;
-          updatePayload.client = updatedLogs[logIndex].client;
-          updatePayload.material = updatedLogs[logIndex].fabric;
-          updatePayload.remainingMfg = updatedLogs[logIndex].remainingMfg;
-          updatePayload.dayProduction = updatedLogs[logIndex].dayProduction;
-          updatePayload.reason = updatedLogs[logIndex].reason;
-          updatePayload.customStatusNote = updatedLogs[logIndex].customStatusNote;
+      if (logData.date === activeDay) {
+          updatePayload.status = logData.status;
+          updatePayload.client = logData.client;
+          updatePayload.material = logData.fabric;
+          updatePayload.remainingMfg = logData.remainingMfg;
+          updatePayload.dayProduction = logData.dayProduction;
+          updatePayload.reason = logData.reason;
+          updatePayload.customStatusNote = logData.customStatusNote;
       }
 
       await DataService.updateMachineInMachineSS(machineId, updatePayload);
-      
-      // Also update the subcollection log to ensure History Modal works correctly
-      if (updatedLogs[logIndex]) {
-          await DataService.updateDailyLog(machineId, updatedLogs[logIndex].date, updatedLogs[logIndex]);
-      }
+      await DataService.updateDailyLog(machineId, logData.date, logData);
 
       // Optimistic update already handled the UI. No need to re-fetch immediately.
       showMessage('✅ Updated');
@@ -1756,56 +1693,38 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       if (!planToActivate) return;
 
       // 1. Update Current Status (Daily Log)
-      const updatedLogs = [...(machine.dailyLogs || [])];
-      let logIndex = updatedLogs.findIndex(log => log.date === selectedDate);
-      
       const newLogData = {
         status: MachineStatus.WORKING,
         fabric: planToActivate.fabric || '',
-        client: planToActivate.orderName || '', // Order turns to customer
-        remainingMfg: planToActivate.remaining || 0, // Plan qt (remaining) goes to remaining qt
+        client: planToActivate.orderName || '',
+        remainingMfg: planToActivate.remaining || 0,
       };
 
-      if (logIndex < 0) {
-        // Create new log
-        updatedLogs.push({
-          id: selectedDate,
-          date: selectedDate,
-          dayProduction: 0,
-          scrap: 0,
-          avgProduction: machine.avgProduction || 0,
-          reason: '',
-          timestamp: new Date().toISOString(),
-          ...newLogData
-        });
-        logIndex = updatedLogs.length - 1;
-      } else {
-        // Update existing
-        updatedLogs[logIndex] = {
-          ...updatedLogs[logIndex],
-          ...newLogData
-        };
-      }
+      const rawLog = fpSubLogsMapRef.current.get(String(plansModalOpen.machineId))?.find((l: any) => l.date === selectedDate);
+      const logData: any = rawLog
+        ? { ...rawLog, ...newLogData }
+        : { id: selectedDate, date: selectedDate, dayProduction: 0, scrap: 0, avgProduction: machine.avgProduction || 0, reason: '', timestamp: new Date().toISOString(), ...newLogData };
+      delete logData._machineId;
 
       // 2. Remove from Future Plans
       const updatedPlans = (machine.futurePlans || []).filter((_, idx) => idx !== planIndex);
 
       // 3. Save to Firestore
       await DataService.updateMachineInMachineSS(plansModalOpen.machineId, {
-        dailyLogs: updatedLogs,
         futurePlans: updatedPlans,
-        lastLogDate: updatedLogs[logIndex].date,
+        lastLogDate: logData.date,
         lastLogData: {
-          date: updatedLogs[logIndex].date,
-          dayProduction: updatedLogs[logIndex].dayProduction,
-          scrap: updatedLogs[logIndex].scrap,
-          status: updatedLogs[logIndex].status,
-          fabric: updatedLogs[logIndex].fabric,
-          client: updatedLogs[logIndex].client,
-          remainingMfg: updatedLogs[logIndex].remainingMfg
+          date: logData.date,
+          dayProduction: logData.dayProduction,
+          scrap: logData.scrap,
+          status: logData.status,
+          fabric: logData.fabric,
+          client: logData.client,
+          remainingMfg: logData.remainingMfg
         },
         lastUpdated: new Date().toISOString()
       });
+      await DataService.updateDailyLog(plansModalOpen.machineId, selectedDate, logData);
 
       // 4. Update Local State
       setPlansModalOpen({ ...plansModalOpen, plans: updatedPlans });

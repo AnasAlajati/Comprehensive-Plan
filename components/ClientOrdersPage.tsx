@@ -1047,6 +1047,7 @@ const MemoizedOrderRow = React.memo(({
   dyehouses,
   handleCreateDyehouse,
   machines,
+  subLogsByMachineId,
   externalFactories,
   onOpenProductionOrder,
   onOpenHistory,
@@ -1093,6 +1094,7 @@ const MemoizedOrderRow = React.memo(({
   dyehouses: any[];
   handleCreateDyehouse: (name: string) => void;
   machines: MachineSS[];
+  subLogsByMachineId?: Map<string, any[]>;
   externalFactories: any[];
   onOpenProductionOrder: (order: OrderRow, active: string[], planned: string[]) => void;
   onOpenHistory: (order: OrderRow) => void;
@@ -1212,11 +1214,11 @@ const MemoizedOrderRow = React.memo(({
     
     let total = 0;
     
-    // Sum from internal machine dailyLogs
+    // Sum from internal machine dailyLogs (sub-collection)
     machines.forEach(machine => {
-      if (!machine.dailyLogs || !Array.isArray(machine.dailyLogs)) return;
+      const machineLogs = subLogsByMachineId?.get(String(machine.id)) || [];
       
-      machine.dailyLogs.forEach((log) => {
+      machineLogs.forEach((log) => {
         const logFabric = normalize(log.fabric);
         
         // ReOrders: only match by orderId; skip legacy client/fabric matching
@@ -1313,9 +1315,9 @@ const MemoizedOrderRow = React.memo(({
       const finishedMachines = new Set<string>();
 
       machines.forEach(machine => {
-        if (!machine.dailyLogs || !Array.isArray(machine.dailyLogs)) return;
+        const machineLogs = subLogsByMachineId?.get(String(machine.id)) || [];
         
-        machine.dailyLogs.forEach((log) => {
+        machineLogs.forEach((log) => {
         const logFabric = normalize(log.fabric);
         const normLogClient = normalize(log.client);
           const combinedIdFin = selectedCustomerSeasonId ? normalize(`${selectedCustomerName}-${selectedCustomerSeasonId}`) : '';
@@ -1398,8 +1400,8 @@ const MemoizedOrderRow = React.memo(({
     let latestRemaining: number | null = null;
 
     machines.forEach(machine => {
-      if (!machine.dailyLogs || !Array.isArray(machine.dailyLogs)) return;
-      machine.dailyLogs.forEach((log: any) => {
+      const machineLogs = subLogsByMachineId?.get(String(machine.id)) || [];
+      machineLogs.forEach((log: any) => {
         const isMatch =
           normalize(log.client) === targetClient &&
           normalize(log.fabric) === targetFabric &&
@@ -1439,7 +1441,7 @@ const MemoizedOrderRow = React.memo(({
     const machineRows: MachineDebugRow[] = [];
     const processedMachines = new Set<string>();
     machines.forEach(machine => {
-      const allMatchingLogs = (machine.dailyLogs || []).filter((log: any) =>
+      const allMatchingLogs = (subLogsByMachineId?.get(String(machine.id)) || []).filter((log: any) =>
         normalize(log.client) === targetClient && normalize(log.fabric) === targetFabric
       );
       if (allMatchingLogs.length === 0) return;
@@ -1513,7 +1515,7 @@ const MemoizedOrderRow = React.memo(({
     type OrderIdLogRow = { machineName: string; date: string; status: string; clientSeason: string; remaining: number; fabric: string; client: string; };
     const orderIdMatchedLogs: OrderIdLogRow[] = [];
     machines.forEach(machine => {
-      (machine.dailyLogs || []).forEach((log: any) => {
+      (subLogsByMachineId?.get(String(machine.id)) || []).forEach((log: any) => {
         if (log.orderId === row.id) {
           orderIdMatchedLogs.push({
             machineName: machine.name,
@@ -5051,6 +5053,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const [yarns, setYarns] = useState<Yarn[]>([]);
   const [inventory, setInventory] = useState<YarnInventoryItem[]>([]);
   const [machines, setMachines] = useState<MachineSS[]>([]);
+  const [allSubLogs, setAllSubLogs] = useState<any[]>([]);
   const [activeDay, setActiveDay] = useState<string>(new Date().toISOString().split('T')[0]);
   const [showYarnRequirements, setShowYarnRequirements] = useState(false);
   const [selectedYarnDetails, setSelectedYarnDetails] = useState<any>(null);
@@ -5496,6 +5499,36 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     };
   }, [selectedCustomerId, rawCustomers]);
 
+  // Sub-collection daily logs — single listener replaces all embedded-array reads
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collectionGroup(db, 'dailyLogs'),
+      (snapshot) => {
+        // Extract machineId from the document PATH (MachineSS/{machineId}/dailyLogs/{date})
+        // so it works for every doc regardless of whether a machineId field exists inside it.
+        const logs = snapshot.docs.map(d => ({
+          ...d.data(),
+          _docId: d.id,
+          _machineId: d.ref.parent.parent?.id ?? '',
+        }));
+        setAllSubLogs(logs);
+      },
+      (error) => { console.warn('dailyLogs collectionGroup listener error:', error); }
+    );
+    return () => unsub();
+  }, []);
+
+  const subLogsByMachineId = useMemo(() => {
+    const map = new Map<string, any[]>();
+    allSubLogs.forEach(log => {
+      const key = log._machineId as string;
+      if (!key) return;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(log);
+    });
+    return map;
+  }, [allSubLogs]);
+
   // --- History Check Logic ---
   const [historySet, setHistorySet] = useState<Set<string>>(new Set());
 
@@ -5528,13 +5561,12 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
     // 1. Internal Machines
     machines.forEach(machine => {
-        if (machine.dailyLogs && Array.isArray(machine.dailyLogs)) {
-            machine.dailyLogs.forEach(log => {
-                if (custClientOk(log.client) && log.fabric && logSeasonOk(log)) {
-                    fabrics.add(log.fabric);
-                }
-            });
-        }
+        const machineLogs = subLogsByMachineId.get(String(machine.id)) || [];
+        machineLogs.forEach(log => {
+            if (custClientOk(log.client) && log.fabric && logSeasonOk(log)) {
+                fabrics.add(log.fabric);
+            }
+        });
     });
 
     // 2. External Factories
@@ -5549,7 +5581,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     });
     
     setHistorySet(fabrics);
-  }, [selectedCustomerId, customers, machines, externalFactories]);
+  }, [selectedCustomerId, customers, machines, subLogsByMachineId, externalFactories]);
 
   // Merge Customers & Orders
   useEffect(() => {
@@ -5663,6 +5695,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
     // 2. Scan Machines (Single Pass)
     machines.forEach(m => {
+        const mLogs = subLogsByMachineId.get(String(m.id)) || [];
         // A. Active Order - Match FetchDataPage Logic (Real or Virtual Log)
         // ------------------------------------------------------------------
         // Determine "Effective" status/client/fabric for the Active Day
@@ -5672,7 +5705,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         let effectiveFabric = '';
         let hasActiveLog = false;
 
-        const activeLog = m.dailyLogs?.find(l => l.date === activeDay);
+        const activeLog = mLogs.find(l => l.date === activeDay);
 
         if (activeLog) {
             // Case 1: Real Log Exists for Today
@@ -5683,7 +5716,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         } else {
             // Case 2: No Log -> Check "Virtual Log" (Carry over from last known state)
             // This matches FetchDataPage logic which creates a virtual log if none exists
-            const sortedLogs = (m.dailyLogs || []).filter(l => l.date < activeDay).sort((a,b) => b.date.localeCompare(a.date));
+            const sortedLogs = mLogs.filter(l => l.date < activeDay).sort((a,b) => b.date.localeCompare(a.date));
             const lastLog = sortedLogs[0];
             
             effectiveStatus = lastLog ? lastLog.status : (m.status || '');
@@ -5702,7 +5735,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         const isFinishedState = !hasProduction && ['finished', 'completed', 'done', 'منتهي', 'تم', 'finish'].includes(lowerStatus);
 
         if (isActiveState || isFinishedState) {
-            const effectiveLog = activeLog || (m.dailyLogs || []).filter((l: any) => l.date < activeDay).sort((a: any, b: any) => b.date.localeCompare(a.date))[0];
+            const effectiveLog = activeLog || mLogs.filter((l: any) => l.date < activeDay).sort((a: any, b: any) => b.date.localeCompare(a.date))[0];
             if (clientNameMatches(effectiveClient) && relevantFabrics.has(effectiveFabric) && logSeasonMatches(effectiveLog)) {
                  const entry = intermediateMap.get(effectiveFabric);
                  if (entry) {
@@ -5744,7 +5777,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         });
 
         // C. History Logs (Scrap + Dates + Finished History)
-        m.dailyLogs?.forEach(log => {
+        mLogs.forEach(log => {
              const logFabric = log.fabric;
              const logStatus = (log.status || '').toLowerCase();
              
@@ -5887,8 +5920,9 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     });
 
     machines.forEach(m => {
+      const mLogs = subLogsByMachineId.get(String(m.id)) || [];
       // Active day log with orderId
-      const activeLog = m.dailyLogs?.find((l: any) => l.date === activeDay && l.orderId && orderIds.has(l.orderId));
+      const activeLog = mLogs.find((l: any) => l.date === activeDay && l.orderId && orderIds.has(l.orderId));
       if (activeLog) {
         const entry = intermediateMap.get(activeLog.orderId);
         if (entry) {
@@ -5906,7 +5940,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       }
 
       // All history logs with orderId
-      m.dailyLogs?.forEach((log: any) => {
+      mLogs.forEach((log: any) => {
         if (!log.orderId || !orderIds.has(log.orderId)) return;
         const entry = intermediateMap.get(log.orderId);
         if (!entry) return;
@@ -6676,7 +6710,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     // 1. Internal Machines
     machines.forEach(machine => {
       // Check Active (Daily Logs)
-      const activeLog = machine.dailyLogs?.find(l => l.date === activeDay);
+      const activeLog = (subLogsByMachineId.get(String(machine.id)) || []).find((l: any) => l.date === activeDay);
       if (activeLog) {
          // Check match by explicit reference OR by client/fabric combination
          const isMatch = (normalize(activeLog.client) === targetClient && normalize(activeLog.fabric) === targetFabric) || 
@@ -8000,8 +8034,9 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       const others = Array.from(otherClientsSet).join(' + ');
 
       machines.forEach(m => {
+        const mLogs = subLogsByMachineId.get(String(m.id)) || [];
         // Check active logs
-        const activeLog = m.dailyLogs?.find(l => l.date === activeDay);
+        const activeLog = mLogs.find(l => l.date === activeDay);
         if (activeLog && normalize(activeLog.client) === normCurrentClient && normalize(activeLog.fabric) === normFabric) {
           active.push(m.name);
           remaining = remaining - (Number(activeLog.quantityProduced) || 0);
@@ -8019,7 +8054,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         });
 
         // Check history logs for scrap and dates
-        m.dailyLogs?.forEach(log => {
+        mLogs.forEach(log => {
           if (normalize(log.client) === normCurrentClient && normalize(log.fabric) === normFabric) {
             if (log.scrap) scrap += Number(log.scrap);
             if (log.date) allDates.push(log.date);
@@ -8132,8 +8167,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                const finishedMachines = new Set<string>();
                
                machines.forEach(machine => {
-                 if (!machine.dailyLogs) return;
-                 machine.dailyLogs.forEach((log) => {
+                 const machineLogs = subLogsByMachineId.get(String(machine.id)) || [];
+                 machineLogs.forEach((log) => {
                     if (normalize(log.client) === targetCustomerName && normalize(log.fabric) === targetFabric) {
                          finishedMachines.add(machine.name);
                     }
@@ -9130,6 +9165,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                     dyehouses={dyehouses}
                                     handleCreateDyehouse={handleCreateDyehouse}
                                     machines={machines}
+                                    subLogsByMachineId={subLogsByMachineId}
                                     externalFactories={externalFactories}
                                     allOrders={flatOrders}
                                     userRole={userRole}
@@ -9209,9 +9245,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                    const finishedMachines = new Set<string>();
 
                                  machines.forEach(machine => {
-                                   if (!machine.dailyLogs || !Array.isArray(machine.dailyLogs)) return;
-                                   
-                                   machine.dailyLogs.forEach((log) => {
+                                   const machineLogs = subLogsByMachineId.get(String(machine.id)) || [];
+                                   machineLogs.forEach((log) => {
                                      const logClient = normalize(log.client);
                                      const logFabric = normalize(log.fabric);
                                      
@@ -10601,6 +10636,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                     };
                                     
                                     // REPLICATE EXACT LOGIC FROM statsMap calculation
+                                    const mLogs = subLogsByMachineId.get(String(m.id)) || [];
                                     let effectiveStatus = '';
                                     let effectiveClient = '';
                                     let effectiveClientSeason = '';
@@ -10608,7 +10644,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                     let source = 'NONE';
                                     let logDate = '-';
 
-                                    const activeLog = m.dailyLogs?.find(l => l.date === activeDay);
+                                    const activeLog = mLogs.find(l => l.date === activeDay);
 
                                     if (activeLog) {
                                         // Case 1: Real Log Exists for Today
@@ -10620,7 +10656,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                         logDate = activeLog.date;
                                     } else {
                                         // Case 2: No Log -> Check "Virtual Log" (Carry over from last known state)
-                                        const sortedLogs = (m.dailyLogs || []).filter(l => l.date < activeDay).sort((a,b) => b.date.localeCompare(a.date));
+                                        const sortedLogs = mLogs.filter(l => l.date < activeDay).sort((a,b) => b.date.localeCompare(a.date));
                                         const lastLog = sortedLogs[0];
                                         
                                         effectiveStatus = lastLog ? lastLog.status : (m.status || '');

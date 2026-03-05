@@ -6,7 +6,7 @@ import { recalculateSchedule, addDays, getFabricProductionRate } from '../servic
 import { DataService } from '../services/dataService';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import { doc, onSnapshot, setDoc, updateDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, updateDoc, collection, getDocs, deleteDoc, collectionGroup, query, where } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { Search, Play, GripVertical, Factory, Plus, History } from 'lucide-react';
 
@@ -475,18 +475,10 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
   };
 
   const mapMachineSSDocToMachineRow = useCallback((machine: any, index: number, currentActiveDay: string): PlanningMachine => {
-    const logs = Array.isArray(machine.dailyLogs) ? machine.dailyLogs : [];
-    
-    // Filter logs to find the state as of activeDay
-    const relevantLogs = logs.filter((l: any) => l.date <= currentActiveDay);
-    
-    const latestLog = relevantLogs.reduce((latest: any, current: any) => {
-      if (!current?.date) return latest;
-      if (!latest?.date) return current;
-      return new Date(current.date).getTime() >= new Date(latest.date).getTime() ? current : latest;
-    }, null);
-
-    const effectiveLog = latestLog || (machine.lastLogDate <= currentActiveDay ? machine.lastLogData : {});
+    // Use root-level lastLogData/lastLogDate fields (kept in sync on every save)
+    const effectiveLog = (machine.lastLogDate && machine.lastLogDate <= currentActiveDay)
+      ? machine.lastLogData
+      : {};
 
     const hydratePlan = (plan: any): PlanItem => ({
       type: plan?.type || 'PRODUCTION',
@@ -545,7 +537,7 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
       material: effectiveLog?.fabric || machine.material || '',
       client: effectiveLog?.client || machine.client || '',
       futurePlans,
-      dailyLogs: logs.map((log: any) => log.id).filter(Boolean),
+      dailyLogs: [],
       lastLogDate: effectiveLog?.date || machine.lastLogDate,
       lastLogData: effectiveLog?.date ? {
         date: effectiveLog.date,
@@ -640,32 +632,36 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
         const machineDocs = await DataService.getMachinesFromMachineSS();
         if (!isMounted) return;
 
-        // Compute Fabric History (Proven Machines)
+        // Compute Fabric History (Proven Machines) — wrapped so index errors don't break the page
         const history: Record<string, Array<{machine: string; client: string}>> = {};
         const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
 
-        machineDocs.forEach((m: any) => {
-            if (m.dailyLogs && Array.isArray(m.dailyLogs)) {
-                m.dailyLogs.forEach((log: any) => {
-                    if (log.fabric && log.dayProduction > 0) {
-                        const fabKey = log.fabric; // Keep original casing for key lookup? Or normalize?
-                        // Using raw fabric name as key to match plan.fabric
-                        
-                        if (!history[fabKey]) history[fabKey] = [];
-                        
-                        const machName = m.name || m.machineName;
-                        const clientName = log.client || '';
-                        
-                        // Check uniqueness
-                        const exists = history[fabKey].some(h => h.machine === machName && normalize(h.client) === normalize(clientName));
-                        
-                        if (!exists) {
-                            history[fabKey].push({ machine: machName, client: clientName });
-                        }
-                    }
-                });
+        try {
+          const historySnapshot = await getDocs(
+            query(collectionGroup(db, 'dailyLogs'), where('dayProduction', '>', 0))
+          );
+          historySnapshot.docs.forEach(logDoc => {
+            const log = logDoc.data();
+            if (!log.fabric) return;
+            const machineId = logDoc.ref.parent.parent?.id;
+            if (!machineId) return;
+            const machineDoc = machineDocs.find((m: any) =>
+              String(m.firestoreId || m.id) === String(machineId)
+            );
+            const machName = machineDoc?.name || machineDoc?.machineName || machineId;
+            const fabKey = log.fabric;
+            const clientName = log.client || '';
+            if (!history[fabKey]) history[fabKey] = [];
+            const exists = history[fabKey].some(
+              h => h.machine === machName && normalize(h.client) === normalize(clientName)
+            );
+            if (!exists) {
+              history[fabKey].push({ machine: machName, client: clientName });
             }
-        });
+          });
+        } catch (histErr) {
+          console.warn('Fabric history query failed (index may be missing) — schedule will load without history hints:', histErr);
+        }
         
         setFabricHistory(history);
 
