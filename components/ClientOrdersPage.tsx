@@ -1609,48 +1609,58 @@ const MemoizedOrderRow = React.memo(({
                     className="w-8 h-8 object-cover rounded border border-slate-200 shadow-sm flex-shrink-0"
                   />
                 )}
-                <div className="flex flex-col flex-1 min-w-0 gap-0.5">
+                <div className="flex flex-col flex-1 min-w-0 gap-1">
                     <div className="text-slate-700 font-medium truncate">
                       {(() => {
                         const fabricDef = fabrics.find(f => f.name === row.material);
                         return fabricDef ? (fabricDef.shortName || fabricDef.name) : (row.material || '-');
                       })()}
                     </div>
-                    {hasComposition && (
-                       <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
-                         <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-                         <span>Verified</span>
-                       </div>
-                    )}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {hasComposition && (
+                        <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                          <span>Verified</span>
+                        </div>
+                      )}
+                      {row.reorderOfId && (
+                        isReadOnly ? (
+                          <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                            row.reorderType === 'استعواض'
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                          }`}>
+                            <Link2 size={9} />
+                            {row.reorderType || 'طلب عميل'}
+                          </span>
+                        ) : (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const next = (row.reorderType || 'طلب عميل') === 'طلب عميل' ? 'استعواض' : 'طلب عميل';
+                              handleUpdateOrder(row.id, { reorderType: next as 'طلب عميل' | 'استعواض' });
+                            }}
+                            title="Click to toggle: طلب عميل / استعواض"
+                            className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border transition-all cursor-pointer ${
+                              (row.reorderType || 'طلب عميل') === 'استعواض'
+                                ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 hover:border-amber-300'
+                                : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300'
+                            }`}
+                          >
+                            <Link2 size={9} />
+                            {row.reorderType || 'طلب عميل'}
+                          </button>
+                        )
+                      )}
+                      {!row.reorderOfId && childReorders.length > 0 && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5 font-semibold" title="Has linked reorders">
+                          <Link2 size={9} /> {childReorders.length} reorder{childReorders.length > 1 ? 's' : ''}
+                        </span>
+                      )}
+                    </div>
                 </div>
                 <div className="absolute top-2 right-2 flex items-center gap-2 opacity-0 group-hover/fabric:opacity-100 transition-opacity">
                   <span className="font-mono text-[10px] text-slate-600 bg-white border border-slate-200 rounded px-2 py-0.5 shadow-sm" title={row.id}>Order: {row.id.slice(0, 8)}</span>
-                  {row.reorderOfId && (
-                    <span className="inline-flex items-center gap-1 text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-full px-2 py-0.5" title="Reorder of another order">
-                      <Link2 size={10} />
-                      {isReadOnly ? (
-                        row.reorderType || 'Reorder'
-                      ) : (
-                        <select
-                          className="bg-transparent text-indigo-700 text-[10px] font-semibold border-none focus:ring-0 focus:outline-none cursor-pointer"
-                          value={row.reorderType || 'طلب عميل'}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => {
-                            e.stopPropagation();
-                            handleUpdateOrder(row.id, { reorderType: e.target.value as 'طلب عميل' | 'استعواض' });
-                          }}
-                        >
-                          <option value="طلب عميل">طلب عميل</option>
-                          <option value="استعواض">استعواض</option>
-                        </select>
-                      )}
-                    </span>
-                  )}
-                  {!row.reorderOfId && childReorders.length > 0 && (
-                    <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5" title="Has linked reorders">
-                      <Link2 size={10} /> {childReorders.length}
-                    </span>
-                  )}
                 </div>
                 <button 
                   onClick={(e) => {
@@ -1947,47 +1957,19 @@ const MemoizedOrderRow = React.memo(({
 
                 {/* Yarn Info / Add Yarn Button - Always show when fabric exists */}
                 {row.material && (
-                   <div className="mt-1 px-1 flex items-center gap-2">
+                   <div className="mt-1 px-1 flex items-center gap-2 flex-wrap">
                       {hasComposition ? (
-                        <>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onOpenFabricDetails(row.material, row.requiredQty || 0, row.id);
-                            }}
-                            className="text-[10px] font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 hover:bg-blue-100 transition-colors flex items-center gap-1"
-                            title="View Yarn Details"
-                          >
-                            <Calculator size={10} />
-                            Yarn Info
-                          </button>
-                          {row.reorderOfId && (
-                            <span className="inline-flex items-center gap-1 text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-full px-2 py-0.5" title="This order was created as a reorder">
-                              <Link2 size={10} />
-                              {isReadOnly ? (
-                                row.reorderType || 'Reorder'
-                              ) : (
-                                <select
-                                  className="bg-transparent text-indigo-700 text-[10px] font-semibold border-none focus:ring-0 focus:outline-none cursor-pointer"
-                                  value={row.reorderType || 'طلب عميل'}
-                                  onClick={(e) => e.stopPropagation()}
-                                  onChange={(e) => {
-                                    e.stopPropagation();
-                                    handleUpdateOrder(row.id, { reorderType: e.target.value as 'طلب عميل' | 'استعواض' });
-                                  }}
-                                >
-                                  <option value="طلب عميل">طلب عميل</option>
-                                  <option value="استعواض">استعواض</option>
-                                </select>
-                              )}
-                            </span>
-                          )}
-                          {!row.reorderOfId && childReorders.length > 0 && (
-                            <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5" title="This order has reorders linked to it">
-                              <Link2 size={10} /> {childReorders.length} reorder{childReorders.length > 1 ? 's' : ''}
-                            </span>
-                          )}
-                        </>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenFabricDetails(row.material, row.requiredQty || 0, row.id);
+                          }}
+                          className="text-[10px] font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 hover:bg-blue-100 transition-colors flex items-center gap-1"
+                          title="View Yarn Details"
+                        >
+                          <Calculator size={10} />
+                          Yarn Info
+                        </button>
                       ) : (
                         <button
                           onClick={(e) => {
@@ -2000,6 +1982,42 @@ const MemoizedOrderRow = React.memo(({
                           <AlertCircle size={10} />
                           Add Yarn
                         </button>
+                      )}
+
+                      {/* Reorder type badge — always visible when this is a reorder */}
+                      {row.reorderOfId && (
+                        isReadOnly ? (
+                          <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                            row.reorderType === 'استعواض'
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                          }`}>
+                            <Link2 size={9} />
+                            {row.reorderType || 'طلب عميل'}
+                          </span>
+                        ) : (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const next = (row.reorderType || 'طلب عميل') === 'طلب عميل' ? 'استعواض' : 'طلب عميل';
+                              handleUpdateOrder(row.id, { reorderType: next as 'طلب عميل' | 'استعواض' });
+                            }}
+                            title="Click to toggle: طلب عميل / استعواض"
+                            className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border transition-all cursor-pointer ${
+                              (row.reorderType || 'طلب عميل') === 'استعواض'
+                                ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 hover:border-amber-300'
+                                : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300'
+                            }`}
+                          >
+                            <Link2 size={9} />
+                            {row.reorderType || 'طلب عميل'}
+                          </button>
+                        )
+                      )}
+                      {!row.reorderOfId && childReorders.length > 0 && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5 font-semibold" title="This order has reorders linked to it">
+                          <Link2 size={9} /> {childReorders.length} reorder{childReorders.length > 1 ? 's' : ''}
+                        </span>
                       )}
                    </div>
                 )}
