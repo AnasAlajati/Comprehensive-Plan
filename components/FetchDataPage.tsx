@@ -4450,21 +4450,23 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         const machineName = targetLog?.machineName || flMachineId;
         const selectedSeasonName = flSeasonOptions.find(s => s.id === flSeason)?.name || '';
 
+        // Helper: does an order belong to the selected season?
+        // Old orders (created before the season system) have no seasonId → they default to '2025-summer'
+        const orderMatchesSeason = (o: any) => {
+          if (!flSeason) return true;
+          if (o.seasonId) return o.seasonId === flSeason || o.seasonName === selectedSeasonName;
+          return flSeason === '2025-summer'; // legacy fallback
+        };
+
         const filteredClients = flSeason
           ? clients.filter((c: any) =>
-              flatOrders.some(o =>
-                o.customerId === c.id &&
-                (o.seasonId === flSeason || o.seasonName === selectedSeasonName)
-              )
+              flatOrders.some(o => o.customerId === c.id && orderMatchesSeason(o))
             )
           : clients;
         const sortedClients = [...filteredClients].sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
 
         const clientOrders = flClient
-          ? flatOrders.filter(o =>
-              o.customerId === flClient &&
-              (!flSeason || o.seasonId === flSeason || o.seasonName === selectedSeasonName)
-            )
+          ? flatOrders.filter(o => o.customerId === flClient && orderMatchesSeason(o))
           : [];
 
         const selectedClientName = clients.find((c: any) => c.id === flClient)?.name || '';
