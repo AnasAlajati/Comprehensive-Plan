@@ -42,7 +42,6 @@ import { GlobalFabricButton } from './components/GlobalFabricButton';
 import { LoginPage } from './components/LoginPage';
 import { UserManagementPage } from './components/UserManagementPage';
 import { RecentPrintsPage } from './components/RecentPrintsPage';
-import { DailyLogsAdminPanel } from './components/DailyLogsAdminPanel';
 import { 
   Send, 
   CheckCircle, 
@@ -68,8 +67,7 @@ import {
   Menu,
   X,
   Beaker,
-  Printer,
-  Trash2
+  Printer
 } from 'lucide-react';
 import { MachineStatus } from './types';
 
@@ -102,7 +100,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'real-maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'sample-tracking' | 'fabrics' | 'machines' | 'users' | 'admin-dailylogs'>('excel'); 
+  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'real-maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'sample-tracking' | 'fabrics' | 'machines' | 'users'>('excel'); 
   const [planningInitialViewMode, setPlanningInitialViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
   
   // Force dyehouse_manager and dyehouse_colors_manager to only see dyehouse-directory or orders
@@ -1106,15 +1104,7 @@ const App: React.FC = () => {
                            <div className="font-semibold text-sm">Machines</div>
                         </button>
                         )}
-                        {userRole === 'admin' && (
-                        <button 
-                          onClick={() => { setViewMode('admin-dailylogs'); setIsMenuOpen(false); }}
-                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'admin-dailylogs' ? 'bg-orange-50 text-orange-700 ring-1 ring-orange-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
-                        >
-                           <div className={`p-2 rounded-md ${viewMode === 'admin-dailylogs' ? 'bg-orange-100 text-orange-600' : 'bg-slate-100 text-slate-500'}`}><Trash2 size={20} /></div>
-                           <div className="font-semibold text-sm">DailyLogs Admin</div>
-                        </button>
-                        )}
+
                         <button 
                           onClick={() => { setViewMode('idle'); setIsMenuOpen(false); }}
                           className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'idle' ? 'bg-red-50 text-red-700 ring-1 ring-red-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
@@ -1241,9 +1231,6 @@ const App: React.FC = () => {
               />
             )}
 
-            {viewMode === 'admin-dailylogs' && userRole === 'admin' && (
-              <DailyLogsAdminPanel />
-            )}
         </div>
       </main>
       
