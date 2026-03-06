@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   collection, 
+  collectionGroup,
   addDoc, 
   getDocs, 
   deleteDoc, 
@@ -76,6 +77,17 @@ export const UserManagementPage: React.FC = () => {
   const [machineFixRunning, setMachineFixRunning] = useState(false);
   const [machineFixConfirm, setMachineFixConfirm] = useState('');
   const [machineFixResult, setMachineFixResult] = useState<string | null>(null);
+
+  // Orders Season Fix tool
+  const [orderSeasonFixOpen, setOrderSeasonFixOpen] = useState(false);
+  interface OrderFixRow { customerId: string; customerName: string; orderId: string; material: string; willChange: boolean; currentSeason: string; }
+  const [orderFixRows, setOrderFixRows] = useState<OrderFixRow[] | null>(null);       // only the ones that will be changed
+  const [allOrderFixRows, setAllOrderFixRows] = useState<OrderFixRow[] | null>(null); // all scanned orders
+  const [orderFixScanning, setOrderFixScanning] = useState(false);
+  const [orderFixRunning, setOrderFixRunning] = useState(false);
+  const [orderFixConfirm, setOrderFixConfirm] = useState('');
+  const [orderFixResult, setOrderFixResult] = useState<string | null>(null);
+  const [customerNameMap, setCustomerNameMap] = useState<Map<string, string>>(new Map());
 
   // Season Migration: scan clients without a season
   const handleScanMigration = async () => {
@@ -194,6 +206,81 @@ export const UserManagementPage: React.FC = () => {
       setMachineFixResult('❌ Fix failed. Check console.');
     }
     setMachineFixRunning(false);
+  };
+
+  const handleScanOrderSeason = async () => {
+    setOrderFixScanning(true);
+    setOrderFixRows(null);
+    setAllOrderFixRows(null);
+    setOrderFixResult(null);
+    try {
+      const custSnap = await getDocs(collection(db, 'CustomerSheets'));
+      const nameMap = new Map<string, string>();
+      custSnap.docs.forEach(d => nameMap.set(d.id, (d.data().name as string) || d.id));
+      setCustomerNameMap(nameMap);
+
+      const ordersSnap = await getDocs(collectionGroup(db, 'orders'));
+      const missing: OrderFixRow[] = [];
+      const all: OrderFixRow[] = [];
+      ordersSnap.docs.forEach(d => {
+        // Only process docs that live at CustomerSheets/{customerId}/orders/{orderId}
+        // d.ref.path has 4 segments; grandparent collection must be 'CustomerSheets'
+        const parentCollection = d.ref.parent.parent?.parent?.id; // should be 'CustomerSheets'
+        const customerId = d.ref.parent.parent?.id || '';
+        if (parentCollection !== 'CustomerSheets' || !customerId) return; // skip stray 'orders' collections
+
+        const data = d.data();
+        const hasSeason = !!(data.seasonId && (data.seasonId as string).trim() !== '');
+        const currentSeason = hasSeason
+          ? ((data.seasonName as string) || (data.seasonId as string))
+          : 'Unknown';
+        const row: OrderFixRow = {
+          customerId,
+          customerName: nameMap.get(customerId) || customerId,
+          orderId: d.id,
+          material: (data.material as string) || '—',
+          willChange: !hasSeason,
+          currentSeason,
+        };
+        all.push(row);
+        if (!hasSeason) missing.push(row);
+      });
+      setAllOrderFixRows(all);
+      setOrderFixRows(missing);
+    } catch (err) {
+      console.error('Order season scan error:', err);
+      setOrderFixResult('❌ Scan failed. Check console.');
+    }
+    setOrderFixScanning(false);
+  };
+
+  const handleFixOrderSeason = async () => {
+    if (!orderFixRows || orderFixRows.length === 0) return;
+    setOrderFixRunning(true);
+    setOrderFixResult(null);
+    try {
+      const chunkSize = 500;
+      let total = 0;
+      for (let i = 0; i < orderFixRows.length; i += chunkSize) {
+        const chunk = orderFixRows.slice(i, i + chunkSize);
+        const batch = writeBatch(db);
+        chunk.forEach(row => {
+          if (!row.customerId) return; // skip any rows that slipped through without a valid customer
+          const ref = doc(db, 'CustomerSheets', row.customerId, 'orders', row.orderId);
+          batch.update(ref, { seasonId: '2025-summer', seasonName: '2025 Summer Season' });
+        });
+        await batch.commit();
+        total += chunk.length;
+      }
+      setOrderFixResult(`✅ Updated ${total} order${total !== 1 ? 's' : ''} — seasonId set to "2025-summer".`);
+      setOrderFixRows([]);
+      setAllOrderFixRows(prev => prev ? prev.map(r => r.willChange ? { ...r, willChange: false, currentSeason: '2025 Summer Season' } : r) : []);
+      setOrderFixConfirm('');
+    } catch (err) {
+      console.error('Order season fix error:', err);
+      setOrderFixResult('❌ Fix failed. Check console.');
+    }
+    setOrderFixRunning(false);
   };
 
   // Load user activities when expanded
@@ -1062,6 +1149,153 @@ export const UserManagementPage: React.FC = () => {
               {machineFixResult && (
                 <div className={`p-3 rounded-lg text-sm font-medium ${machineFixResult.startsWith('✅') ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'}`}>
                   {machineFixResult}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── Orders Missing Season Fix ── */}
+        <div className="border border-slate-200 rounded-xl overflow-hidden">
+          <button
+            className="w-full flex items-center justify-between px-5 py-4 hover:bg-slate-50 transition-colors text-left"
+            onClick={() => { setOrderSeasonFixOpen(v => !v); setOrderFixRows(null); setAllOrderFixRows(null); setOrderFixResult(null); setOrderFixConfirm(''); }}
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-violet-100 rounded-lg">
+                <Database size={16} className="text-violet-600" />
+              </div>
+              <div>
+                <div className="font-semibold text-slate-800 text-sm">Fix Orders Missing Season</div>
+                <div className="text-xs text-slate-500 mt-0.5">Find orders with no <span className="font-mono">seasonId</span> and assign them to 2025 Summer Season</div>
+              </div>
+            </div>
+            {orderSeasonFixOpen ? <ChevronUp size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
+          </button>
+
+          {orderSeasonFixOpen && (
+            <div className="p-5 space-y-4 border-t border-slate-200">
+              <p className="text-sm text-slate-600">
+                Orders created before the season system was introduced have no <span className="font-mono bg-slate-100 px-1 rounded">seasonId</span> field,
+                which causes them to appear missing in season-filtered views. This tool scans all orders across every customer and
+                sets <span className="font-mono bg-slate-100 px-1 rounded">seasonId = "2025-summer"</span> on any that are missing it.
+              </p>
+
+              <button
+                onClick={handleScanOrderSeason}
+                disabled={orderFixScanning}
+                className="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50"
+              >
+                {orderFixScanning
+                  ? <><RefreshCw size={14} className="animate-spin" /> Scanning...</>
+                  : <><Database size={14} /> Scan All Orders</>}
+              </button>
+
+              {allOrderFixRows !== null && (
+                allOrderFixRows.length === 0 ? (
+                  <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
+                    <Check size={15} className="text-green-600 shrink-0" />
+                    No orders found in CustomerSheets.
+                  </div>
+                ) : (
+                  <>
+                    {/* Summary banner */}
+                    {orderFixRows!.length === 0 ? (
+                      <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg">
+                        <Check size={15} className="text-green-600 shrink-0" />
+                        <p className="text-sm text-green-800">
+                          All <span className="font-bold">{allOrderFixRows.length}</span> orders already have a <span className="font-mono">seasonId</span> — nothing to fix!
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="flex items-start gap-2 p-3 bg-violet-50 border border-violet-200 rounded-lg">
+                        <AlertTriangle size={16} className="text-violet-600 mt-0.5 shrink-0" />
+                        <p className="text-sm text-violet-900">
+                          <span className="font-bold text-amber-700">{orderFixRows!.length} order{orderFixRows!.length !== 1 ? 's' : ''} missing season</span> (shown in amber) will be assigned to <span className="font-semibold">2025 Summer Season</span>.
+                          {' '}<span className="text-slate-500">{allOrderFixRows.length - orderFixRows!.length} order{(allOrderFixRows.length - orderFixRows!.length) !== 1 ? 's' : ''} already have a season.</span>
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Full table — all orders */}
+                    <div className="border border-slate-200 rounded-lg overflow-hidden">
+                      <div className="bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-600 uppercase tracking-wide border-b border-slate-200 flex items-center justify-between">
+                        <span>All Orders ({allOrderFixRows.length})</span>
+                        <span className="flex gap-2 normal-case font-normal text-[11px]">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">● Will change: {orderFixRows!.length}</span>
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-800 border border-green-200">● Already set: {allOrderFixRows.length - orderFixRows!.length}</span>
+                        </span>
+                      </div>
+                      <div className="max-h-72 overflow-y-auto">
+                        <table className="w-full text-xs border-collapse">
+                          <thead className="sticky top-0 bg-slate-100">
+                            <tr>
+                              <th className="px-3 py-2 text-left text-slate-500 font-semibold border-b border-slate-200">#</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-semibold border-b border-slate-200">Customer</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-semibold border-b border-slate-200">Fabric / Material</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-semibold border-b border-slate-200">Order ID</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-semibold border-b border-slate-200">Current Season</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-semibold border-b border-slate-200">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {allOrderFixRows.map((row, idx) => (
+                              <tr key={`${row.customerId}-${row.orderId}`} className={`border-b last:border-0 ${row.willChange ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-slate-50'}`}>
+                                <td className="px-3 py-2 text-slate-400">{idx + 1}</td>
+                                <td className="px-3 py-2 font-medium text-slate-800">{row.customerName}</td>
+                                <td className="px-3 py-2 text-slate-600 max-w-[180px] truncate" title={row.material}>{row.material}</td>
+                                <td className="px-3 py-2 font-mono text-slate-500 text-[10px]">{row.orderId.slice(0, 12)}…</td>
+                                <td className="px-3 py-2">
+                                  {row.willChange ? (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700 border border-red-200">Unknown</span>
+                                  ) : (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-100 text-green-700 border border-green-200">{row.currentSeason}</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2">
+                                  {row.willChange ? (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-700 border border-indigo-200">→ 2025 Summer Season</span>
+                                  ) : (
+                                    <span className="text-slate-400 text-[10px]">✓ No change</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {orderFixRows!.length > 0 && (
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <div>
+                        <p className="text-sm font-medium text-slate-700 mb-1">Type <span className="font-mono bg-slate-100 px-1 rounded">CONFIRM</span> to apply</p>
+                        <input
+                          type="text"
+                          value={orderFixConfirm}
+                          onChange={e => setOrderFixConfirm(e.target.value)}
+                          placeholder="Type CONFIRM"
+                          className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-violet-500 focus:border-violet-500 w-40"
+                        />
+                      </div>
+                      <button
+                        onClick={handleFixOrderSeason}
+                        disabled={orderFixConfirm !== 'CONFIRM' || orderFixRunning}
+                        className="flex items-center gap-2 px-5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-4"
+                      >
+                        {orderFixRunning
+                          ? <><RefreshCw size={14} className="animate-spin" /> Fixing...</>
+                          : <><Database size={14} /> Fix {orderFixRows!.length} Order{orderFixRows!.length !== 1 ? 's' : ''}</>}
+                      </button>
+                    </div>
+                    )}
+                  </>
+                )
+              )}
+
+              {orderFixResult && (
+                <div className={`p-3 rounded-lg text-sm font-medium ${orderFixResult.startsWith('✅') ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'}`}>
+                  {orderFixResult}
                 </div>
               )}
             </div>
