@@ -380,6 +380,13 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
     setExcludedDays(newExcluded);
   };
 
+  // Auto-detect off days whenever logs or date range change
+  useEffect(() => {
+    if (subLogsByMachineId.size > 0 || machines.length > 0) {
+      autoDetectOffDays();
+    }
+  }, [subLogsByMachineId, startDate, endDate]);
+
   const stats = useMemo(() => {
     let totalWide = 0;
     let totalBous = 0;
@@ -1657,13 +1664,13 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
               <span className="text-slate-400">من أصل {stats.totalDays} يوم</span>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={autoDetectOffDays}
-                className="text-xs px-3 py-1.5 font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-md transition-colors">
+              <span className="text-xs flex items-center gap-1 text-emerald-600 font-medium">
+                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
                 اكتشاف العطلات
-              </button>
+              </span>
               <button onClick={() => setShowDaySelector(!showDaySelector)}
-                className="text-xs px-3 py-1.5 font-medium text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-md transition-colors shadow-sm">
-                {showDaySelector ? 'اخفاء التفاصيل' : 'تعديل الأيام'}
+                className="text-xs px-2.5 py-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors">
+                {showDaySelector ? '✕ إخفاء' : 'تعديل الأيام'}
               </button>
               {excludedDays.size > 0 && (
                 <button onClick={() => setExcludedDays(new Set())}
