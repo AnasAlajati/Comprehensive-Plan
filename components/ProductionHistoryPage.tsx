@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Calendar, Trash2, BarChart3, Factory, ChevronDown, ChevronUp, Download, RefreshCw, X, Info, FileText, ArrowLeft, AlertTriangle, TrendingUp, Package, BarChart2, LayoutGrid, List, ShoppingCart, Users, Edit2, Check } from 'lucide-react';
 import { MachineRow, Season } from '../types';
-import { collection, getDocs, query, where, documentId, addDoc, serverTimestamp, deleteDoc, doc, setDoc } from 'firebase/firestore';
+import { collection, getDocs, query, where, documentId, addDoc, serverTimestamp, deleteDoc, doc, setDoc, collectionGroup, onSnapshot } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { toJpeg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
@@ -83,6 +83,34 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
   const [showFabricModal, setShowFabricModal] = useState(false);
   const [fabricYear, setFabricYear] = useState<string>(new Date().getFullYear().toString());
   const [fabricForm, setFabricForm] = useState({ name: '', type: 'kham' as 'kham' | 'jahez', purchaseDate: new Date().toISOString().split('T')[0], quantity: 0 });
+
+  // Sub-collection daily logs — replaces machine.dailyLogs array reads
+  const [allSubLogs, setAllSubLogs] = useState<any[]>([]);
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collectionGroup(db, 'dailyLogs'),
+      (snapshot) => {
+        const logs = snapshot.docs.map(d => ({
+          ...d.data(),
+          _machineId: d.ref.parent.parent?.id ?? '',
+        }));
+        setAllSubLogs(logs);
+      },
+      (error) => { console.warn('ProductionHistoryPage dailyLogs listener error:', error); }
+    );
+    return () => unsub();
+  }, []);
+
+  const subLogsByMachineId = useMemo(() => {
+    const map = new Map<string, any[]>();
+    allSubLogs.forEach(log => {
+      const key = log._machineId as string;
+      if (!key) return;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(log);
+    });
+    return map;
+  }, [allSubLogs]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -337,8 +365,8 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
       let dayTotal = 0;
       
       machines.forEach(machine => {
-        const logs = machine.dailyLogs || [];
-        logs.forEach(log => {
+        const logs = subLogsByMachineId.get(String(machine.id)) || [];
+        logs.forEach((log: any) => {
           if (log.date === dateStr) {
             dayTotal += Number(log.dayProduction) || 0;
           }
@@ -387,7 +415,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
 
     machines.forEach(machine => {
       const isBous = machine.type === 'BOUS';
-      const logs = machine.dailyLogs || [];
+      const logs = subLogsByMachineId.get(String(machine.id)) || [];
       
       logs.forEach(log => {
         if (log.date >= startDate && log.date <= endDate) {
@@ -444,7 +472,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
       scrapReasons: Object.entries(scrapReasons).sort((a, b) => b[1] - a[1]),
       dailyData: dateArray.map(date => ({ date, ...dailyStats[date], excluded: excludedDays.has(date) }))
     };
-  }, [machines, startDate, endDate, externalEntries, excludedDays, dailySummaries]);
+  }, [machines, startDate, endDate, externalEntries, excludedDays, dailySummaries, subLogsByMachineId]);
 
   // ─── Monthly Scrap Report ───────────────────────────────────────────────────
   const scrapStats = useMemo(() => {
@@ -459,7 +487,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
 
     machines.forEach(machine => {
       if (machine.type === 'BOUS') return; // wide machines only for production base
-      const logs = machine.dailyLogs || [];
+      const logs = subLogsByMachineId.get(String(machine.id)) || [];
       logs.forEach((log: any) => {
         if (log.date >= yearStart && log.date <= yearEnd) {
           const month = log.date.substring(0, 7);
@@ -533,7 +561,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
     };
 
     return { rows, reasons, totals };
-  }, [machines, scrapYear, scrapDailySummaries]);
+  }, [machines, scrapYear, scrapDailySummaries, subLogsByMachineId]);
 
   // ─── Worker Scrap Analytics ────────────────────────────────────────────────
   const workerStats = useMemo(() => {
@@ -549,7 +577,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
     let total = 0;
 
     machines.forEach(machine => {
-      (machine.dailyLogs || []).forEach((log: any) => {
+      (subLogsByMachineId.get(String(machine.id)) || []).forEach((log: any) => {
         if (log.date >= rangeStart && log.date <= rangeEnd) {
           const scrap = Number(log.scrap) || 0;
           if (scrap > 0 && log.workerResponsible) {
@@ -566,7 +594,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
       .sort((a, b) => b.scrap - a.scrap);
 
     return { rows, total, rangeStart, rangeEnd };
-  }, [machines, workerScrapPeriod, workerScrapYear, workerScrapMonth]);
+  }, [machines, workerScrapPeriod, workerScrapYear, workerScrapMonth, subLogsByMachineId]);
 
   // ─── Yearly Production & Delivery Report ──────────────────────────────────
   const prodStats = useMemo(() => {
@@ -585,7 +613,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
 
     // Machine production & scrap
     machines.forEach(machine => {
-      (machine.dailyLogs || []).forEach((log: any) => {
+      (subLogsByMachineId.get(String(machine.id)) || []).forEach((log: any) => {
         if (log.date >= yearStart && log.date <= yearEnd) {
           const m = log.date.substring(0, 7);
           if (!byMonth[m]) return;
@@ -653,7 +681,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
     };
 
     return { rows, totals };
-  }, [machines, prodYear, externalEntries, prodDeliveries]);
+  }, [machines, prodYear, externalEntries, prodDeliveries, subLogsByMachineId]);
 
   // ─── Fabric Purchase Report ──────────────────────────────────────────────
   const fabricStats = useMemo(() => {
@@ -698,11 +726,11 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
 
     // Machines
     machines.forEach(m => {
-        m.dailyLogs?.forEach(log => {
+        (subLogsByMachineId.get(String(m.id)) || []).forEach((log: any) => {
             if (log.date >= startYear && log.date <= todayStr) {
                 total += Number(log.dayProduction) || 0;
             }
-        })
+        });
     });
 
     // External
@@ -713,7 +741,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
     });
 
     return total;
-  }, [machines, externalEntries]);
+  }, [machines, externalEntries, subLogsByMachineId]);
 
   const handleQuickRange = (days: number) => {
     const end = new Date();
