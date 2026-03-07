@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Calendar, Trash2, BarChart3, Factory, ChevronDown, ChevronUp, Download, RefreshCw, X, Info, FileText, ArrowLeft, AlertTriangle, TrendingUp, Package, BarChart2, LayoutGrid, List, ShoppingCart, Users, Edit2, Check } from 'lucide-react';
+import * as XLSX from 'xlsx-js-style';
 import { MachineRow, Season } from '../types';
 import { collection, getDocs, query, where, documentId, addDoc, serverTimestamp, deleteDoc, doc, setDoc, collectionGroup, onSnapshot } from 'firebase/firestore';
 import { db } from '../services/firebase';
@@ -83,6 +84,8 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
   const [showFabricModal, setShowFabricModal] = useState(false);
   const [fabricYear, setFabricYear] = useState<string>(new Date().getFullYear().toString());
   const [fabricForm, setFabricForm] = useState({ name: '', type: 'kham' as 'kham' | 'jahez', purchaseDate: new Date().toISOString().split('T')[0], quantity: 0 });
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportSheets, setExportSheets] = useState({ main: true, scrap: true, worker: true, prod: true, fabric: true, clients: true });
 
   // Sub-collection daily logs — replaces machine.dailyLogs array reads
   const [allSubLogs, setAllSubLogs] = useState<any[]>([]);
@@ -826,19 +829,91 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
   const fmt = (num: number) => num.toLocaleString(undefined, { maximumFractionDigits: 0 });
   const fmtDay = (d: string) => new Date(d).toLocaleDateString('ar-EG', { weekday: 'short', day: 'numeric', month: 'short' });
 
-  const exportCSV = () => {
-    const rows = [
-      ['التاريخ', 'العريض', 'البوص', 'خارجي', 'المجموع'],
-      ...stats.dailyData.map(d => [d.date, d.wide, d.bous, d.external, d.wide + d.bous + d.external]),
-      ['المجموع', stats.totalWide, stats.totalBous, stats.totalExternal, stats.grandTotal]
-    ];
-    const csv = rows.map(r => r.join(',')).join('\n');
-    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `تقرير-الانتاج-${startDate}-${endDate}.csv`;
-    a.click();
+  const exportToExcel = () => {
+    const WB = XLSX.utils.book_new();
+    const bdr = { top: { style: 'thin', color: { rgb: 'D0D5DD' } }, bottom: { style: 'thin', color: { rgb: 'D0D5DD' } }, left: { style: 'thin', color: { rgb: 'D0D5DD' } }, right: { style: 'thin', color: { rgb: 'D0D5DD' } } };
+    const hS = (v: any) => ({ v, t: typeof v === 'number' ? 'n' : 's', s: { fill: { fgColor: { rgb: '1B3A6B' } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 11, name: 'Calibri' }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: bdr } });
+    const dS = (v: any, bold = false, bg = 'FFFFFF') => ({ v: v ?? '', t: typeof v === 'number' ? 'n' : 's', s: { fill: { fgColor: { rgb: bg } }, font: { bold, sz: 10, name: 'Calibri' }, alignment: { horizontal: 'right', vertical: 'center' }, border: bdr } });
+    const tS = (v: any) => dS(v, true, 'EEF2FF');
+    const fmtN = (n: number) => Math.round(n * 10) / 10;
+
+    if (exportSheets.main) {
+      const aoa: any[][] = [
+        [hS('التاريخ'), hS('المكن العريض'), hS('البوص'), hS('خارجي'), hS('المجموع الكلي')],
+        ...stats.dailyData.filter(d => !d.excluded).map(d => [dS(d.date), dS(fmtN(d.wide)), dS(fmtN(d.bous)), dS(fmtN(d.external)), dS(fmtN(d.wide + d.bous + d.external))]),
+        [tS('الإجمالي'), tS(fmtN(stats.totalWide)), tS(fmtN(stats.totalBous)), tS(fmtN(stats.totalExternal)), tS(fmtN(stats.grandTotal))],
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [{ wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 16 }];
+      ws['!rtl'] = true;
+      XLSX.utils.book_append_sheet(WB, ws, 'التقرير الرئيسي');
+    }
+
+    if (exportSheets.scrap) {
+      const rc = scrapStats.reasons;
+      const aoa: any[][] = [
+        [hS('الشهر'), hS('أيام العمل'), hS('الانتاج كجم'), hS('إجمالي السقط'), hS('% السقط'), ...rc.map(r => hS(r))],
+        ...scrapStats.rows.map(r => [dS(r.monthName + ' ' + r.yearName), dS(r.workingDays), dS(fmtN(r.production)), dS(fmtN(r.totalScrap)), dS(parseFloat(r.scrapPercent.toFixed(1))), ...rc.map(c => dS(fmtN(r.scrapByReason[c] || 0)))]),
+        [tS('الإجمالي'), tS(scrapStats.totals.workingDays), tS(fmtN(scrapStats.totals.production)), tS(fmtN(scrapStats.totals.totalScrap)), tS(scrapStats.totals.production > 0 ? parseFloat(((scrapStats.totals.totalScrap / scrapStats.totals.production) * 100).toFixed(1)) : 0), ...rc.map(c => tS(fmtN(scrapStats.totals.byReason[c] || 0)))],
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 10 }, ...rc.map(() => ({ wch: 16 }))];
+      ws['!rtl'] = true;
+      XLSX.utils.book_append_sheet(WB, ws, `السقط الشهري ${scrapYear}`);
+    }
+
+    if (exportSheets.worker && workerStats.rows.length > 0) {
+      const pLabel = workerScrapPeriod === 'monthly' ? `${workerScrapYear}-${workerScrapMonth}` : workerScrapYear;
+      const aoa: any[][] = [
+        [hS('العامل'), hS('السقط كجم'), hS('% من الإجمالي')],
+        ...workerStats.rows.map(r => [dS(r.name), dS(fmtN(r.scrap)), dS(workerStats.total > 0 ? parseFloat(((r.scrap / workerStats.total) * 100).toFixed(1)) : 0)]),
+        [tS('الإجمالي'), tS(fmtN(workerStats.total)), tS(100)],
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [{ wch: 26 }, { wch: 16 }, { wch: 16 }];
+      ws['!rtl'] = true;
+      XLSX.utils.book_append_sheet(WB, ws, `سقط العمال ${pLabel}`);
+    }
+
+    if (exportSheets.prod) {
+      const aoa: any[][] = [
+        [hS('#'), hS('الشهر'), hS('أيام التشغيل'), hS('المكن العريض'), hS('البوص'), hS('خارجي'), hS('إجمالي الانتاج'), hS('الداخلي بدون بوص'), hS('السقط'), hS('تسليمات العملاء')],
+        ...prodStats.rows.map(r => [dS(r.idx), dS(r.monthName), dS(r.workingDays), dS(fmtN(r.wide)), dS(fmtN(r.bous)), dS(fmtN(r.external)), dS(fmtN(r.totalProduction)), dS(fmtN(r.netProduction)), dS(fmtN(r.scrap)), dS(fmtN(r.deliveries))]),
+        [tS(''), tS('الإجمالي'), tS(prodStats.totals.workingDays), tS(fmtN(prodStats.totals.wide)), tS(fmtN(prodStats.totals.bous)), tS(fmtN(prodStats.totals.external)), tS(fmtN(prodStats.totals.totalProduction)), tS(fmtN(prodStats.totals.netProduction)), tS(fmtN(prodStats.totals.scrap)), tS(fmtN(prodStats.totals.deliveries))],
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [{ wch: 4 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 20 }];
+      ws['!rtl'] = true;
+      XLSX.utils.book_append_sheet(WB, ws, `الانتاج والتسليمات ${prodYear}`);
+    }
+
+    if (exportSheets.fabric && fabricStats.totals.totalCount > 0) {
+      const allItems = [...fabricStats.kham.map(f => ({ ...f, tl: 'خام' })), ...fabricStats.jahez.map(f => ({ ...f, tl: 'جاهز' }))];
+      const aoa: any[][] = [
+        [hS('الصنف'), hS('نوع الشراء'), hS('تاريخ الشراء'), hS('الكمية كجم')],
+        ...allItems.map(f => [dS(f.name), dS(f.tl), dS(f.purchaseDate), dS(f.quantity)]),
+        [tS('الإجمالي'), tS(''), tS(''), tS(fabricStats.totals.grandTotal)],
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [{ wch: 42 }, { wch: 12 }, { wch: 14 }, { wch: 14 }];
+      ws['!rtl'] = true;
+      XLSX.utils.book_append_sheet(WB, ws, `مشتريات القماش ${fabricYear}`);
+    }
+
+    if (exportSheets.clients && clientOrderRows.length > 0) {
+      const aoa: any[][] = [
+        [hS('كود العميل'), hS('اسم العميل'), hS('إجمالي المطلوب'), hS('المصنوع'), hS('المتبقي تصنيع'), hS('إجمالي التسليمات'), hS('صافي المتبقي للتسليم')],
+        ...clientOrderRows.map(r => [dS(r.clientCode), dS(clientRealNames[r.clientId] || r.clientCode), dS(r.totalRequired), dS(r.totalManufactured), dS(r.totalRemaining), dS(r.totalDeliveries), dS(r.deliveryRemaining)]),
+        [tS('الإجمالي'), tS(''), tS(clientOrderRows.reduce((a, r) => a + r.totalRequired, 0)), tS(clientOrderRows.reduce((a, r) => a + r.totalManufactured, 0)), tS(clientOrderRows.reduce((a, r) => a + r.totalRemaining, 0)), tS(clientOrderRows.reduce((a, r) => a + r.totalDeliveries, 0)), tS(clientOrderRows.reduce((a, r) => a + r.deliveryRemaining, 0))],
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 18 }, { wch: 14 }, { wch: 18 }, { wch: 20 }, { wch: 24 }];
+      ws['!rtl'] = true;
+      XLSX.utils.book_append_sheet(WB, ws, 'طلبيات العملاء');
+    }
+
+    XLSX.writeFile(WB, `تقارير-الانتاج-${new Date().toISOString().split('T')[0]}.xlsx`);
+    setShowExportModal(false);
   };
 
   const generatePDF = async () => {
@@ -929,6 +1004,7 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
 );
 
   return (
+    <>
     <div className="min-h-screen bg-slate-50 pb-20" dir="rtl">
       {/* Header */}
       <div className="bg-white border-b border-slate-200 sticky top-0 z-10 shadow-sm">
@@ -1035,7 +1111,7 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
               
               {/* Export Buttons */}
               <div className="flex items-center gap-2">
-                <button onClick={exportCSV}
+                <button onClick={() => setShowExportModal(true)}
                   className="px-3 py-1.5 text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-md transition-colors flex items-center gap-2 shadow-sm">
                   <FileText className="w-4 h-4 text-emerald-600" />
                   <span>اكسيل</span>
@@ -2239,5 +2315,168 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
         </div>
       </div>
     </div>
+
+      {/* Export to Excel Modal */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" dir="rtl">
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowExportModal(false)} />
+
+          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden border border-slate-200">
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-[#1B3A6B]/10 flex items-center justify-center">
+                  <FileText className="w-4 h-4 text-[#1B3A6B]" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-800">تصدير التقارير</h2>
+                  <p className="text-xs text-slate-400 mt-0.5">اختر الأوراق المراد تصديرها</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowExportModal(false)}
+                className="w-7 h-7 flex items-center justify-center rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Sheet rows */}
+            <div className="py-1">
+              {([
+                {
+                  key: 'main',
+                  label: 'التقرير الرئيسي للإنتاج',
+                  detail: `${startDate} — ${endDate}`,
+                  icon: BarChart2,
+                },
+                {
+                  key: 'scrap',
+                  label: 'السقط الشهري',
+                  icon: Trash2,
+                  control: (
+                    <select value={scrapYear} onChange={e => setScrapYear(e.target.value)}
+                      className="h-7 text-xs border border-slate-200 rounded-md px-2 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-[#1B3A6B]/20 focus:border-[#1B3A6B]">
+                      {['2024','2025','2026','2027'].map(y => <option key={y}>{y}</option>)}
+                    </select>
+                  ),
+                },
+                {
+                  key: 'worker',
+                  label: 'سقط العمال',
+                  icon: Users,
+                  control: (
+                    <div className="flex gap-1 items-center">
+                      <select value={workerScrapPeriod} onChange={e => setWorkerScrapPeriod(e.target.value as any)}
+                        className="h-7 text-xs border border-slate-200 rounded-md px-2 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-[#1B3A6B]/20 focus:border-[#1B3A6B]">
+                        <option value="monthly">شهري</option>
+                        <option value="yearly">سنوي</option>
+                      </select>
+                      <select value={workerScrapYear} onChange={e => setWorkerScrapYear(e.target.value)}
+                        className="h-7 text-xs border border-slate-200 rounded-md px-2 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-[#1B3A6B]/20 focus:border-[#1B3A6B]">
+                        {['2024','2025','2026','2027'].map(y => <option key={y}>{y}</option>)}
+                      </select>
+                      {workerScrapPeriod === 'monthly' && (
+                        <select value={workerScrapMonth} onChange={e => setWorkerScrapMonth(e.target.value)}
+                          className="h-7 text-xs border border-slate-200 rounded-md px-2 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-[#1B3A6B]/20 focus:border-[#1B3A6B]">
+                          {Array.from({length:12},(_,i)=>String(i+1).padStart(2,'0')).map(m => <option key={m}>{m}</option>)}
+                        </select>
+                      )}
+                    </div>
+                  ),
+                },
+                {
+                  key: 'prod',
+                  label: 'الإنتاج والتسليمات السنوي',
+                  icon: Package,
+                  control: (
+                    <select value={prodYear} onChange={e => setProdYear(e.target.value)}
+                      className="h-7 text-xs border border-slate-200 rounded-md px-2 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-[#1B3A6B]/20 focus:border-[#1B3A6B]">
+                      {['2024','2025','2026','2027'].map(y => <option key={y}>{y}</option>)}
+                    </select>
+                  ),
+                },
+                {
+                  key: 'fabric',
+                  label: 'مشتريات القماش',
+                  icon: ShoppingCart,
+                  control: (
+                    <select value={fabricYear} onChange={e => setFabricYear(e.target.value)}
+                      className="h-7 text-xs border border-slate-200 rounded-md px-2 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-[#1B3A6B]/20 focus:border-[#1B3A6B]">
+                      {['2024','2025','2026','2027'].map(y => <option key={y}>{y}</option>)}
+                    </select>
+                  ),
+                },
+                {
+                  key: 'clients',
+                  label: 'ملخص طلبيات العملاء',
+                  icon: LayoutGrid,
+                  control: seasons.length > 0 ? (
+                    <select value={selectedSeasonId} onChange={e => setSelectedSeasonId(e.target.value)}
+                      className="h-7 text-xs border border-slate-200 rounded-md px-2 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-[#1B3A6B]/20 focus:border-[#1B3A6B]">
+                      {seasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                  ) : null,
+                },
+              ] as Array<{ key: string; label: string; detail?: string; icon: React.ElementType; control?: React.ReactNode }>).map(({ key, label, detail, control, icon: Icon }) => {
+                const enabled = exportSheets[key as keyof typeof exportSheets];
+                return (
+                  <div key={key}
+                    className={`flex items-center gap-3 px-5 py-2.5 transition-opacity ${!enabled ? 'opacity-40' : ''}`}>
+                    {/* Checkbox */}
+                    <button
+                      onClick={() => setExportSheets(p => ({ ...p, [key]: !p[key as keyof typeof p] }))}
+                      className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 transition-colors border ${
+                        enabled ? 'bg-[#1B3A6B] border-[#1B3A6B]' : 'border-slate-300 bg-white'
+                      }`}>
+                      {enabled && <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />}
+                    </button>
+                    {/* Icon */}
+                    <div className="w-7 h-7 rounded-md bg-slate-100 flex items-center justify-center flex-shrink-0">
+                      <Icon className="w-3.5 h-3.5 text-slate-500" />
+                    </div>
+                    {/* Label */}
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm text-slate-700 font-medium">{label}</span>
+                      {detail && !control && (
+                        <span className="block text-xs text-slate-400 mt-0.5 font-mono">{detail}</span>
+                      )}
+                    </div>
+                    {/* Control */}
+                    {control && <div className="flex-shrink-0">{control}</div>}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Divider */}
+            <div className="border-t border-slate-100 mx-5" />
+
+            {/* Footer */}
+            <div className="flex items-center justify-between px-5 py-3">
+              <span className="text-xs text-slate-400 tabular-nums">
+                {Object.values(exportSheets).filter(Boolean).length} / 6 أوراق
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowExportModal(false)}
+                  className="h-8 px-4 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors">
+                  إلغاء
+                </button>
+                <button
+                  onClick={exportToExcel}
+                  disabled={!Object.values(exportSheets).some(Boolean)}
+                  className="h-8 px-4 text-xs font-semibold text-white bg-[#1B3A6B] hover:bg-[#162e57] rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed">
+                  <Download className="w-3.5 h-3.5" />
+                  تصدير
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+    </>
   );
 };
