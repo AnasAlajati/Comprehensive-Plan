@@ -298,10 +298,10 @@ export interface DyeingBatch {
   plannedBy?: string; // User email who planned it
   
   // Internal Dyehouse Status
-  dyehouseStatus?: 'STORE_RAW' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
+  dyehouseStatus?: 'STORE_RAW' | 'PLANNING' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
   dyehouseStatusDate?: string; // ISO Date String
   dyehouseHistory?: {
-    status: 'STORE_RAW' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
+    status: 'STORE_RAW' | 'PLANNING' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
     date: string;           // The actual date when this status happened
     enteredAt?: string;     // When this entry was recorded (for audit trail)
     updatedBy?: string;     // Who recorded this entry
@@ -316,10 +316,10 @@ export interface DyeingBatch {
     note: string;            // Note about what this partial is for
     createdAt: string;       // When this partial was created
     createdBy?: string;      // Who created it
-    dyehouseStatus?: 'STORE_RAW' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
+    dyehouseStatus?: 'STORE_RAW' | 'PLANNING' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
     dyehouseStatusDate?: string;
     dyehouseHistory?: {
-      status: 'STORE_RAW' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
+      status: 'STORE_RAW' | 'PLANNING' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
       date: string;
       enteredAt?: string;
       updatedBy?: string;

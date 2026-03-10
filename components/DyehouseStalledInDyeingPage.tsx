@@ -3,43 +3,37 @@ import { collection, getDocs, collectionGroup, query, onSnapshot } from 'firebas
 import { db } from '../services/firebase';
 import { parseFabricName } from '../services/data';
 import { OrderRow, FabricDefinition, DyeingBatch } from '../types';
-import { DyehouseStalledInDyeingPage } from './DyehouseStalledInDyeingPage';
-import { 
-  Search, 
+import {
+  Search,
   AlertTriangle,
-  AlertOctagon,
   Clock,
   Calendar,
   User,
   Package,
   Factory,
-  Filter,
   RefreshCw,
   ChevronDown,
   ChevronUp,
   Flame,
-  Eye,
   Box,
   PenBox,
   Ship,
   Check,
-  Droplets,
-  ArrowLeft
+  Droplets
 } from 'lucide-react';
 
 // Status Configuration
 const DYEHOUSE_STEPS = [
   { id: 'STORE_RAW', label: 'مخزن مصبغة', shortLabel: 'مخزن', icon: Box, color: '#64748b' },
-  { id: 'PLANNING', label: 'تشكيل في خطة الصباغة', shortLabel: 'تشكيل', icon: Calendar, color: '#4f46e5' },
   { id: 'DYEING', label: 'صباغة', shortLabel: 'صباغة', icon: PenBox, color: '#7c3aed' },
   { id: 'FINISHING', label: 'تجهيز', shortLabel: 'تجهيز', icon: Factory, color: '#f59e0b' },
   { id: 'STORE_FINISHED', label: 'منتهي مخزن', shortLabel: 'منتهي', icon: Ship, color: '#10b981' },
   { id: 'RECEIVED', label: 'مستلم', shortLabel: 'مستلم', icon: Check, color: '#3b82f6' }
 ] as const;
 
-type DyehouseStatusType = 'STORE_RAW' | 'PLANNING' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
+type DyehouseStatusType = 'STORE_RAW' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
 
-interface LateWorkItem {
+interface StalledItem {
   id: string;
   orderId: string;
   batchIdx: number;
@@ -60,23 +54,23 @@ interface LateWorkItem {
   formationDate?: string;
   dyehouseStatus?: DyehouseStatusType;
   dyehouseHistory?: any[];
-  daysAfterFormation: number;
+  dyeingEnteredDate?: string;
+  daysInDyeing: number;
   urgencyLevel: 'attention' | 'urgent';
 }
 
-export const DyehouseLateWorkPage: React.FC = () => {
-  const [items, setItems] = useState<LateWorkItem[]>([]);
+export const DyehouseStalledInDyeingPage: React.FC = () => {
+  const [items, setItems] = useState<StalledItem[]>([]);
   const [allDyehouses, setAllDyehouses] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDyehouse, setSelectedDyehouse] = useState<string>('all');
   const [filterUrgency, setFilterUrgency] = useState<'all' | 'attention' | 'urgent'>('all');
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
-  const [subMode, setSubMode] = useState<'late' | 'stalled'>('late');
 
   useEffect(() => {
     setLoading(true);
-    
+
     const fetchDyehouses = async () => {
       const snapshot = await getDocs(collection(db, 'dyehouses'));
       const list = snapshot.docs.map(doc => doc.data().name as string).sort();
@@ -99,7 +93,7 @@ export const DyehouseLateWorkPage: React.FC = () => {
         fabricMap[data.name] = data.shortName || data.name;
       });
 
-      const lateItems: LateWorkItem[] = [];
+      const stalledItems: StalledItem[] = [];
 
       snapshot.docs.forEach(docSnap => {
         const order = { id: docSnap.id, ...docSnap.data() } as OrderRow;
@@ -109,36 +103,40 @@ export const DyehouseLateWorkPage: React.FC = () => {
         if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
           order.dyeingPlan.forEach((batch, idx) => {
             if (batch.status !== 'sent') return;
-            
-            // Calculate days after formation
-            if (!batch.formationDate) return;
-            
-            const formationDate = new Date(batch.formationDate);
+
+            // Must currently be in DYEING status
+            const dyehouseStatus = batch.dyehouseStatus;
+            if (dyehouseStatus !== 'DYEING') return;
+
+            // Find when they entered DYEING from history
+            const dyehouseHistory: any[] = batch.dyehouseHistory || [];
+            const dyeingEntry = dyehouseHistory.find(h => h.status === 'DYEING');
+            if (!dyeingEntry) return;
+
+            const dyeingEnteredDate = dyeingEntry.date || dyeingEntry.enteredAt || dyeingEntry.lastModified;
+            if (!dyeingEnteredDate) return;
+
             const now = new Date();
-            const daysAfterFormation = Math.floor((now.getTime() - formationDate.getTime()) / (1000 * 60 * 60 * 24));
-            
-            // Only include items with 15+ days after formation
-            if (daysAfterFormation < 15) return;
-            
-            // Check if not yet received (still in dyehouse process)
-            const dyehouseStatus = batch.dyehouseStatus || 'STORE_RAW';
-            if (dyehouseStatus === 'RECEIVED') return;
-            
-            // Calculate sent quantities
+            const enteredDyeing = new Date(dyeingEnteredDate);
+            const daysInDyeing = Math.floor((now.getTime() - enteredDyeing.getTime()) / (1000 * 60 * 60 * 24));
+
+            // Only show if stuck 3+ days
+            if (daysInDyeing < 3) return;
+
             const sentEvents = batch.sentEvents || [];
             const sentRaw = sentEvents.reduce((s: number, e: any) => s + (Number(e.quantity) || 0), 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
             const sentAcc = sentEvents.reduce((s: number, e: any) => s + (Number(e.accessorySent) || 0), 0) + (Number(batch.quantitySentAccessory) || 0);
             const totalSent = sentRaw + sentAcc;
-            
+
             const dyehouseName = batch.dyehouse || order.dyehouse || 'Unassigned';
             const machineName = batch.plannedCapacity ? `${batch.plannedCapacity}kg` : (batch.machine || order.dyehouseMachine || '');
-            
-            lateItems.push({
+
+            stalledItems.push({
               id: `${order.id}-${idx}`,
               orderId: order.id,
               batchIdx: idx,
-              clientId: clientId,
-              clientName: clientName,
+              clientId,
+              clientName,
               orderReference: order.orderReference,
               fabric: order.material,
               fabricShortName: parseFabricName(order.material).shortName || order.material,
@@ -153,18 +151,19 @@ export const DyehouseLateWorkPage: React.FC = () => {
               dateSent: batch.dateSent,
               formationDate: batch.formationDate,
               dyehouseStatus: dyehouseStatus as DyehouseStatusType,
-              dyehouseHistory: batch.dyehouseHistory || [],
-              daysAfterFormation: daysAfterFormation,
-              urgencyLevel: daysAfterFormation >= 20 ? 'urgent' : 'attention'
+              dyehouseHistory,
+              dyeingEnteredDate,
+              daysInDyeing,
+              urgencyLevel: daysInDyeing >= 6 ? 'urgent' : 'attention'
             });
           });
         }
       });
 
-      // Sort by days (most urgent first)
-      lateItems.sort((a, b) => b.daysAfterFormation - a.daysAfterFormation);
-      
-      setItems(lateItems);
+      // Sort by days stalled (most urgent first)
+      stalledItems.sort((a, b) => b.daysInDyeing - a.daysInDyeing);
+
+      setItems(stalledItems);
       setLoading(false);
     });
 
@@ -176,19 +175,14 @@ export const DyehouseLateWorkPage: React.FC = () => {
     return new Date(dateStr).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
   };
 
-  const getStatusLabel = (status?: DyehouseStatusType) => {
-    const step = DYEHOUSE_STEPS.find(s => s.id === status);
-    return step?.label || 'غير محدد';
-  };
-
   const filteredItems = useMemo(() => {
     return items.filter(item => {
       if (selectedDyehouse !== 'all' && item.dyehouse !== selectedDyehouse) return false;
       if (filterUrgency !== 'all' && item.urgencyLevel !== filterUrgency) return false;
-      
+
       if (searchTerm) {
         const search = searchTerm.toLowerCase();
-        const matchesSearch = 
+        const matchesSearch =
           item.clientName.toLowerCase().includes(search) ||
           item.fabric.toLowerCase().includes(search) ||
           item.color.toLowerCase().includes(search) ||
@@ -196,7 +190,7 @@ export const DyehouseLateWorkPage: React.FC = () => {
           (item.orderReference && item.orderReference.toLowerCase().includes(search));
         if (!matchesSearch) return false;
       }
-      
+
       return true;
     });
   }, [items, selectedDyehouse, filterUrgency, searchTerm]);
@@ -205,8 +199,8 @@ export const DyehouseLateWorkPage: React.FC = () => {
     const total = filteredItems.length;
     const attention = filteredItems.filter(i => i.urgencyLevel === 'attention').length;
     const urgent = filteredItems.filter(i => i.urgencyLevel === 'urgent').length;
-    const avgDays = total > 0 ? Math.round(filteredItems.reduce((sum, i) => sum + i.daysAfterFormation, 0) / total) : 0;
-    return { total, attention, urgent, avgDays };
+    const maxDays = total > 0 ? Math.max(...filteredItems.map(i => i.daysInDyeing)) : 0;
+    return { total, attention, urgent, maxDays };
   }, [filteredItems]);
 
   const getStatusIndex = (status?: string) => {
@@ -214,11 +208,10 @@ export const DyehouseLateWorkPage: React.FC = () => {
     return DYEHOUSE_STEPS.findIndex(s => s.id === status);
   };
 
-  const TimelineStatus = ({ item }: { item: LateWorkItem }) => {
+  const TimelineStatus = ({ item }: { item: StalledItem }) => {
     const activeIndex = getStatusIndex(item.dyehouseStatus);
     const historyMap = new Map((item.dyehouseHistory || []).map(h => [h.status, h]));
-    
-    // Get the most recent history entry for "last modified by" info
+
     const lastHistoryEntry = (item.dyehouseHistory || [])
       .filter(h => h.updatedBy || h.modifiedBy)
       .sort((a, b) => {
@@ -226,66 +219,54 @@ export const DyehouseLateWorkPage: React.FC = () => {
         const dateB = new Date(b.lastModified || b.enteredAt || b.date);
         return dateB.getTime() - dateA.getTime();
       })[0];
-    
+
     const lastModifiedBy = lastHistoryEntry?.modifiedBy || lastHistoryEntry?.updatedBy;
     const lastModifiedDate = lastHistoryEntry?.lastModified || lastHistoryEntry?.enteredAt;
-    
+
     return (
       <div className="py-4 px-3">
-        {/* Progress Line Background */}
         <div className="relative">
           <div className="absolute top-6 left-8 right-8 h-0.5 bg-slate-200 rounded-full" />
-          
-          {/* Progress Line Active */}
-          <div 
-            className="absolute top-6 left-8 h-0.5 bg-indigo-500 rounded-full transition-all duration-500" 
-            style={{ 
-              width: activeIndex >= 0 ? `calc(${(activeIndex / (DYEHOUSE_STEPS.length - 1)) * 100}% - 32px)` : '0%' 
+          <div
+            className="absolute top-6 left-8 h-0.5 bg-indigo-500 rounded-full transition-all duration-500"
+            style={{
+              width: activeIndex >= 0 ? `calc(${(activeIndex / (DYEHOUSE_STEPS.length - 1)) * 100}% - 32px)` : '0%'
             }}
           />
-          
           <div className="relative flex justify-between items-start">
             {DYEHOUSE_STEPS.map((step, idx) => {
               const Icon = step.icon;
               const isActive = item.dyehouseStatus === step.id;
               const isCompleted = historyMap.has(step.id);
               const isPast = activeIndex > idx;
-              
+
               return (
-                <div
-                  key={step.id}
-                  className="flex flex-col items-center group w-14"
-                >
+                <div key={step.id} className="flex flex-col items-center group w-14">
                   <div className="relative">
-                    <div 
+                    <div
                       className={`
                         w-12 h-12 rounded-full flex items-center justify-center border-2 transition-all duration-300 z-10
-                        ${isActive 
-                          ? 'bg-white border-indigo-500 text-indigo-600 ring-4 ring-indigo-50 scale-110' 
+                        ${isActive
+                          ? 'bg-white border-purple-500 text-purple-600 ring-4 ring-purple-50 scale-110'
                           : isCompleted || isPast
-                            ? 'bg-indigo-500 border-indigo-500 text-white' 
+                            ? 'bg-indigo-500 border-indigo-500 text-white'
                             : 'bg-white border-slate-200 text-slate-300'
                         }
                       `}
                     >
-                      {/* Always show the icon */}
                       <Icon size={20} strokeWidth={1.5} />
                     </div>
-                    
-                    {/* Small checkmark badge for completed steps */}
                     {(isCompleted || isPast) && !isActive && (
                       <div className="absolute -top-1 -right-1 w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center border-2 border-white shadow-sm">
                         <Check strokeWidth={3} size={12} className="text-white" />
                       </div>
                     )}
                   </div>
-                  
                   <span className={`mt-2 text-[10px] font-semibold text-center leading-tight ${
-                    isActive ? 'text-indigo-700' : isCompleted ? 'text-slate-700' : 'text-slate-400'
+                    isActive ? 'text-purple-700' : isCompleted ? 'text-slate-700' : 'text-slate-400'
                   }`}>
                     {step.shortLabel}
                   </span>
-                  
                   {historyMap.has(step.id) && (
                     <span className="text-[9px] text-slate-400 font-mono mt-0.5">
                       {formatDate(historyMap.get(step.id)?.date).slice(0, 5)}
@@ -296,8 +277,6 @@ export const DyehouseLateWorkPage: React.FC = () => {
             })}
           </div>
         </div>
-        
-        {/* Last Modified By Info */}
         {lastModifiedBy && (
           <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-center gap-2 text-[9px] text-slate-400">
             <User size={10} />
@@ -337,89 +316,23 @@ export const DyehouseLateWorkPage: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Page Header with Sub-Mode Toggle */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="flex items-stretch">
-          {/* Late Work Tab */}
-          <button
-            onClick={() => setSubMode('late')}
-            className={`relative flex-1 flex items-center justify-center gap-3 px-6 py-4 font-semibold text-sm transition-all ${
-              subMode === 'late'
-                ? 'bg-red-50 text-red-700'
-                : 'bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-700'
-            }`}
-          >
-            {subMode === 'late' && (
-              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-red-500 rounded-t-full" />
-            )}
-            <div className={`p-2 rounded-lg ${
-              subMode === 'late' ? 'bg-red-100' : 'bg-slate-100'
-            }`}>
-              <AlertTriangle size={18} className={subMode === 'late' ? 'text-red-600' : 'text-slate-400'} />
-            </div>
-            <div className="text-right">
-              <p className={`font-bold text-base leading-tight ${
-                subMode === 'late' ? 'text-red-700' : 'text-slate-600'
-              }`}>العمل المتأخر</p>
-              <p className={`text-xs mt-0.5 ${
-                subMode === 'late' ? 'text-red-500' : 'text-slate-400'
-              }`}>15+ يوم بعد التشكيل</p>
-            </div>
-          </button>
-
-          {/* Divider */}
-          <div className="w-px bg-slate-200 my-3" />
-
-          {/* Stalled in Dyeing Tab */}
-          <button
-            onClick={() => setSubMode('stalled')}
-            className={`relative flex-1 flex items-center justify-center gap-3 px-6 py-4 font-semibold text-sm transition-all ${
-              subMode === 'stalled'
-                ? 'bg-purple-50 text-purple-700'
-                : 'bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-700'
-            }`}
-          >
-            {subMode === 'stalled' && (
-              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-500 rounded-t-full" />
-            )}
-            <div className={`p-2 rounded-lg ${
-              subMode === 'stalled' ? 'bg-purple-100' : 'bg-slate-100'
-            }`}>
-              <Droplets size={18} className={subMode === 'stalled' ? 'text-purple-600' : 'text-slate-400'} />
-            </div>
-            <div className="text-right">
-              <p className={`font-bold text-base leading-tight ${
-                subMode === 'stalled' ? 'text-purple-700' : 'text-slate-600'
-              }`}>متوقف في الصباغة</p>
-              <p className={`text-xs mt-0.5 ${
-                subMode === 'stalled' ? 'text-purple-500' : 'text-slate-400'
-              }`}>3+ أيام بدون تحريك</p>
-            </div>
-          </button>
-        </div>
-      </div>
-
-      {/* Sub-mode content */}
-      {subMode === 'stalled' ? (
-        <DyehouseStalledInDyeingPage />
-      ) : (
-      <>
       {/* Stats Overview */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {/* Total Late */}
+        {/* Total Stalled */}
         <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
           <div className="flex items-center gap-3">
-            <div className="p-3 bg-slate-100 rounded-xl">
-              <Clock className="text-slate-600" size={24} />
+            <div className="p-3 bg-purple-100 rounded-xl">
+              <Droplets className="text-purple-600" size={24} />
             </div>
             <div>
-              <p className="text-sm text-slate-500">إجمالي المتأخر</p>
+              <p className="text-sm text-slate-500">في الصباغة</p>
               <p className="text-2xl font-bold text-slate-800">{stats.total}</p>
+              <p className="text-xs text-slate-400">لم تتحرك 3+ أيام</p>
             </div>
           </div>
         </div>
 
-        {/* Attention Needed (15-19 days) */}
+        {/* Attention (3-5 days) */}
         <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl border border-amber-200 p-4 shadow-sm">
           <div className="flex items-center gap-3">
             <div className="p-3 bg-amber-100 rounded-xl">
@@ -428,12 +341,12 @@ export const DyehouseLateWorkPage: React.FC = () => {
             <div>
               <p className="text-sm text-amber-700">يحتاج متابعة</p>
               <p className="text-2xl font-bold text-amber-800">{stats.attention}</p>
-              <p className="text-xs text-amber-600">15-19 يوم</p>
+              <p className="text-xs text-amber-600">3-5 أيام</p>
             </div>
           </div>
         </div>
 
-        {/* Very Urgent (20+ days) */}
+        {/* Urgent (6+ days) */}
         <div className="bg-gradient-to-br from-red-50 to-rose-50 rounded-xl border border-red-200 p-4 shadow-sm">
           <div className="flex items-center gap-3">
             <div className="p-3 bg-red-100 rounded-xl animate-pulse">
@@ -442,21 +355,21 @@ export const DyehouseLateWorkPage: React.FC = () => {
             <div>
               <p className="text-sm text-red-700">عاجل جداً</p>
               <p className="text-2xl font-bold text-red-800">{stats.urgent}</p>
-              <p className="text-xs text-red-600">20+ يوم</p>
+              <p className="text-xs text-red-600">6+ أيام</p>
             </div>
           </div>
         </div>
 
-        {/* Average Days */}
+        {/* Max Days Stalled */}
         <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
           <div className="flex items-center gap-3">
-            <div className="p-3 bg-purple-100 rounded-xl">
-              <Calendar className="text-purple-600" size={24} />
+            <div className="p-3 bg-slate-100 rounded-xl">
+              <Calendar className="text-slate-600" size={24} />
             </div>
             <div>
-              <p className="text-sm text-slate-500">متوسط الأيام</p>
-              <p className="text-2xl font-bold text-slate-800">{stats.avgDays}</p>
-              <p className="text-xs text-slate-500">يوم بعد التشكيل</p>
+              <p className="text-sm text-slate-500">أطول توقف</p>
+              <p className="text-2xl font-bold text-slate-800">{stats.maxDays}</p>
+              <p className="text-xs text-slate-500">يوم في الصباغة</p>
             </div>
           </div>
         </div>
@@ -531,11 +444,11 @@ export const DyehouseLateWorkPage: React.FC = () => {
       <div className="flex items-center gap-6 px-2 text-sm">
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-full bg-amber-500"></div>
-          <span className="text-slate-600 font-medium">يحتاج متابعة (15-19 يوم)</span>
+          <span className="text-slate-600 font-medium">يحتاج متابعة (3-5 أيام في الصباغة)</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-full bg-red-500"></div>
-          <span className="text-slate-600 font-medium">عاجل جداً (20+ يوم)</span>
+          <span className="text-slate-600 font-medium">عاجل جداً (6+ أيام في الصباغة)</span>
         </div>
       </div>
 
@@ -543,10 +456,10 @@ export const DyehouseLateWorkPage: React.FC = () => {
       {filteredItems.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
           <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Clock className="text-emerald-600" size={32} />
+            <Droplets className="text-emerald-600" size={32} />
           </div>
-          <h3 className="text-xl font-bold text-slate-800 mb-2">لا يوجد عمل متأخر!</h3>
-          <p className="text-slate-500">جميع الأعمال ضمن الوقت المطلوب</p>
+          <h3 className="text-xl font-bold text-slate-800 mb-2">لا يوجد قماش متوقف في الصباغة!</h3>
+          <p className="text-slate-500">جميع الأقمشة تتحرك بشكل طبيعي</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -554,8 +467,8 @@ export const DyehouseLateWorkPage: React.FC = () => {
             <div
               key={item.id}
               className={`bg-white rounded-xl border shadow-sm hover:shadow-md overflow-hidden transition-all relative ${
-                item.urgencyLevel === 'urgent' 
-                  ? 'border-slate-200 hover:border-red-200' 
+                item.urgencyLevel === 'urgent'
+                  ? 'border-slate-200 hover:border-red-200'
                   : 'border-slate-200 hover:border-amber-200'
               }`}
             >
@@ -565,15 +478,15 @@ export const DyehouseLateWorkPage: React.FC = () => {
               }`} />
 
               {/* Main Row */}
-              <div 
+              <div
                 className="p-4 cursor-pointer pr-6"
                 onClick={() => toggleExpand(item.id)}
               >
                 <div className="flex items-center gap-4">
-                  {/* Urgency Indicator */}
+                  {/* Days Indicator */}
                   <div className={`flex-shrink-0 w-14 h-14 rounded-xl flex flex-col items-center justify-center border ${
-                    item.urgencyLevel === 'urgent' 
-                      ? 'bg-red-50 border-red-100 text-red-600' 
+                    item.urgencyLevel === 'urgent'
+                      ? 'bg-red-50 border-red-100 text-red-600'
                       : 'bg-amber-50 border-amber-100 text-amber-600'
                   }`}>
                     {item.urgencyLevel === 'urgent' ? (
@@ -582,7 +495,7 @@ export const DyehouseLateWorkPage: React.FC = () => {
                       <AlertTriangle size={18} className="mb-0.5" />
                     )}
                     <div className="flex items-baseline gap-0.5">
-                      <span className="text-lg font-bold leading-none">{item.daysAfterFormation}</span>
+                      <span className="text-lg font-bold leading-none">{item.daysInDyeing}</span>
                       <span className="text-[10px] font-medium">يوم</span>
                     </div>
                   </div>
@@ -590,9 +503,8 @@ export const DyehouseLateWorkPage: React.FC = () => {
                   {/* Main Info */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1.5">
-                      {/* Color Swatch */}
                       {item.colorHex && (
-                        <div 
+                        <div
                           className="w-3.5 h-3.5 rounded-full border border-slate-200 flex-shrink-0 shadow-sm"
                           style={{ backgroundColor: item.colorHex }}
                         />
@@ -603,7 +515,7 @@ export const DyehouseLateWorkPage: React.FC = () => {
                       <span className="text-slate-400 font-medium">-</span>
                       <span className="text-slate-600 font-medium">{item.color}</span>
                     </div>
-                    
+
                     <div className="flex items-center gap-5 text-sm text-slate-500">
                       <div className="flex items-center gap-1.5">
                         <User size={14} className="text-slate-400" />
@@ -617,16 +529,30 @@ export const DyehouseLateWorkPage: React.FC = () => {
                         <Factory size={14} className="text-slate-400" />
                         <span className="font-medium">{item.dyehouse}</span>
                       </div>
+                      {item.machine && (
+                        <div className="flex items-center gap-1.5">
+                          <Clock size={14} className="text-slate-400" />
+                          <span className="font-medium">{item.machine}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* Status Badge */}
-                  <div className={`px-3 py-1 rounded-full text-xs font-bold border ${
-                    item.urgencyLevel === 'urgent'
-                      ? 'bg-red-50 text-red-600 border-red-100'
-                      : 'bg-amber-50 text-amber-600 border-amber-100'
-                  }`}>
-                    {item.urgencyLevel === 'urgent' ? 'عاجل جداً!' : 'يحتاج متابعة'}
+                  {/* Dyeing Date & Badge */}
+                  <div className="flex flex-col items-end gap-1.5">
+                    {item.dyeingEnteredDate && (
+                      <div className="text-xs text-slate-400 flex items-center gap-1">
+                        <Calendar size={12} />
+                        <span>دخل الصباغة: {formatDate(item.dyeingEnteredDate)}</span>
+                      </div>
+                    )}
+                    <div className={`px-3 py-1 rounded-full text-xs font-bold border ${
+                      item.urgencyLevel === 'urgent'
+                        ? 'bg-red-50 text-red-600 border-red-100'
+                        : 'bg-amber-50 text-amber-600 border-amber-100'
+                    }`}>
+                      {item.urgencyLevel === 'urgent' ? 'عاجل جداً!' : 'يحتاج متابعة'}
+                    </div>
                   </div>
 
                   {/* Expand Arrow */}
@@ -643,7 +569,24 @@ export const DyehouseLateWorkPage: React.FC = () => {
               {/* Expanded Details */}
               {expandedItems.has(item.id) && (
                 <div className="px-4 pb-4 border-t border-slate-100 pt-3">
+                  {/* Stall Alert Banner */}
+                  <div className={`mb-3 px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium ${
+                    item.urgencyLevel === 'urgent'
+                      ? 'bg-red-50 text-red-700 border border-red-100'
+                      : 'bg-amber-50 text-amber-700 border border-amber-100'
+                  }`}>
+                    {item.urgencyLevel === 'urgent' ? <Flame size={16} /> : <AlertTriangle size={16} />}
+                    <span>{item.daysInDyeing} يوم في الصباغة بدون تحريك!</span>
+                    {item.dyeingEnteredDate && (
+                      <span className="text-xs opacity-70 mr-auto">منذ {formatDate(item.dyeingEnteredDate)}</span>
+                    )}
+                  </div>
+
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div>
+                      <p className="text-slate-500 mb-1">تاريخ دخول الصباغة</p>
+                      <p className="font-medium text-slate-800">{formatDate(item.dyeingEnteredDate)}</p>
+                    </div>
                     <div>
                       <p className="text-slate-500 mb-1">تاريخ التشكيل</p>
                       <p className="font-medium text-slate-800">{formatDate(item.formationDate)}</p>
@@ -651,10 +594,6 @@ export const DyehouseLateWorkPage: React.FC = () => {
                     <div>
                       <p className="text-slate-500 mb-1">تاريخ الإرسال</p>
                       <p className="font-medium text-slate-800">{formatDate(item.dateSent)}</p>
-                    </div>
-                    <div>
-                      <p className="text-slate-500 mb-1">الحالة الحالية</p>
-                      <p className="font-medium text-slate-800">{getStatusLabel(item.dyehouseStatus)}</p>
                     </div>
                     <div>
                       <p className="text-slate-500 mb-1">الماكينة</p>
@@ -672,9 +611,17 @@ export const DyehouseLateWorkPage: React.FC = () => {
                         <p className="font-medium text-slate-800">{item.orderReference}</p>
                       </div>
                     )}
+                    <div>
+                      <p className="text-slate-500 mb-1">الكمية المرسلة</p>
+                      <p className="font-medium text-slate-800">{item.quantitySent} كجم</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500 mb-1">المصبغة</p>
+                      <p className="font-medium text-slate-800">{item.dyehouse}</p>
+                    </div>
                   </div>
 
-                  {/* Timeline indicator */}
+                  {/* Timeline */}
                   <div className="mt-4 pt-3 border-t border-slate-100">
                     <TimelineStatus item={item} />
                   </div>
@@ -683,8 +630,6 @@ export const DyehouseLateWorkPage: React.FC = () => {
             </div>
           ))}
         </div>
-      )}
-      </>
       )}
     </div>
   );

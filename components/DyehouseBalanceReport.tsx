@@ -328,52 +328,54 @@ export const DyehouseBalanceReport: React.FC<DyehouseBalanceReportProps> = ({ us
   return (
     <div className="space-y-6 h-full flex flex-col">
       {/* Toolbar */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 justify-between items-center shrink-0">
-        <div className="flex items-center gap-4 w-full md:w-auto">
-          <div className="p-2 bg-yellow-100 text-yellow-700 rounded-lg">
-            <FileBarChart className="w-5 h-5" />
+<div className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-3 shrink-0">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-2 bg-yellow-100 text-yellow-700 rounded-lg shrink-0">
+              <FileBarChart className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="font-bold text-slate-800 text-sm md:text-base truncate">تقرير رصيد المصابغ</h2>
+              <p className="text-xs text-slate-500 hidden sm:block">الأقمشة المتبقية في المصابغ</p>
+            </div>
           </div>
-          <div>
-            <h2 className="font-bold text-slate-800">Dyehouse Balance Report</h2>
-            <p className="text-xs text-slate-500">Track fabric stock remaining at dyehouses</p>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button 
+              onClick={() => setHideZeroRows(!hideZeroRows)}
+              className={`p-2 rounded-lg border transition-colors ${
+                hideZeroRows 
+                  ? 'bg-indigo-50 border-indigo-200 text-indigo-700' 
+                  : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600'
+              }`}
+              title={hideZeroRows ? "إظهار الكل" : "إخفاء الصفر"}
+            >
+              <Filter size={16} />
+            </button>
+
+            <button onClick={fetchData} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full">
+              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+            </button>
+
+            <button 
+              onClick={exportToExcel}
+              className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-xs font-medium"
+            >
+              <Download size={14} />
+              <span className="hidden sm:inline">تصدير</span>
+            </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-3 w-full md:w-auto justify-end">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
-            <input 
-              type="text" 
-              placeholder="Search clients..." 
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none w-48"
-            />
-          </div>
-
-          <button 
-            onClick={() => setHideZeroRows(!hideZeroRows)}
-            className={`p-2 rounded-lg border transition-colors ${
-              hideZeroRows 
-                ? 'bg-indigo-50 border-indigo-200 text-indigo-700' 
-                : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600'
-            }`}
-            title={hideZeroRows ? "Show all clients" : "Hide clients with 0 balance"}
-          >
-            <Filter size={18} />
-          </button>
-
-          <button onClick={fetchData} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full">
-            <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
-          </button>
-
-          <button 
-            onClick={exportToExcel}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium"
-          >
-            <Download size={16} />
-            Export
-          </button>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+          <input 
+            type="text" 
+            placeholder="بحث عن عميل..." 
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+          />
         </div>
       </div>
 
@@ -388,23 +390,23 @@ export const DyehouseBalanceReport: React.FC<DyehouseBalanceReportProps> = ({ us
             <table className="w-full text-sm text-left border-collapse">
               <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm">
                 <tr>
-                  <th className="px-4 py-3 font-bold text-slate-700 border-b border-slate-200 bg-slate-50 min-w-[200px]">
-                    Client / Dyehouse
+                  <th className="px-3 py-3 font-bold text-slate-700 border-b border-slate-200 bg-slate-50 min-w-[130px] sticky left-0 z-20 shadow-[2px_0_4px_rgba(0,0,0,0.06)]">
+                    العميل / المصبغة
                   </th>
                   {dyehouses.map(dh => (
-                    <th key={dh} className="px-4 py-3 font-bold text-slate-700 border-b border-slate-200 text-center min-w-[100px] bg-slate-50">
+                    <th key={dh} className="px-3 py-3 font-bold text-slate-700 border-b border-slate-200 text-center min-w-[90px] bg-slate-50">
                       {dh}
                     </th>
                   ))}
-                  <th className="px-4 py-3 font-bold text-slate-800 border-b border-slate-200 text-center min-w-[120px] bg-yellow-50 border-l border-yellow-100">
-                    Total
+                  <th className="px-3 py-3 font-bold text-slate-800 border-b border-slate-200 text-center min-w-[90px] bg-yellow-50 border-l border-yellow-100">
+                    الإجمالي
                   </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredData.map((row) => (
                   <tr key={row.clientName} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-4 py-3 font-medium text-slate-700 border-r border-slate-100">
+                    <td className="px-3 py-3 font-medium text-slate-700 border-r border-slate-100 sticky left-0 bg-white z-10 shadow-[2px_0_4px_rgba(0,0,0,0.04)] text-xs md:text-sm">
                       {row.clientName}
                     </td>
                     {dyehouses.map(dh => {
@@ -412,7 +414,7 @@ export const DyehouseBalanceReport: React.FC<DyehouseBalanceReportProps> = ({ us
                       return (
                         <td 
                           key={dh} 
-                          className={`px-4 py-3 text-center font-mono border-r border-slate-100 ${
+                          className={`px-3 py-3 text-center font-mono border-r border-slate-100 text-xs md:text-sm ${
                             val > 0 
                               ? 'text-slate-700 font-medium cursor-pointer hover:bg-indigo-50 hover:text-indigo-700 transition-colors' 
                               : 'text-slate-300'
@@ -424,7 +426,7 @@ export const DyehouseBalanceReport: React.FC<DyehouseBalanceReportProps> = ({ us
                       );
                     })}
                     <td 
-                      className="px-4 py-3 text-center font-bold font-mono text-slate-800 bg-yellow-50/30 border-l border-yellow-100 cursor-pointer hover:bg-yellow-100 transition-colors"
+                      className="px-3 py-3 text-center font-bold font-mono text-slate-800 bg-yellow-50/30 border-l border-yellow-100 cursor-pointer hover:bg-yellow-100 transition-colors text-xs md:text-sm"
                       onClick={() => handleClientTotalClick(row.clientName, row.totalBalance)}
                     >
                       {row.totalBalance.toLocaleString(undefined, { maximumFractionDigits: 1 })}
@@ -434,20 +436,20 @@ export const DyehouseBalanceReport: React.FC<DyehouseBalanceReportProps> = ({ us
               </tbody>
               <tfoot className="bg-slate-100 sticky bottom-0 z-10 font-bold shadow-[0_-2px_4px_rgba(0,0,0,0.05)]">
                 <tr>
-                  <td className="px-4 py-3 text-slate-800 border-t border-slate-300">
-                    TOTAL
+                  <td className="px-3 py-3 text-slate-800 border-t border-slate-300 sticky left-0 bg-slate-100 z-10 text-xs md:text-sm">
+                    الإجمالي
                   </td>
                   {dyehouses.map(dh => (
                     <td 
                       key={dh} 
-                      className="px-4 py-3 text-center text-slate-800 border-t border-slate-300 font-mono cursor-pointer hover:bg-indigo-100 hover:text-indigo-800 transition-colors"
+                      className="px-3 py-3 text-center text-slate-800 border-t border-slate-300 font-mono cursor-pointer hover:bg-indigo-100 hover:text-indigo-800 transition-colors text-xs md:text-sm"
                       onClick={() => handleDyehouseTotalClick(dh, columnTotals.totals[dh])}
                     >
                       {columnTotals.totals[dh].toLocaleString(undefined, { maximumFractionDigits: 1 })}
                     </td>
                   ))}
                   <td 
-                    className="px-4 py-3 text-center text-slate-900 bg-yellow-100 border-t border-yellow-200 border-l border-yellow-200 font-mono text-base cursor-pointer hover:bg-yellow-200 transition-colors"
+                    className="px-3 py-3 text-center text-slate-900 bg-yellow-100 border-t border-yellow-200 border-l border-yellow-200 font-mono text-xs md:text-sm cursor-pointer hover:bg-yellow-200 transition-colors"
                     onClick={handleGrandTotalClick}
                   >
                     {columnTotals.grandTotal.toLocaleString(undefined, { maximumFractionDigits: 1 })}
@@ -509,7 +511,8 @@ export const DyehouseBalanceReport: React.FC<DyehouseBalanceReportProps> = ({ us
               )}
 
               {/* Detail Table */}
-              <table className="w-full text-sm border-collapse">
+              <div className="overflow-x-auto -mx-4 px-4">
+              <table className="w-full text-sm border-collapse min-w-[500px]">
                 <thead className="bg-slate-50 sticky top-0">
                   <tr className="text-xs uppercase text-slate-500 font-semibold">
                     {(detailModal.type === 'dyehouseTotal' || detailModal.type === 'grandTotal') && (
@@ -590,6 +593,7 @@ export const DyehouseBalanceReport: React.FC<DyehouseBalanceReportProps> = ({ us
                   </tr>
                 </tfoot>
               </table>
+              </div>
 
               {/* Calculation Explanation */}
               <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">

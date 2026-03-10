@@ -37,13 +37,14 @@ interface DyehouseActiveWorkPageProps {
 // Status Configuration - Clean professional colors
 const DYEHOUSE_STEPS = [
   { id: 'STORE_RAW', label: 'مخزن مصبغة', shortLabel: 'مخزن', icon: Box, color: '#64748b' },
+  { id: 'PLANNING', label: 'تشكيل في خطة الصباغة', shortLabel: 'تشكيل', icon: Calendar, color: '#4f46e5' },
   { id: 'DYEING', label: 'صباغة', shortLabel: 'صباغة', icon: PenBox, color: '#7c3aed' },
   { id: 'FINISHING', label: 'تجهيز', shortLabel: 'تجهيز', icon: Factory, color: '#f59e0b' },
   { id: 'STORE_FINISHED', label: 'منتهي مخزن', shortLabel: 'منتهي', icon: Ship, color: '#10b981' },
   { id: 'RECEIVED', label: 'مستلم', shortLabel: 'مستلم', icon: Check, color: '#3b82f6' }
 ] as const;
 
-type DyehouseStatusType = 'STORE_RAW' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
+type DyehouseStatusType = 'STORE_RAW' | 'PLANNING' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
 
 interface PartialItem {
   id: string;
@@ -118,6 +119,7 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
   const [filterStatus, setFilterStatus] = useState<DyehouseStatusType | 'All'>('All');
   const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
   const [expandedMachineQueue, setExpandedMachineQueue] = useState<string | null>(null);
+  const [visibleQueues, setVisibleQueues] = useState<Set<string>>(new Set());
   const [debugModalItem, setDebugModalItem] = useState<ActiveWorkItem | null>(null);
   
   // Date picker modal state
@@ -396,7 +398,7 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
     const totalQuantity = filteredItems.reduce((sum, item) => sum + (item.quantitySent || 0), 0);
     const inDyeing = statusGroups['DYEING']?.length || 0;
     const inFinishing = statusGroups['FINISHING']?.length || 0;
-    const inStore = (statusGroups['STORE_RAW']?.length || 0) + (statusGroups['STORE_FINISHED']?.length || 0);
+    const inStore = (statusGroups['STORE_RAW']?.length || 0) + (statusGroups['PLANNING']?.length || 0) + (statusGroups['STORE_FINISHED']?.length || 0);
     
     // Count delayed items
     const delayed = filteredItems.filter(item => getDelayAlert(item).type !== null).length;
@@ -1604,8 +1606,38 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
                                 </div>
                               )}
                               
-                              {/* Mini Machine Queue - shows after item enters صباغة */}
-                              <MiniMachineQueue item={item} />
+                              {/* Mini Machine Queue - hidden by default, shown on demand */}
+                              {(() => {
+                                const queueInfo = getMachineQueueInfo(item);
+                                if (!queueInfo) return null;
+                                const isVisible = visibleQueues.has(item.id);
+                                return (
+                                  <>
+                                    {!isVisible ? (
+                                      <button
+                                        onClick={() => setVisibleQueues(prev => { const s = new Set(prev); s.add(item.id); return s; })}
+                                        className="w-full flex items-center justify-center gap-2 px-4 py-1.5 border-t border-slate-100 bg-slate-50 hover:bg-violet-50 transition-colors group"
+                                      >
+                                        <Cpu size={13} className="text-slate-400 group-hover:text-violet-500" />
+                                        <span className="text-[11px] font-medium text-slate-400 group-hover:text-violet-600">
+                                          الماكينة {item.plannedCapacity}kg — {queueInfo.position}/{queueInfo.total} في الطابور
+                                        </span>
+                                        <ChevronDown size={12} className="text-slate-300 group-hover:text-violet-500" />
+                                      </button>
+                                    ) : (
+                                      <div className="relative">
+                                        <button
+                                          onClick={() => setVisibleQueues(prev => { const s = new Set(prev); s.delete(item.id); return s; })}
+                                          className="absolute top-2 left-3 z-10 p-0.5 rounded hover:bg-violet-100"
+                                        >
+                                          <ChevronUp size={12} className="text-violet-400" />
+                                        </button>
+                                        <MiniMachineQueue item={item} />
+                                      </div>
+                                    )}
+                                  </>
+                                );
+                              })()}
                               
                               {/* Notes */}
                               {item.notes && (

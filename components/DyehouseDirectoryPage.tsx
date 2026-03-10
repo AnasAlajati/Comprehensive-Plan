@@ -269,96 +269,88 @@ export const DyehouseDirectoryPage: React.FC<DyehouseDirectoryPageProps> = ({ us
     setEditForm({ ...editForm, machines: newMachines });
   };
 
+  // Tab definitions for nav
+  const NAV_TABS = [
+    { id: 'directory',       label: 'Directory',        labelAr: 'الدليل',       icon: LayoutGrid,  activeColor: 'text-purple-600',  activeBg: 'bg-purple-50',  activeBar: 'bg-purple-500'  },
+    { id: 'global',          label: 'Schedule',         labelAr: 'الجدول',       icon: List,        activeColor: 'text-purple-600',  activeBg: 'bg-purple-50',  activeBar: 'bg-purple-500'  },
+    { id: 'balance',         label: 'Balance',          labelAr: 'الرصيد',       icon: FileBarChart,activeColor: 'text-purple-600',  activeBg: 'bg-purple-50',  activeBar: 'bg-purple-500'  },
+    { id: 'active-work',     label: 'Active Work',      labelAr: 'العمل',        icon: Droplets,    activeColor: 'text-cyan-600',    activeBg: 'bg-cyan-50',    activeBar: 'bg-cyan-500'    },
+    { id: 'late-work',       label: 'Late Work',        labelAr: 'المتأخر',      icon: AlertTriangle,activeColor: 'text-red-600',   activeBg: 'bg-red-50',     activeBar: 'bg-red-500'     },
+    { id: 'daily-movement',  label: 'Movement',         labelAr: 'الحركة',       icon: Activity,    activeColor: 'text-indigo-600',  activeBg: 'bg-indigo-50',  activeBar: 'bg-indigo-500'  },
+    ...(userRole === 'admin' ? [{ id: 'history', label: 'History', labelAr: 'السجل', icon: BarChart2, activeColor: 'text-indigo-600', activeBg: 'bg-indigo-50', activeBar: 'bg-indigo-500' }] : []),
+  ] as const;
+
   return (
     <div className="flex flex-col h-full bg-slate-50">
-      {/* Header */}
-      <div className="bg-white border-b border-slate-200 px-6 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-            <Factory className="text-purple-600" />
-            Dyehouse Management
-          </h1>
-          <p className="text-slate-500 text-sm mt-1">Manage dyehouses, capacities, and view global schedules</p>
-        </div>
-        
-        <div className="flex items-center gap-3">
-          <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200">
-            <button 
-              onClick={() => setViewMode('directory')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'directory' ? 'bg-white shadow text-purple-600' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              <LayoutGrid size={16} />
-              Directory
-            </button>
-            <button 
-              onClick={() => setViewMode('global')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'global' ? 'bg-white shadow text-purple-600' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              <List size={16} />
-              Global Schedule
-            </button>
-            <button 
-              onClick={() => setViewMode('balance')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'balance' ? 'bg-white shadow text-purple-600' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              <FileBarChart size={16} />
-              Balance Report
-            </button>
-            <button 
-              onClick={() => setViewMode('active-work')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'active-work' ? 'bg-white shadow text-cyan-600' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              <Droplets size={16} />
-              Active Work
-            </button>
-            <button 
-              onClick={() => setViewMode('late-work')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'late-work' ? 'bg-white shadow text-red-600' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              <AlertTriangle size={16} />
-              Late Work
-            </button>
-            <button 
-              onClick={() => setViewMode('daily-movement')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'daily-movement' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              <Activity size={16} />
-              Daily Movement
-            </button>
-            {userRole === 'admin' && (
-              <button 
-                onClick={() => setViewMode('history')}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'history' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
-              >
-                <BarChart2 size={16} />
-                History
-              </button>
-            )}
+      {/* Header — compact on mobile, full on desktop */}
+      <div className="bg-white border-b border-slate-200 sticky top-0 z-20">
+        {/* Title row */}
+        <div className="flex items-center justify-between px-4 py-3 md:px-6 md:py-4">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="p-1.5 bg-purple-100 rounded-lg shrink-0">
+              <Factory className="text-purple-600" size={18} />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-base md:text-xl font-bold text-slate-800 leading-tight truncate">
+                Dyehouse Management
+              </h1>
+              <p className="text-xs text-slate-400 hidden md:block">Manage dyehouses, capacities and schedules</p>
+            </div>
           </div>
 
+          {/* Add button — only in directory mode */}
           {viewMode === 'directory' && (
             <button
               onClick={() => canEdit && setIsAdding(true)}
               disabled={!canEdit}
-              className={`px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm ${!canEdit ? 'bg-slate-300 text-slate-500 cursor-not-allowed opacity-60' : 'bg-purple-600 hover:bg-purple-700 text-white'}`}
-              title={!canEdit ? 'You do not have permission to add dyehouses' : ''}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg font-semibold text-sm transition-colors shadow-sm shrink-0 ml-3 ${
+                !canEdit
+                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed opacity-60'
+                  : 'bg-purple-600 hover:bg-purple-700 text-white active:scale-95'
+              }`}
+              title={!canEdit ? 'No permission to add dyehouses' : ''}
             >
-              <Plus size={18} />
-              Add Dyehouse
+              <Plus size={16} />
+              <span className="hidden sm:inline">Add Dyehouse</span>
             </button>
           )}
+        </div>
+
+        {/* Tab strip — horizontally scrollable on mobile */}
+        <div
+          className="flex overflow-x-auto no-scrollbar border-t border-slate-100"
+          style={{ WebkitOverflowScrolling: 'touch' }}
+        >
+          {NAV_TABS.map(tab => {
+            const Icon = tab.icon;
+            const isActive = viewMode === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setViewMode(tab.id as typeof viewMode)}
+                className={`relative flex flex-col items-center gap-1 px-4 py-3 text-xs font-semibold whitespace-nowrap transition-all shrink-0 border-b-2 ${
+                  isActive
+                    ? `${tab.activeColor} ${tab.activeBg} border-current`
+                    : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50 border-transparent'
+                }`}
+              >
+                <Icon size={18} strokeWidth={isActive ? 2.2 : 1.8} />
+                <span className="text-[11px] leading-none">{tab.label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {/* Add Modal/Inline Form */}
       {isAdding && viewMode === 'directory' && (
-        <div className="bg-white border-b border-slate-200 px-6 py-4 animate-in slide-in-from-top-2">
-          <div className="flex items-center gap-3 max-w-md">
+        <div className="bg-white border-b border-slate-200 px-4 py-3 md:px-6 md:py-4 animate-in slide-in-from-top-2">
+          <div className="flex items-center gap-2 w-full max-w-md">
             <input
               autoFocus
               type="text"
               placeholder="Dyehouse Name..."
-              className="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
+              className="flex-1 min-w-0 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none text-sm"
               value={newDyehouseName}
               onChange={(e) => setNewDyehouseName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleAddDyehouse()}
@@ -380,7 +372,7 @@ export const DyehouseDirectoryPage: React.FC<DyehouseDirectoryPageProps> = ({ us
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-3 md:p-6">
         {viewMode === 'global' ? (
           <DyehouseGlobalSchedule />
         ) : viewMode === 'balance' ? (

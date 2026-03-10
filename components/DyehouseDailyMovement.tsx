@@ -3,6 +3,7 @@ import { collection, getDocs, collectionGroup, query, onSnapshot } from 'firebas
 import { db } from '../services/firebase';
 import { parseFabricName } from '../services/data';
 import { OrderRow, FabricDefinition, DyeingBatch } from '../types';
+import { DyehouseOrdersMovementPage } from './DyehouseOrdersMovementPage';
 import { 
   Calendar,
   ArrowRight,
@@ -21,7 +22,9 @@ import {
   Activity,
   Clock,
   TrendingUp,
-  Filter
+  Filter,
+  GitCommit,
+  Send
 } from 'lucide-react';
 
 // Status Configuration - Same as Active Work
@@ -65,6 +68,7 @@ interface DyehouseGroup {
 }
 
 export const DyehouseDailyMovement: React.FC = () => {
+  const [subMode, setSubMode] = useState<'history' | 'orders'>('history');
   const [allItems, setAllItems] = useState<MovementItem[]>([]);
   const [allDyehouses, setAllDyehouses] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -278,6 +282,51 @@ export const DyehouseDailyMovement: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Sub-mode toggle */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="flex items-stretch">
+          {/* Status History tab */}
+          <button
+            onClick={() => setSubMode('history')}
+            className={`relative flex-1 flex items-center justify-center gap-3 px-6 py-4 transition-all ${
+              subMode === 'history' ? 'bg-purple-50 text-purple-700' : 'bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-700'
+            }`}
+          >
+            {subMode === 'history' && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-500 rounded-t-full" />}
+            <div className={`p-2 rounded-lg ${subMode === 'history' ? 'bg-purple-100' : 'bg-slate-100'}`}>
+              <GitCommit size={18} className={subMode === 'history' ? 'text-purple-600' : 'text-slate-400'} />
+            </div>
+            <div className="text-right">
+              <p className={`font-bold text-base leading-tight ${subMode === 'history' ? 'text-purple-700' : 'text-slate-600'}`}>حركة الحالات</p>
+              <p className={`text-xs mt-0.5 ${subMode === 'history' ? 'text-purple-400' : 'text-slate-400'}`}>تغييرات الحالة في المصبغة</p>
+            </div>
+          </button>
+
+          <div className="w-px bg-slate-200 my-3" />
+
+          {/* Orders Movement tab */}
+          <button
+            onClick={() => setSubMode('orders')}
+            className={`relative flex-1 flex items-center justify-center gap-3 px-6 py-4 transition-all ${
+              subMode === 'orders' ? 'bg-indigo-50 text-indigo-700' : 'bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-700'
+            }`}
+          >
+            {subMode === 'orders' && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500 rounded-t-full" />}
+            <div className={`p-2 rounded-lg ${subMode === 'orders' ? 'bg-indigo-100' : 'bg-slate-100'}`}>
+              <Send size={18} className={subMode === 'orders' ? 'text-indigo-600' : 'text-slate-400'} />
+            </div>
+            <div className="text-right">
+              <p className={`font-bold text-base leading-tight ${subMode === 'orders' ? 'text-indigo-700' : 'text-slate-600'}`}>حركة الطلبات</p>
+              <p className={`text-xs mt-0.5 ${subMode === 'orders' ? 'text-indigo-400' : 'text-slate-400'}`}>إرسال · استلام · تغيير حالة</p>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      {subMode === 'orders' ? (
+        <DyehouseOrdersMovementPage />
+      ) : (
+        <>
       {/* Header & Controls */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -498,6 +547,8 @@ export const DyehouseDailyMovement: React.FC = () => {
           )}
         </div>
       ))}
+      </>
+      )}
     </div>
   );
 };
