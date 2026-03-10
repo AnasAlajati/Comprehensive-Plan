@@ -110,24 +110,33 @@ export const DyehouseDirectoryPage: React.FC<DyehouseDirectoryPageProps> = ({ us
                  totalSent = (batch.quantitySentRaw || batch.quantitySent || 0) + (batch.quantitySentAccessory || 0);
               }
               
+              // Compute remaining balance (used for both stock and machine count filtering)
+              let batchRemaining = 0;
               if (batch.dateSent || totalSent > 0) {
                  const events = batch.receiveEvents || [];
                  const totalReceivedRaw = events.reduce((s: number, e: any) => s + (e.quantityRaw || 0), 0) + (batch.receivedQuantity || 0);
                  const totalReceivedAccessory = events.reduce((s: number, e: any) => s + (e.quantityAccessory || 0), 0);
                  const totalReceived = totalReceivedRaw + totalReceivedAccessory;
+                 const scrap = (batch.scrapRaw || 0) + (batch.scrapAccessory || 0);
 
-                 let remaining = totalSent - totalReceived;
-                 if (remaining < 0) remaining = 0;
+                 batchRemaining = totalSent - totalReceived - scrap;
+                 if (batchRemaining < 0) batchRemaining = 0;
 
-                 if (remaining > 0) {
-                   stock[dyehouseName] = (stock[dyehouseName] || 0) + remaining;
+                 if (batchRemaining > 0) {
+                   stock[dyehouseName] = (stock[dyehouseName] || 0) + batchRemaining;
                  }
               }
 
               // --- Machine Count Logic ---
-              // Only count "Busy" status (Pending/Planned and Sent). Exclude Received/Draft.
+              // Exclude if: draft, legacy 'received' status, dyehouseStatus=RECEIVED,
+              // isComplete=true, or remaining balance is zero (fully received/scrapped).
               const batchStatus = batch.status || 'draft';
-              if (batchStatus === 'draft' || batchStatus === 'received') return;
+              if (batchStatus === 'draft') return;
+              if (batchStatus === 'received') return;
+              if (batch.dyehouseStatus === 'RECEIVED') return;
+              if (batch.isComplete === true) return;
+              // If it was ever sent and nothing remains, skip it
+              if (totalSent > 0 && batchRemaining === 0) return;
 
               // Determine Unique ID for grouping (batchGroupId or docId-batchId)
               const uniqueId = batch.batchGroupId || (batch.id ? `${doc.id}-${batch.id}` : `${doc.id}-${bIdx}`);

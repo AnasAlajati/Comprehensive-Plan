@@ -154,6 +154,19 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
               const matchMsg = `[MATCH] Client: ${clientName} | Order: ${order.orderReference || order.id} | Color: ${batch.color} | PlannedCap: ${plannedCap} | Sent: ${totalSent} | Reason: ${matchReason}`;
               workingMatches.push(matchMsg);
 
+              // Determine received status
+              const scrap = (batch.scrapRaw || 0) + (batch.scrapAccessory || 0);
+              const remaining = Math.max(0, totalSent - totalReceived - scrap);
+              const isReceived =
+                batch.dyehouseStatus === 'RECEIVED' ||
+                batch.isComplete === true ||
+                batch.status === 'received' ||
+                (totalSent > 0 && remaining === 0) ||
+                (totalSent > 0 && totalReceived / totalSent >= 0.89);
+
+              // Skip fully received batches — they shouldn't appear here
+              if (isReceived) return;
+
               foundItems.push({
                 clientId: clientId,
                 clientName: clientName,
@@ -175,9 +188,7 @@ export const DyehouseMachineDetails: React.FC<DyehouseMachineDetailsProps> = ({
                 formationDate: batch.formationDate,
                 notes: batch.notes,
                 // Prioritize explicit batch.status, falling back to calculation only if needed
-                status: (totalSent > 0 && totalReceived / totalSent >= 0.89) || batch.status === 'received' ? 'Received' : 
-                        (batch.status === 'sent' || batch.status === 'Sent') ? 'Sent' : 
-                        'Pending',
+                status: batch.status === 'sent' ? 'Sent' : 'Pending',
                 accessoryType: batch.accessoryType,
                 batchGroupId: batch.batchGroupId
               });
