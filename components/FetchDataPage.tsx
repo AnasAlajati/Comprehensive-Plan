@@ -316,6 +316,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const isReadOnly = userRole === 'viewer';
   const isAdmin = userRole === 'admin';
 
+  const [debugModal, setDebugModal] = useState<{ log: any } | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>(propSelectedDate || new Date().toISOString().split('T')[0]);
   const [reportDates, setReportDates] = useState<string[]>([]);
   const [activeDay, setActiveDay] = useState<string>('');
@@ -2552,7 +2553,13 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                               <Link size={12} />
                               {isLinked ? 'Linked' : 'No Order'}
                             </button>
-
+                            {isAdmin && log.client && log.fabric && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setDebugModal({ log }); }}
+                                className="w-4 h-4 rounded-full bg-slate-200 hover:bg-indigo-300 text-slate-500 hover:text-indigo-700 text-[9px] font-bold flex items-center justify-center flex-shrink-0"
+                                title="Debug: order link trace"
+                              >ⓘ</button>
+                            )}
                           </div>
                         );
                       })()}
@@ -2837,6 +2844,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         {/* Scrap */}
                         <td className="border border-slate-200 p-0 hidden md:table-cell">
                           <input
+                            key={`${log.id}-scrap-${log.scrap}`}
                             id={getCellId(log.machineId, 'scrap')}
                             type="number"
                             defaultValue={log.scrap || 0}
@@ -2966,7 +2974,13 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                                   >
                                     <Link size={13} />
                                   </button>
-
+                                  {isAdmin && (
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); setDebugModal({ log }); }}
+                                      className="w-3.5 h-3.5 rounded-full bg-slate-200 hover:bg-indigo-300 text-slate-500 hover:text-indigo-700 text-[8px] font-bold flex items-center justify-center"
+                                      title="Debug: order link trace"
+                                    >ⓘ</button>
+                                  )}
                                 </div>
                               ) : null;
                             })()}
@@ -3828,6 +3842,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">Scrap (السقط)</label>
                   <input
+                    key={`details-scrap-${detailsModal.log.scrap}`}
                     type="number"
                     defaultValue={detailsModal.log.scrap || 0}
                     onBlur={(e) => handleBlur(e, detailsModal.log.machineId, detailsModal.log.id, 'scrap')}
@@ -3910,6 +3925,213 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
             </div>
           </div>
         )}
+        {/* ═══ DEBUG ORDER LINK MODAL (Admin only) ═══ */}
+        {debugModal && (() => {
+          const log = debugModal.log;
+          const logSeason: string = log.clientSeason || '';
+          const logClient: string = log.client || '';
+          const logFabric: string = log.fabric || '';
+
+          // Step 1: Find CustomerSheet by name
+          const sheet: any = clients.find((c: any) => c.name === logClient);
+
+          // Step 2: All order rows for this customer (CustomerSheets/{id}/orders subcollection)
+          const clientFlatOrders: any[] = sheet
+            ? flatOrders.filter((o: any) => o.customerId === sheet.id)
+            : [];
+
+          // Step 3: Season-matched orders
+          const seasonMatchedBySeasonId: any[] = clientFlatOrders.filter((o: any) =>
+            logSeason && o.seasonId === logSeason
+          );
+          const seasonMatchedBySeasonName: any[] = clientFlatOrders.filter((o: any) =>
+            logSeason && o.seasonName === logSeason
+          );
+          const seasonMatched: any[] = seasonMatchedBySeasonId.length > 0
+            ? seasonMatchedBySeasonId
+            : seasonMatchedBySeasonName.length > 0
+            ? seasonMatchedBySeasonName
+            : [];
+
+          // Step 4: Fabric match via material field
+          const searchPool = seasonMatched.length > 0 ? seasonMatched : clientFlatOrders;
+          const fabricMatchedOrder: any = searchPool.find((o: any) => o.material === logFabric);
+
+          const isLinked = !!(logClient && logFabric && fabricMatchedOrder);
+
+          return (
+            <div className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center p-4" onClick={() => setDebugModal(null)}>
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                {/* Header */}
+                <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50 rounded-t-2xl">
+                  <div>
+                    <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                      <span className="text-lg">🔍</span> Order Link Debug Trace
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-0.5">{log.machineName} &mdash; {log.date}</p>
+                  </div>
+                  <button onClick={() => setDebugModal(null)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition">
+                    <X size={16} />
+                  </button>
+                </div>
+
+                <div className="p-6 space-y-5">
+
+                  {/* What we're searching */}
+                  <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 space-y-2">
+                    <p className="text-xs font-bold text-indigo-700 uppercase tracking-wide mb-1">Search Inputs (from daily log)</p>
+                    <div className="grid grid-cols-3 gap-3 text-xs">
+                      <div className="bg-white border border-indigo-100 rounded-lg p-2">
+                        <div className="text-[10px] text-indigo-500 font-semibold mb-0.5">Client Name</div>
+                        <div className="font-mono font-bold text-slate-800">{logClient || <span className="text-slate-400">—</span>}</div>
+                      </div>
+                      <div className="bg-white border border-indigo-100 rounded-lg p-2">
+                        <div className="text-[10px] text-indigo-500 font-semibold mb-0.5">Season (clientSeason)</div>
+                        <div className="font-mono font-bold text-slate-800">{logSeason || <span className="text-slate-400">(none)</span>}</div>
+                      </div>
+                      <div className="bg-white border border-indigo-100 rounded-lg p-2">
+                        <div className="text-[10px] text-indigo-500 font-semibold mb-0.5">Fabric</div>
+                        <div className="font-mono font-bold text-slate-800 break-all">{logFabric || <span className="text-slate-400">—</span>}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Step 1: CustomerSheet lookup */}
+                  <div className="space-y-2">
+                    <p className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold">1</span>
+                      Find CustomerSheet for: <span className="font-mono text-slate-800">{logClient}</span>
+                    </p>
+                    {!sheet
+                      ? <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-xs text-red-700 font-semibold">❌ No CustomerSheet found with this name</div>
+                      : <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-xs text-green-700 font-semibold">✅ Found sheet ID: <span className="font-mono">{sheet.id}</span></div>
+                    }
+                  </div>
+
+                  {/* Step 2: Orders for this customer */}
+                  {sheet && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold">2</span>
+                        Orders in CustomerSheets subcollection — looking for season <span className="font-mono bg-amber-100 px-1 rounded text-amber-800">{logSeason || '(none)'}</span>
+                      </p>
+                      {clientFlatOrders.length === 0
+                        ? <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-2 text-xs text-yellow-700 font-semibold">⚠️ No order rows found for this customer</div>
+                        : (
+                          <div className="border border-slate-200 rounded-lg overflow-hidden">
+                            <table className="w-full text-xs">
+                              <thead className="bg-slate-100 text-slate-600">
+                                <tr>
+                                  <th className="px-3 py-2 text-left font-semibold">Order ID</th>
+                                  <th className="px-3 py-2 text-left font-semibold">seasonId</th>
+                                  <th className="px-3 py-2 text-left font-semibold">seasonName</th>
+                                  <th className="px-3 py-2 text-left font-semibold">material (fabric)</th>
+                                  <th className="px-3 py-2 text-center font-semibold">Season Match?</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {clientFlatOrders.map((o: any) => {
+                                  const seasonIdMatch = logSeason && o.seasonId === logSeason;
+                                  const seasonNameMatch = logSeason && o.seasonName === logSeason;
+                                  const anySeasonMatch = !!(seasonIdMatch || seasonNameMatch);
+                                  const isFabricMatch = o.material === logFabric;
+                                  return (
+                                    <tr key={o.id} className={anySeasonMatch ? 'bg-green-50' : ''}>
+                                      <td className="px-3 py-2 font-mono text-slate-500">{o.id || '—'}</td>
+                                      <td className="px-3 py-2">
+                                        <span className={`font-mono ${seasonIdMatch ? 'text-green-700 font-bold' : 'text-slate-600'}`}>
+                                          {o.seasonId || <span className="text-slate-400 italic">not set</span>}
+                                        </span>
+                                        {seasonIdMatch && <span className="ml-1 text-green-600">✅</span>}
+                                      </td>
+                                      <td className="px-3 py-2">
+                                        <span className={`font-mono ${seasonNameMatch ? 'text-green-700 font-bold' : 'text-slate-600'}`}>
+                                          {o.seasonName || <span className="text-slate-400 italic">not set</span>}
+                                        </span>
+                                        {seasonNameMatch && <span className="ml-1 text-green-600">✅</span>}
+                                      </td>
+                                      <td className="px-3 py-2">
+                                        <span className={`font-mono ${isFabricMatch ? 'text-blue-700 font-bold' : 'text-slate-500'}`}>
+                                          {o.material || <span className="text-slate-400 italic">not set</span>}
+                                        </span>
+                                        {isFabricMatch && <span className="ml-1 text-blue-600">🎯</span>}
+                                      </td>
+                                      <td className="px-3 py-2 text-center">
+                                        {!logSeason
+                                          ? <span className="text-slate-400 italic text-[10px]">no season on log</span>
+                                          : anySeasonMatch
+                                          ? <span className="text-green-700 font-bold">✅ Match</span>
+                                          : <span className="text-red-500">❌</span>
+                                        }
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )
+                      }
+                    </div>
+                  )}
+
+                  {/* Step 3: Fabric match result */}
+                  {sheet && clientFlatOrders.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold">3</span>
+                        Search for fabric (material) <span className="font-mono bg-blue-100 px-1 rounded text-blue-800">{logFabric}</span>
+                        {seasonMatched.length > 0
+                          ? <span className="text-[10px] text-slate-500">— within {seasonMatched.length} season-matched order(s)</span>
+                          : <span className="text-[10px] text-amber-600">— no season match, searching all {clientFlatOrders.length} order(s)</span>
+                        }
+                      </p>
+                      {fabricMatchedOrder
+                        ? <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-xs space-y-1">
+                            <p className="text-green-700 font-bold">✅ Fabric found</p>
+                            <p className="text-slate-600">Order ID: <span className="font-mono font-bold">{fabricMatchedOrder.id}</span></p>
+                            <p className="text-slate-600">material: <span className="font-mono font-bold">{fabricMatchedOrder.material}</span></p>
+                            <p className="text-slate-600">seasonId: <span className="font-mono font-bold">{fabricMatchedOrder.seasonId || '(not set)'}</span></p>
+                            <p className="text-slate-600">seasonName: <span className="font-mono font-bold">{fabricMatchedOrder.seasonName || '(not set)'}</span></p>
+                          </div>
+                        : <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-xs text-red-700 font-semibold">❌ Fabric "{logFabric}" not found as material in {seasonMatched.length > 0 ? 'season-matched' : 'any'} order(s)</div>
+                      }
+                    </div>
+                  )}
+
+                  {/* Final verdict */}
+                  <div className={`rounded-xl px-5 py-4 border-2 text-sm font-bold flex items-center gap-3 ${
+                    isLinked ? 'bg-green-50 border-green-400 text-green-800' : 'bg-orange-50 border-orange-400 text-orange-800'
+                  }`}>
+                    <span className="text-2xl">{isLinked ? '🟢' : '🟠'}</span>
+                    <div>
+                      <div>{isLinked ? 'LINKED' : 'NOT LINKED'}</div>
+                      <div className="text-xs font-normal mt-0.5 opacity-75">
+                        {isLinked
+                          ? `Matched order ${fabricMatchedOrder.id} — material: ${fabricMatchedOrder.material} (season: ${fabricMatchedOrder.seasonId || fabricMatchedOrder.seasonName || 'n/a'})`
+                          : !sheet
+                          ? `Customer "${logClient}" not found in CustomerSheets`
+                          : clientFlatOrders.length === 0
+                          ? 'No order rows found for this customer'
+                          : seasonMatched.length === 0 && logSeason
+                          ? `Season "${logSeason}" not matched in any order's seasonId or seasonName`
+                          : `Fabric "${logFabric}" not found as material in matching orders`
+                        }
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+
+                <div className="border-t border-slate-200 px-6 py-3 bg-slate-50 rounded-b-2xl flex justify-end">
+                  <button onClick={() => setDebugModal(null)} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-lg transition">
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Link Order Modal */}
         <LinkOrderModal
