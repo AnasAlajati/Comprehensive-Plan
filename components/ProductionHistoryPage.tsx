@@ -72,6 +72,12 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
   const [deliveryOverrides, setDeliveryOverrides] = useState<Record<string, number>>({});
   const [editingDeliveryMonth, setEditingDeliveryMonth] = useState<string | null>(null);
   const [editingDeliveryValue, setEditingDeliveryValue] = useState<string>('');
+  const [monthlyOverrides, setMonthlyOverrides] = useState<Record<string, { wide?: number; bous?: number; external?: number; scrap?: number; workingDays?: number }>>({});
+  const [editingCell, setEditingCell] = useState<{ month: string; field: string } | null>(null);
+  const [editingCellValue, setEditingCellValue] = useState<string>('');
+  const [scrapOverrides, setScrapOverrides] = useState<Record<string, { production?: number; workingDays?: number; reasons?: Record<string, number> }>>({});
+  const [scrapEditingCell, setScrapEditingCell] = useState<{ month: string; field: string } | null>(null);
+  const [scrapEditingValue, setScrapEditingValue] = useState<string>('');
   const [prodDeliveries, setProdDeliveries] = useState<{ date: string; qty: number }[]>([]);
   const [prodYearLoading, setProdYearLoading] = useState(false);
   const [scrapDailySummaries, setScrapDailySummaries] = useState<Record<string, { hallScrap?: number; labScrap?: number }>>({});
@@ -263,7 +269,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
     setEditingRealNameId(null);
   };
 
-  // Fetch delivery overrides for selected year
+  // Fetch delivery overrides and monthly production overrides for selected year
   useEffect(() => {
     const fetchOverrides = async () => {
       try {
@@ -274,9 +280,33 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
         });
         setDeliveryOverrides(overrides);
       } catch (e) { console.error('Error fetching delivery overrides:', e); }
+      try {
+        const snap2 = await getDocs(collection(db, 'MonthlyProductionOverrides'));
+        const mo: Record<string, { wide?: number; bous?: number; external?: number; scrap?: number; workingDays?: number }> = {};
+        snap2.forEach(d => {
+          const data = d.data();
+          if (data.month && data.month.startsWith(prodYear)) {
+            if (!mo[data.month]) mo[data.month] = {};
+            mo[data.month][data.field as keyof (typeof mo)[string]] = data.amount;
+          }
+        });
+        setMonthlyOverrides(mo);
+      } catch (e) { console.error('Error fetching monthly overrides:', e); }
     };
     fetchOverrides();
   }, [prodYear]);
+
+  useEffect(() => {
+    const fetchScrapOverrides = async () => {
+      try {
+        const snap = await getDocs(collection(db, 'MonthlyScrapOverrides'));
+        const so: Record<string, { production?: number; workingDays?: number; reasons?: Record<string, number> }> = {};
+        snap.forEach(d => { so[d.id] = d.data() as any; });
+        setScrapOverrides(so);
+      } catch (e) { console.error('Error fetching scrap overrides:', e); }
+    };
+    fetchScrapOverrides();
+  }, [scrapYear]);
 
   const handleSaveDeliveryOverride = async (month: string, value: string) => {
     const num = parseFloat(value);
@@ -289,6 +319,51 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
       setDeliveryOverrides(prev => ({ ...prev, [month]: num }));
     }
     setEditingDeliveryMonth(null);
+  };
+
+  const handleSaveMonthOverride = async (month: string, field: string, value: string) => {
+    const num = parseFloat(value);
+    const docId = `${month}-${field}`;
+    if (value.trim() === '' || isNaN(num)) {
+      try { await deleteDoc(doc(db, 'MonthlyProductionOverrides', docId)); } catch {}
+      setMonthlyOverrides(prev => {
+        const n = { ...prev };
+        if (n[month]) { delete (n[month] as any)[field]; }
+        return n;
+      });
+    } else {
+      try { await setDoc(doc(db, 'MonthlyProductionOverrides', docId), { month, field, amount: num, updatedAt: new Date().toISOString() }); } catch {}
+      setMonthlyOverrides(prev => ({ ...prev, [month]: { ...prev[month], [field]: num } }));
+    }
+    setEditingCell(null);
+  };
+
+  const handleSaveScrapOverride = async (month: string, field: string, value: string) => {
+    const num = parseFloat(value);
+    const isEmpty = value.trim() === '' || isNaN(num);
+    const current = scrapOverrides[month] || {};
+    let newData: { production?: number; workingDays?: number; reasons?: Record<string, number> } = { ...current };
+    if (field === 'production' || field === 'workingDays') {
+      if (isEmpty) delete (newData as any)[field];
+      else newData = { ...newData, [field]: num };
+    } else {
+      const newReasons = { ...(current.reasons || {}) };
+      if (isEmpty) delete newReasons[field];
+      else newReasons[field] = num;
+      newData.reasons = Object.keys(newReasons).length > 0 ? newReasons : undefined;
+      if (!newData.reasons) delete newData.reasons;
+    }
+    const cleanData = Object.fromEntries(Object.entries(newData).filter(([, v]) => v !== undefined)) as any;
+    try {
+      if (Object.keys(cleanData).length === 0) {
+        await deleteDoc(doc(db, 'MonthlyScrapOverrides', month));
+        setScrapOverrides(prev => { const n = { ...prev }; delete n[month]; return n; });
+      } else {
+        await setDoc(doc(db, 'MonthlyScrapOverrides', month), cleanData);
+        setScrapOverrides(prev => ({ ...prev, [month]: cleanData }));
+      }
+    } catch (e) { console.error(e); }
+    setScrapEditingCell(null);
   };
 
   // Fetch all customer deliveries for the selected prodYear
@@ -535,6 +610,17 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
       }
     });
 
+    // Inject manual scrap overrides into monthMap so all downstream calcs include them
+    (Object.entries(scrapOverrides) as [string, { production?: number; workingDays?: number; reasons?: Record<string, number> }][]).forEach(([month, override]) => {
+      if (!month.startsWith(scrapYear)) return;
+      if (!monthMap[month]) monthMap[month] = { production: 0, scrapByReason: {}, workingDays: new Set() };
+      if (override.production !== undefined) monthMap[month].production = override.production;
+      Object.entries(override.reasons || {} as Record<string, number>).forEach(([reason, amount]) => {
+        allReasons.add(reason);
+        monthMap[month].scrapByReason[reason] = amount as number;
+      });
+    });
+
     const reasons = Array.from(allReasons);
     const sortedMonths = Object.keys(monthMap).sort();
 
@@ -551,6 +637,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
       const d = new Date(month + '-02');
       const monthName = d.toLocaleDateString('ar-EG', { month: 'long' });
       const yearName = d.getFullYear().toString();
+      const ov = scrapOverrides[month];
       return {
         month,
         monthName,
@@ -558,8 +645,9 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
         production: data.production,
         totalScrap,
         scrapByReason: data.scrapByReason,
-        workingDays: data.workingDays.size,
+        workingDays: ov?.workingDays !== undefined ? ov.workingDays : data.workingDays.size,
         scrapPercent: data.production > 0 ? (totalScrap / data.production) * 100 : 0,
+        hasOverride: !!ov,
       };
     });
 
@@ -571,7 +659,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
     };
 
     return { rows, reasons, totals };
-  }, [machines, scrapYear, scrapDailySummaries, subLogsByMachineId]);
+  }, [machines, scrapYear, scrapDailySummaries, subLogsByMachineId, scrapOverrides]);
 
   // ─── Worker Scrap Analytics ────────────────────────────────────────────────
   const workerStats = useMemo(() => {
@@ -660,24 +748,32 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
 
     const rows = monthKeys.map((m, idx) => {
       const data = byMonth[m];
+      const mo = monthlyOverrides[m] || {};
       const date = new Date(m + '-02');
       const monthName = date.toLocaleDateString('ar-EG', { month: 'long' });
-      const totalProduction = data.wide + data.bous + data.external;
-      const netProduction = data.wide + data.external; // without bous/منفعة
+      const effectiveWide = mo.wide !== undefined ? mo.wide : data.wide;
+      const effectiveBous = mo.bous !== undefined ? mo.bous : data.bous;
+      const effectiveExternal = mo.external !== undefined ? mo.external : data.external;
+      const effectiveScrap = mo.scrap !== undefined ? mo.scrap : data.scrap;
+      const effectiveWorkingDays = mo.workingDays !== undefined ? mo.workingDays : data.workingDays.size;
+      const totalProduction = effectiveWide + effectiveBous + effectiveExternal;
+      const netProduction = effectiveWide + effectiveExternal;
+      const hasOverride = Object.keys(mo).length > 0;
       return {
         month: m,
         monthName,
         idx: idx + 1,
-        wide: data.wide,
-        bous: data.bous,
-        external: data.external,
-        scrap: data.scrap,
+        wide: effectiveWide,
+        bous: effectiveBous,
+        external: effectiveExternal,
+        scrap: effectiveScrap,
         deliveries: data.deliveries,
         totalProduction,
         netProduction,
-        workingDays: data.workingDays.size,
+        workingDays: effectiveWorkingDays,
+        hasOverride,
       };
-    }).filter(r => r.totalProduction > 0 || r.deliveries > 0);
+    }).filter(r => r.totalProduction > 0 || r.deliveries > 0 || r.hasOverride);
 
     const totals = {
       wide: rows.reduce((a, r) => a + r.wide, 0),
@@ -691,7 +787,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
     };
 
     return { rows, totals };
-  }, [machines, prodYear, externalEntries, prodDeliveries, subLogsByMachineId]);
+  }, [machines, prodYear, externalEntries, prodDeliveries, subLogsByMachineId, monthlyOverrides]);
 
   // ─── Fabric Purchase Report ──────────────────────────────────────────────
   const fabricStats = useMemo(() => {
@@ -1190,16 +1286,69 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {prodStats.rows.map((row) => (
+                  {prodStats.rows.map((row) => {
+                    const hasMO = (field: string) => (monthlyOverrides[row.month] as any)?.[field] !== undefined;
+                    const renderCell = (
+                      field: string,
+                      value: number,
+                      tdClass: string,
+                      valueClass: string,
+                      inputRingClass: string
+                    ) => {
+                      const isEditing = editingCell?.month === row.month && editingCell?.field === field;
+                      const isManual = hasMO(field);
+                      if (isEditing) {
+                        return (
+                          <td key={field} className={tdClass}>
+                            <div className="flex items-center gap-1 justify-center">
+                              <input
+                                autoFocus
+                                type="number"
+                                value={editingCellValue}
+                                onChange={e => setEditingCellValue(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') handleSaveMonthOverride(row.month, field, editingCellValue);
+                                  if (e.key === 'Escape') setEditingCell(null);
+                                }}
+                                placeholder="0"
+                                className={`w-20 px-2 py-1 text-sm border rounded-md text-center focus:outline-none focus:ring-2 ${inputRingClass}`}
+                              />
+                              <button onClick={() => handleSaveMonthOverride(row.month, field, editingCellValue)} className="p-1 text-green-600 hover:text-green-800" title="حفظ">✓</button>
+                              <button onClick={() => setEditingCell(null)} className="p-1 text-slate-400 hover:text-slate-600" title="إلغاء">✕</button>
+                            </div>
+                          </td>
+                        );
+                      }
+                      return (
+                        <td
+                          key={field}
+                          className={`${tdClass} ${userRole === 'admin' ? 'cursor-pointer' : ''}`}
+                          onClick={userRole === 'admin' ? () => { setEditingCell({ month: row.month, field }); setEditingCellValue(String(value || '')); } : undefined}
+                          title={userRole === 'admin' ? 'اضغط للتعديل اليدوي' : undefined}
+                        >
+                          <div className={`flex items-center justify-center gap-1 group ${valueClass}`}>
+                            <span>{value > 0 ? value.toLocaleString() : <span className="text-slate-300">-</span>}</span>
+                            {isManual
+                              ? <span className="text-[10px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded-full font-semibold">يدوي</span>
+                              : userRole === 'admin' && <Edit2 className="w-3 h-3 text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                            }
+                          </div>
+                        </td>
+                      );
+                    };
+                    return (
                     <tr key={row.month} className="transition-colors hover:bg-slate-50/80 bg-white">
                       <td className="px-4 py-3 text-center text-slate-400 font-medium border-l border-slate-100">{row.idx}</td>
-                      <td className="px-4 py-3 text-right font-bold text-slate-700 border-l border-slate-100">{row.monthName}</td>
-                      <td className="px-4 py-3 text-center text-slate-500 border-l border-slate-100 tabular-nums">{row.workingDays}</td>
-                      <td className="px-4 py-3 text-center font-medium text-slate-700 border-l border-slate-100 tabular-nums">{row.wide > 0 ? row.wide.toLocaleString() : <span className="text-slate-300">-</span>}</td>
-                      <td className="px-4 py-3 text-center font-medium text-slate-700 border-l border-slate-100 tabular-nums">{row.bous > 0 ? row.bous.toLocaleString() : <span className="text-slate-300">-</span>}</td>
-                      <td className="px-4 py-3 text-center font-medium text-orange-700 border-l border-slate-100 bg-orange-50/20 tabular-nums">{row.external > 0 ? row.external.toLocaleString() : <span className="text-slate-300">-</span>}</td>
+                      <td className="px-4 py-3 text-right font-bold text-slate-700 border-l border-slate-100">
+                        {row.monthName}
+                        {row.hasOverride && <span className="mr-1.5 text-[10px] bg-amber-50 text-amber-600 border border-amber-200 px-1.5 py-0.5 rounded-full">بيانات يدوية</span>}
+                      </td>
+                      {renderCell('workingDays', row.workingDays, 'px-4 py-3 text-center tabular-nums border-l border-slate-100', 'font-medium text-slate-500', 'border-slate-400 focus:ring-slate-400')}
+                      {renderCell('wide', row.wide, 'px-4 py-3 text-center tabular-nums border-l border-slate-100', 'font-medium text-slate-700', 'border-slate-400 focus:ring-slate-400')}
+                      {renderCell('bous', row.bous, 'px-4 py-3 text-center tabular-nums border-l border-slate-100', 'font-medium text-slate-700', 'border-slate-400 focus:ring-slate-400')}
+                      {renderCell('external', row.external, 'px-4 py-3 text-center tabular-nums border-l border-slate-100 bg-orange-50/20', 'font-medium text-orange-700', 'border-orange-400 focus:ring-orange-400')}
                       <td className="px-4 py-3 text-center font-bold text-slate-800 border-l border-slate-100 tabular-nums">{row.totalProduction.toLocaleString()}</td>
-                      <td className="px-4 py-3 text-center font-medium text-red-600 border-l border-slate-100 bg-red-50/20 tabular-nums">{row.scrap > 0 ? row.scrap.toLocaleString() : <span className="text-slate-300">-</span>}</td>
+                      {renderCell('scrap', row.scrap, 'px-4 py-3 text-center tabular-nums border-l border-slate-100 bg-red-50/20', 'font-medium text-red-600', 'border-red-400 focus:ring-red-400')}
                       <td className="px-4 py-3 text-center font-bold text-indigo-700 bg-indigo-50/20 tabular-nums">
                         {editingDeliveryMonth === row.month ? (
                           <div className="flex items-center gap-1 justify-center">
@@ -1223,21 +1372,22 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
                           const effective = isManual ? deliveryOverrides[row.month] : row.deliveries;
                           return (
                             <div
-                              className="flex items-center justify-center gap-1.5 cursor-pointer group"
-                              onClick={() => { setEditingDeliveryMonth(row.month); setEditingDeliveryValue(String(effective || '')); }}
-                              title="اضغط للتعديل"
+                              className={`flex items-center justify-center gap-1.5 group ${userRole === 'admin' ? 'cursor-pointer' : ''}`}
+                              onClick={userRole === 'admin' ? () => { setEditingDeliveryMonth(row.month); setEditingDeliveryValue(String(effective || '')); } : undefined}
+                              title={userRole === 'admin' ? 'اضغط للتعديل' : undefined}
                             >
                               <span>{effective > 0 ? effective.toLocaleString() : <span className="text-slate-300">-</span>}</span>
                               {isManual
                                 ? <span className="text-xs bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full font-semibold">يدوي</span>
-                                : <span className="text-xs bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded-full font-medium opacity-0 group-hover:opacity-100 transition-opacity">تلقائي</span>
+                                : userRole === 'admin' && <span className="text-xs bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded-full font-medium opacity-0 group-hover:opacity-100 transition-opacity">تلقائي</span>
                               }
                             </div>
                           );
                         })()}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
                 <tfoot>
                   <tr className="bg-slate-50 border-t-2 border-slate-200 font-bold text-slate-800">
@@ -1339,33 +1489,82 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
                 <tbody className="divide-y divide-slate-100">
                   {scrapStats.rows.map((row, idx) => {
                     const isHighScrap = row.scrapPercent > 2;
+                    const renderScrapCell = (field: string, value: number, tdClass: string, valueClass: string) => {
+                      const isEditing = scrapEditingCell?.month === row.month && scrapEditingCell?.field === field;
+                      const isManual = field === 'production'
+                        ? scrapOverrides[row.month]?.production !== undefined
+                        : field === 'workingDays'
+                          ? scrapOverrides[row.month]?.workingDays !== undefined
+                          : scrapOverrides[row.month]?.reasons?.[field] !== undefined;
+                      if (isEditing) {
+                        return (
+                          <td key={field} className={tdClass}>
+                            <div className="flex items-center gap-1 justify-center">
+                              <input autoFocus type="number" value={scrapEditingValue} onChange={e => setScrapEditingValue(e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Enter') handleSaveScrapOverride(row.month, field, scrapEditingValue); if (e.key === 'Escape') setScrapEditingCell(null); }}
+                                placeholder="0" className="w-20 px-2 py-1 text-sm border border-red-400 rounded-md text-center focus:outline-none focus:ring-2 focus:ring-red-400" />
+                              <button onClick={() => handleSaveScrapOverride(row.month, field, scrapEditingValue)} className="p-1 text-green-600 hover:text-green-800" title="حفظ">✓</button>
+                              <button onClick={() => setScrapEditingCell(null)} className="p-1 text-slate-400 hover:text-slate-600" title="إلغاء">✕</button>
+                            </div>
+                          </td>
+                        );
+                      }
+                      return (
+                        <td key={field} className={`${tdClass} ${userRole === 'admin' ? 'cursor-pointer' : ''}`}
+                          onClick={userRole === 'admin' ? () => { setScrapEditingCell({ month: row.month, field }); setScrapEditingValue(String(value || '')); } : undefined}
+                          title={userRole === 'admin' ? 'اضغط للتعديل اليدوي' : undefined}>
+                          <div className="flex items-center justify-center gap-1 group">
+                            <span className={valueClass}>{value > 0 ? value.toLocaleString() : <span className="text-slate-300">-</span>}</span>
+                            {isManual
+                              ? <span className="text-[10px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded-full font-semibold">يدوي</span>
+                              : userRole === 'admin' && <Edit2 className="w-3 h-3 text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />}
+                          </div>
+                        </td>
+                      );
+                    };
                     return (
-                      <tr
-                        key={row.month}
-                        className="transition-colors hover:bg-slate-50/80 bg-white"
-                      >
+                      <tr key={row.month} className="transition-colors hover:bg-slate-50/80 bg-white">
                         <td className="px-4 py-3 text-center text-slate-400 font-medium border-l border-slate-100">{idx + 1}</td>
-                        <td className="px-4 py-3 text-right font-bold text-slate-700 border-l border-slate-100">{row.monthName}</td>
-                        <td className="px-4 py-3 text-center font-medium text-slate-500 border-l border-slate-100 tabular-nums">{row.workingDays}</td>
+                        <td className="px-4 py-3 text-right font-bold text-slate-700 border-l border-slate-100">
+                          {row.monthName}
+                          {row.hasOverride && <span className="mr-1.5 text-[10px] bg-amber-50 text-amber-600 border border-amber-200 px-1.5 py-0.5 rounded-full">بيانات يدوية</span>}
+                        </td>
+                        {renderScrapCell('workingDays', row.workingDays, 'px-4 py-3 text-center font-medium text-slate-500 border-l border-slate-100 tabular-nums', 'font-medium text-slate-500')}
                         {scrapStats.reasons.map(r => {
                           const val = row.scrapByReason[r] || 0;
+                          const isEditingReason = scrapEditingCell?.month === row.month && scrapEditingCell?.field === r;
+                          const isManualReason = scrapOverrides[row.month]?.reasons?.[r] !== undefined;
+                          if (isEditingReason) {
+                            return (
+                              <td key={r} className="px-4 py-3 text-center border-l border-slate-100">
+                                <div className="flex items-center gap-1 justify-center">
+                                  <input autoFocus type="number" value={scrapEditingValue} onChange={e => setScrapEditingValue(e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter') handleSaveScrapOverride(row.month, r, scrapEditingValue); if (e.key === 'Escape') setScrapEditingCell(null); }}
+                                    placeholder="0" className="w-20 px-2 py-1 text-sm border border-red-400 rounded-md text-center focus:outline-none focus:ring-2 focus:ring-red-400" />
+                                  <button onClick={() => handleSaveScrapOverride(row.month, r, scrapEditingValue)} className="p-1 text-green-600 hover:text-green-800" title="حفظ">✓</button>
+                                  <button onClick={() => setScrapEditingCell(null)} className="p-1 text-slate-400 hover:text-slate-600" title="إلغاء">✕</button>
+                                </div>
+                              </td>
+                            );
+                          }
                           return (
-                            <td key={r} className="px-4 py-3 text-center tabular-nums border-l border-slate-100">
-                              {val > 0
-                                ? <span className="text-slate-700 font-medium">{val.toLocaleString()}</span>
-                                : <span className="text-slate-300">-</span>}
+                            <td key={r} className={`px-4 py-3 text-center tabular-nums border-l border-slate-100 ${userRole === 'admin' ? 'cursor-pointer' : ''}`}
+                              onClick={userRole === 'admin' ? () => { setScrapEditingCell({ month: row.month, field: r }); setScrapEditingValue(String(val || '')); } : undefined}
+                              title={userRole === 'admin' ? 'اضغط للتعديل اليدوي' : undefined}>
+                              <div className="flex items-center justify-center gap-1 group">
+                                {val > 0 ? <span className="text-slate-700 font-medium">{val.toLocaleString()}</span> : <span className="text-slate-300">-</span>}
+                                {isManualReason
+                                  ? <span className="text-[10px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded-full font-semibold">يدوي</span>
+                                  : userRole === 'admin' && <Edit2 className="w-3 h-3 text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />}
+                              </div>
                             </td>
                           );
                         })}
                         <td className="px-4 py-3 text-center font-bold text-red-600 border-l border-slate-100 bg-red-50/30 tabular-nums">
                           {row.totalScrap > 0 ? row.totalScrap.toLocaleString() : <span className="text-slate-300">-</span>}
                         </td>
-                        <td className="px-4 py-3 text-center font-medium text-slate-600 border-l border-slate-100 tabular-nums">
-                          {row.production.toLocaleString()}
-                        </td>
-                        <td className={`px-4 py-3 text-center font-bold tabular-nums ${
-                          isHighScrap ? 'text-red-600 bg-red-50/30' : 'text-emerald-600'
-                        }`}>
+                        {renderScrapCell('production', row.production, 'px-4 py-3 text-center font-medium text-slate-600 border-l border-slate-100 tabular-nums', 'font-medium text-slate-600')}
+                        <td className={`px-4 py-3 text-center font-bold tabular-nums ${isHighScrap ? 'text-red-600 bg-red-50/30' : 'text-emerald-600'}`}>
                           {row.production > 0 ? row.scrapPercent.toFixed(1) + '%' : '—'}
                         </td>
                       </tr>
@@ -1979,11 +2178,11 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
                 </div>
                 <div>
                   <h3 className="font-bold text-lg text-white">إجمالي الانتاج السنوي</h3>
-                  <p className="text-blue-200 text-sm mt-0.5 font-medium">من 1/1/2026 حتى اليوم</p>
+                  <p className="text-blue-200 text-sm mt-0.5 font-medium">من 1/1/{prodYear} حتى اليوم</p>
                 </div>
               </div>
               <div className="text-right">
-                 <div className="text-3xl font-bold tabular-nums tracking-tight">{fmt(yearlyTotal)}</div>
+                 <div className="text-3xl font-bold tabular-nums tracking-tight">{fmt(prodStats.totals.totalProduction)}</div>
                  <div className="text-xs text-blue-300 font-medium mt-1 uppercase tracking-wider">كجم (شامل الخارجي)</div>
               </div>
             </div>
