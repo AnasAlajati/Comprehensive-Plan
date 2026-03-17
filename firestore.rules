@@ -183,7 +183,47 @@ service cloud.firestore {
       allow read: if canRead();
       allow write: if canWrite();
     }
-    
+
+    // External Production (outsourced production records)
+    match /externalProduction/{docId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Fabrics definitions
+    match /fabrics/{fabricId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Seasons
+    match /Seasons/{seasonId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Daily Summaries (hall/lab scrap, etc.)
+    match /DailySummaries/{dateStr} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Manual override collections (admin edits for missing historical data)
+    match /DeliveryOverrides/{docId} {
+      allow read: if canRead();
+      allow write: if isAdmin();
+    }
+
+    match /MonthlyProductionOverrides/{docId} {
+      allow read: if canRead();
+      allow write: if isAdmin();
+    }
+
+    match /MonthlyScrapOverrides/{docId} {
+      allow read: if canRead();
+      allow write: if isAdmin();
+    }
+
     // Samples
     match /samples/{sampleId} {
       allow read: if canRead();
