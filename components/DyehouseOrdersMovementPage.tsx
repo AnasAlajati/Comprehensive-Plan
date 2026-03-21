@@ -23,13 +23,15 @@ import {
   Send,
   Download,
   GitCommit,
-  Filter
+  Filter,
+  Palette
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type DyehouseStatusType = 'STORE_RAW' | 'DYEING' | 'FINISHING' | 'STORE_FINISHED' | 'RECEIVED';
-type EventType = 'status' | 'sent' | 'received';
+type EventType = 'status' | 'sent' | 'received' | 'color_approval';
+type FilterType = 'all' | 'all_no_status' | EventType;
 
 interface OrderMovementEvent {
   id: string;
@@ -60,6 +62,9 @@ interface OrderMovementEvent {
   quantityReceived?: number;
   receivedBy?: string;
   notes?: string;
+  // Color approval specific
+  approvalCode?: string;
+  dyehouseColor?: string;
 }
 
 interface DyehouseGroup {
@@ -100,7 +105,7 @@ export const DyehouseOrdersMovementPage: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [selectedDyehouse, setSelectedDyehouse] = useState('');
   const [selectedUser, setSelectedUser]         = useState('');
-  const [selectedType, setSelectedType]         = useState<EventType | 'all'>('all');
+  const [selectedType, setSelectedType]         = useState<FilterType>('all_no_status');
   const [searchTerm, setSearchTerm]             = useState('');
   const [expandedDyehouses, setExpandedDyehouses] = useState<Set<string>>(new Set());
 
@@ -235,6 +240,22 @@ export const DyehouseOrdersMovementPage: React.FC = () => {
               notes: ev.notes,
             });
           });
+
+          // ── 4. colorApprovals (color approval events) ─────────────────────
+          (batch.colorApprovals || []).forEach(ca => {
+            if (!ca.date) return;
+            const dateKey = toDateKey(ca.date);
+            push(dateKey, {
+              id: `${order.id}-${bIdx}-ca-${ca.id}`,
+              type: 'color_approval',
+              date: dateKey,
+              sortKey: ca.date,
+              ...base,
+              approvalCode: ca.approvalCode,
+              dyehouseColor: ca.dyehouseColor,
+              notes: ca.notes,
+            });
+          });
         });
       });
 
@@ -252,7 +273,8 @@ export const DyehouseOrdersMovementPage: React.FC = () => {
     return raw
       .filter(ev => {
         if (selectedDyehouse && ev.dyehouse !== selectedDyehouse) return false;
-        if (selectedType !== 'all' && ev.type !== selectedType) return false;
+        if (selectedType === 'all_no_status' && ev.type === 'status') return false;
+        if (selectedType !== 'all' && selectedType !== 'all_no_status' && ev.type !== selectedType) return false;
         const actor = ev.changedBy || ev.sentBy || ev.receivedBy || '';
         if (selectedUser && actor !== selectedUser) return false;
         if (searchTerm) {
@@ -285,10 +307,11 @@ export const DyehouseOrdersMovementPage: React.FC = () => {
     const statusChanges = todayEvents.filter(e => e.type === 'status').length;
     const sentCount     = todayEvents.filter(e => e.type === 'sent').length;
     const receivedCount = todayEvents.filter(e => e.type === 'received').length;
+    const colorApprovalCount = todayEvents.filter(e => e.type === 'color_approval').length;
     const totalSentKg   = todayEvents.filter(e => e.type === 'sent').reduce((s, e) => s + (e.quantitySent || 0), 0);
     const totalRecvKg   = todayEvents.filter(e => e.type === 'received').reduce((s, e) => s + (e.quantityReceived || 0), 0);
     const uniqueUsers   = new Set(todayEvents.map(e => e.changedBy || e.sentBy || e.receivedBy).filter(Boolean)).size;
-    return { total: todayEvents.length, statusChanges, sentCount, receivedCount, totalSentKg, totalRecvKg, uniqueUsers };
+    return { total: todayEvents.length, statusChanges, sentCount, receivedCount, colorApprovalCount, totalSentKg, totalRecvKg, uniqueUsers };
   }, [todayEvents]);
 
   // Auto-expand all groups when date changes
@@ -320,6 +343,12 @@ const EventTypeBadge: React.FC<{ type: EventType }> = ({ type }) => {
     <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-100 border border-blue-200 text-blue-700 text-xs font-bold whitespace-nowrap">
       <Download size={11} />
       استلام
+    </div>
+  );
+  if (type === 'color_approval') return (
+    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-100 border border-amber-200 text-amber-700 text-xs font-bold whitespace-nowrap">
+      <Palette size={11} />
+      موافقة لون
     </div>
   );
   return (
@@ -372,6 +401,12 @@ const EventRow: React.FC<{ ev: OrderMovementEvent }> = ({ ev }) => {
             )}
             {ev.type === 'received' && ev.quantityReceived != null && (
               <span className="text-blue-600 font-medium">{ev.quantityReceived} كجم مستلم</span>
+            )}
+            {ev.type === 'color_approval' && ev.approvalCode && (
+              <span className="text-amber-600 font-medium">{ev.approvalCode}</span>
+            )}
+            {ev.type === 'color_approval' && ev.dyehouseColor && (
+              <span className="text-amber-500">{ev.dyehouseColor}</span>
             )}
             {ev.partialId && (
               <span className="text-amber-500 font-medium">جزء تجريبي</span>
@@ -464,7 +499,7 @@ const EventRow: React.FC<{ ev: OrderMovementEvent }> = ({ ev }) => {
 
             {/* Event type */}
             <div className="flex bg-slate-100 p-1 rounded-lg gap-0.5">
-              {(['all', 'status', 'sent', 'received'] as const).map(t => (
+              {(['all', 'all_no_status', 'status', 'sent', 'received', 'color_approval'] as const).map(t => (
                 <button
                   key={t}
                   onClick={() => setSelectedType(t)}
@@ -472,7 +507,7 @@ const EventRow: React.FC<{ ev: OrderMovementEvent }> = ({ ev }) => {
                     selectedType === t ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'
                   }`}
                 >
-                  {t === 'all' ? 'الكل' : t === 'status' ? 'تغيير حالة' : t === 'sent' ? 'إرسال' : 'استلام'}
+                  {t === 'all' ? 'الكل' : t === 'all_no_status' ? 'بدون حالة' : t === 'status' ? 'تغيير حالة' : t === 'sent' ? 'إرسال' : t === 'received' ? 'استلام' : 'موافقة لون'}
                 </button>
               ))}
             </div>
@@ -512,7 +547,7 @@ const EventRow: React.FC<{ ev: OrderMovementEvent }> = ({ ev }) => {
       </div>
 
       {/* Stats Strip */}
-      <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+      <div className="grid grid-cols-3 md:grid-cols-7 gap-3">
         <div className="bg-white rounded-lg border border-slate-200 p-3 shadow-sm text-center">
           <p className="text-xs text-slate-400 font-medium mb-1">إجمالي الأحداث</p>
           <p className="text-2xl font-bold text-slate-800">{stats.total}</p>
@@ -530,6 +565,10 @@ const EventRow: React.FC<{ ev: OrderMovementEvent }> = ({ ev }) => {
           <p className="text-xs text-blue-600 font-medium mb-1 flex items-center justify-center gap-1"><Download size={11} /> استلامات</p>
           <p className="text-2xl font-bold text-blue-700">{stats.receivedCount}</p>
           {stats.totalRecvKg > 0 && <p className="text-xs text-blue-500 mt-0.5">{stats.totalRecvKg.toLocaleString()} كجم</p>}
+        </div>
+        <div className="bg-amber-50 rounded-lg border border-amber-200 p-3 shadow-sm text-center">
+          <p className="text-xs text-amber-600 font-medium mb-1 flex items-center justify-center gap-1"><Palette size={11} /> موافقات لون</p>
+          <p className="text-2xl font-bold text-amber-700">{stats.colorApprovalCount}</p>
         </div>
         <div className="bg-white rounded-lg border border-slate-200 p-3 shadow-sm text-center">
           <p className="text-xs text-slate-400 font-medium mb-1 flex items-center justify-center gap-1"><Factory size={11} /> مصابغ</p>
@@ -579,6 +618,11 @@ const EventRow: React.FC<{ ev: OrderMovementEvent }> = ({ ev }) => {
                   {group.events.filter(e => e.type === 'status').length > 0 && (
                     <span className="text-xs text-indigo-600 font-medium">
                       {group.events.filter(e => e.type === 'status').length} تغيير حالة
+                    </span>
+                  )}
+                  {group.events.filter(e => e.type === 'color_approval').length > 0 && (
+                    <span className="text-xs text-amber-600 font-medium">
+                      {group.events.filter(e => e.type === 'color_approval').length} موافقة لون
                     </span>
                   )}
                 </div>
