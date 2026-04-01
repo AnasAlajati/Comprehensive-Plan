@@ -14,6 +14,7 @@ import {
 import { db } from '../services/firebase';
 import { Dyehouse, DyehouseMachine, CustomerSheet } from '../types';
 import { DyehouseMachineDetails } from './DyehouseMachineDetails';
+import { DyehouseBauhausCard } from './DyehouseBauhausCard';
 import { DyehouseGlobalSchedule } from './DyehouseGlobalSchedule';
 import { DyehouseBalanceReport } from './DyehouseBalanceReport';
 import { DyehouseActiveWorkPage } from './DyehouseActiveWorkPage';
@@ -21,16 +22,11 @@ import { DyehouseLateWorkPage } from './DyehouseLateWorkPage';
 import { DyehouseDailyMovement } from './DyehouseDailyMovement';
 import { DyehouseHistoryPage } from './DyehouseHistoryPage';
 import { 
-  Plus, 
-  Trash2, 
-  Edit2, 
-  Save, 
-  X, 
-  Factory, 
-  Package, 
-  Settings,
-  ChevronDown,
-  ChevronUp,
+  Plus,
+  Trash2,
+  Save,
+  X,
+  Factory,
   LayoutGrid,
   List,
   FileBarChart,
@@ -397,10 +393,10 @@ export const DyehouseDirectoryPage: React.FC<DyehouseDirectoryPageProps> = ({ us
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {allDyehouses.map((dyehouse) => (
-              <div key={dyehouse.id} className={`bg-white rounded-xl border shadow-sm overflow-hidden hover:shadow-md transition-shadow ${dyehouse.id.startsWith('temp-') ? 'border-blue-200 ring-1 ring-blue-100' : 'border-slate-200'}`}>
+              <div key={dyehouse.id}>
                 {editingId === dyehouse.id && editForm ? (
                 // Edit Mode
-                <div className="p-4 space-y-4">
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden p-4 space-y-4">
                   <div className="flex justify-between items-center mb-2">
                     <h3 className="font-bold text-slate-700">
                       {dyehouse.id.startsWith('temp-') ? 'Configure New Dyehouse' : 'Edit Dyehouse'}
@@ -410,7 +406,7 @@ export const DyehouseDirectoryPage: React.FC<DyehouseDirectoryPageProps> = ({ us
                       <button onClick={() => setEditingId(null)} className="text-slate-400 hover:bg-slate-50 p-1 rounded"><X size={18} /></button>
                     </div>
                   </div>
-                  
+
                   <div>
                     <label className="block text-xs font-medium text-slate-500 mb-1">Name</label>
                     <input
@@ -462,111 +458,15 @@ export const DyehouseDirectoryPage: React.FC<DyehouseDirectoryPageProps> = ({ us
                 </div>
               ) : (
                 // View Mode
-                <>
-                  <div className="p-4 border-b border-slate-100 flex justify-between items-start bg-slate-50/50">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-bold text-lg text-slate-800">{dyehouse.name}</h3>
-                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-bold border border-blue-200">
-                           <Package size={12} />
-                           Stock: {(dyehouseStock[dyehouse.name] || 0).toLocaleString()} kg
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex gap-1">
-                      <button 
-                        onClick={() => canEdit && startEditing(dyehouse)}
-                        disabled={!canEdit}
-                        className={`p-1.5 rounded transition-colors ${!canEdit ? 'text-slate-300 cursor-not-allowed opacity-60' : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50'}`}
-                        title={!canEdit ? 'You do not have permission to edit' : ''}
-                        onMouseEnter={(e) => {
-                          if (!canEdit) {
-                            e.currentTarget.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2732%27 height=%2732%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2710%27 fill=%27%23ef4444%27/%3E%3C/svg%3E") 16 16, auto';
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (!canEdit) {
-                            e.currentTarget.style.cursor = 'not-allowed';
-                          }
-                        }}
-                      >
-                        <Edit2 size={16} />
-                      </button>
-                      <button 
-                        onClick={() => canEdit && handleDeleteDyehouse(dyehouse.id)}
-                        disabled={!canEdit}
-                        className={`p-1.5 rounded transition-colors ${!canEdit ? 'text-slate-300 cursor-not-allowed opacity-60' : 'text-slate-400 hover:text-red-600 hover:bg-red-50'}`}
-                        title={!canEdit ? 'You do not have permission to delete' : ''}
-                        onMouseEnter={(e) => {
-                          if (!canEdit) {
-                            e.currentTarget.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2732%27 height=%2732%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2710%27 fill=%27%23ef4444%27/%3E%3C/svg%3E") 16 16, auto';
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (!canEdit) {
-                            e.currentTarget.style.cursor = 'not-allowed';
-                          }
-                        }}
-                      >
-                          <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                  
-                  <div className="p-4">
-                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-1">
-                      <Settings size={12} />
-                      Machine Configuration
-                    </h4>
-                    
-                    {dyehouse.machines && dyehouse.machines.length > 0 ? (
-                      <div className="flex flex-wrap gap-2">
-                        {dyehouse.machines.map((machine, idx) => {
-                          const countKey = `${dyehouse.name}-${machine.capacity}`;
-                          const itemStats = machineCounts[countKey] || { sent: 0, planned: 0 };
-                          const totalActive = itemStats.sent + itemStats.planned;
-                          
-                          return (
-                            <button 
-                              key={idx} 
-                              onClick={() => setSelectedMachine({ dyehouse: dyehouse.name, capacity: machine.capacity })}
-                              className="flex items-center bg-white border border-slate-200 rounded-lg px-3 py-1.5 shadow-sm hover:border-purple-300 hover:ring-1 hover:ring-purple-200 transition-all gap-2"
-                            >
-                              <span className="font-mono font-bold text-slate-700">
-                                {machine.capacity}kg
-                              </span>
-                              
-                              {totalActive > 0 && (
-                                <div className="flex gap-1 text-xs font-medium">
-                                  {itemStats.sent > 0 && (
-                                    <span className="text-purple-600 bg-purple-50 px-1.5 rounded border border-purple-100">
-                                      {itemStats.sent} Sent
-                                    </span>
-                                  )}
-                                  {itemStats.planned > 0 && (
-                                    <span className="text-orange-600 bg-orange-50 px-1.5 rounded border border-orange-100">
-                                      {itemStats.planned} Planned
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-
-                              {machine.count > 1 && (
-                                <span className="ml-1 px-1.5 py-0.5 bg-slate-100 text-slate-500 text-xs rounded-full font-medium">
-                                  x{machine.count}
-                                </span>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="text-slate-400 text-sm italic py-2">
-                        No machines configured. Click edit to add.
-                      </div>
-                    )}
-                  </div>
-                </>
+                <DyehouseBauhausCard
+                  dyehouse={dyehouse}
+                  machineCounts={machineCounts}
+                  stock={dyehouseStock[dyehouse.name] || 0}
+                  canEdit={!!canEdit}
+                  onEdit={() => startEditing(dyehouse)}
+                  onDelete={() => handleDeleteDyehouse(dyehouse.id)}
+                  onMachineClick={(capacity: number) => setSelectedMachine({ dyehouse: dyehouse.name, capacity })}
+                />
               )}
             </div>
           ))}

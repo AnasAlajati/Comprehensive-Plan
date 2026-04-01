@@ -507,13 +507,23 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
           const prod = Number(log.dayProduction) || 0;
           const scrap = Number(log.scrap) || 0;
           const reason = log.reason || 'غير محدد';
+          const isSample = log.status === 'Samples';
 
-          if (isBous) {
-            totalBous += prod;
-            if (dailyStats[log.date]) dailyStats[log.date].bous += prod;
+          if (isSample) {
+            // Sample production is not counted as regular output — it goes to scrap
+            if (prod > 0) {
+              totalScrap += prod;
+              if (dailyStats[log.date]) dailyStats[log.date].scrap += prod;
+              scrapReasons['سقط العينات'] = (scrapReasons['سقط العينات'] || 0) + prod;
+            }
           } else {
-            totalWide += prod;
-            if (dailyStats[log.date]) dailyStats[log.date].wide += prod;
+            if (isBous) {
+              totalBous += prod;
+              if (dailyStats[log.date]) dailyStats[log.date].bous += prod;
+            } else {
+              totalWide += prod;
+              if (dailyStats[log.date]) dailyStats[log.date].wide += prod;
+            }
           }
 
           totalScrap += scrap;

@@ -141,123 +141,103 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
     setLoading(true);
     
     const fetchDyehouses = async () => {
-      try {
-        const snapshot = await getDocs(collection(db, 'dyehouses'));
-        const list = snapshot.docs.map(doc => doc.data().name as string).filter(Boolean).sort();
-        setAllDyehouses(list);
-        if (list.length > 0 && !selectedDyehouse) {
-          setSelectedDyehouse(list[0]);
-        }
-      } catch (e) {
-        console.error('Failed to fetch dyehouses:', e);
+      const snapshot = await getDocs(collection(db, 'dyehouses'));
+      const list = snapshot.docs.map(doc => doc.data().name as string).sort();
+      setAllDyehouses(list);
+      if (list.length > 0 && !selectedDyehouse) {
+        setSelectedDyehouse(list[0]);
       }
     };
     fetchDyehouses();
 
-    const unsubscribe = onSnapshot(
-      query(collectionGroup(db, 'orders')),
-      async (snapshot) => {
-        try {
-          const clientMap: Record<string, string> = {};
-          try {
-            const clientsSnapshot = await getDocs(collection(db, 'CustomerSheets'));
-            clientsSnapshot.docs.forEach(doc => {
-              const data = doc.data();
-              clientMap[doc.id] = data.name || 'Unknown Client';
+    const unsubscribe = onSnapshot(query(collectionGroup(db, 'orders')), async (snapshot) => {
+      const clientsSnapshot = await getDocs(collection(db, 'CustomerSheets'));
+      const clientMap: Record<string, string> = {};
+      clientsSnapshot.docs.forEach(doc => {
+        const data = doc.data();
+        clientMap[doc.id] = data.name || 'Unknown Client';
+      });
+
+      const fabricsSnapshot = await getDocs(collection(db, 'fabrics'));
+      const fabricMap: Record<string, string> = {};
+      fabricsSnapshot.docs.forEach(doc => {
+        const data = doc.data() as FabricDefinition;
+        fabricMap[data.name] = data.shortName || data.name;
+      });
+
+      const allItems: ActiveWorkItem[] = [];
+
+      snapshot.docs.forEach(docSnap => {
+        const order = { id: docSnap.id, ...docSnap.data() } as OrderRow;
+        const clientId = order.customerId || 'unknown';
+        const clientName = clientMap[clientId] || 'Unknown Client';
+
+        if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
+          order.dyeingPlan.forEach((batch, idx) => {
+            if (batch.status !== 'sent') return;
+            
+            // Calculate sent quantities (same logic as ClientOrdersPage)
+            const sentEvents = batch.sentEvents || [];
+            const sentRaw = sentEvents.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
+            const sentAcc = sentEvents.reduce((s, e) => s + (Number(e.accessorySent) || 0), 0) + (Number(batch.quantitySentAccessory) || 0);
+            const totalSent = sentRaw + sentAcc;
+            
+            // Calculate received quantities (same logic as ClientOrdersPage)
+            const receiveEvents = batch.receiveEvents || [];
+            const recRaw = receiveEvents.reduce((s, e) => s + (Number(e.quantityRaw) || 0), 0) + (Number(batch.receivedQuantity) || 0);
+            const recAcc = receiveEvents.reduce((s, e) => s + (Number(e.quantityAccessory) || 0), 0);
+            const totalReceived = recRaw + recAcc;
+            
+            const dyehouseName = batch.dyehouse || order.dyehouse || 'Unassigned';
+            const machineName = batch.plannedCapacity ? `${batch.plannedCapacity}kg` : (batch.machine || order.dyehouseMachine || '');
+            
+            allItems.push({
+              id: `${order.id}-${idx}`,
+              orderId: order.id,
+              batchIdx: idx,
+              clientId: clientId,
+              clientName: clientName,
+              orderReference: order.orderReference,
+              fabric: order.material,
+              fabricShortName: parseFabricName(order.material).shortName || order.material,
+              color: batch.color,
+              colorHex: batch.colorHex,
+              quantity: batch.quantity,
+              quantitySent: totalSent,
+              quantitySentRaw: sentRaw,
+              quantitySentAccessory: sentAcc,
+              totalReceived: totalReceived,
+              totalReceivedRaw: recRaw,
+              totalReceivedAccessory: recAcc,
+              dyehouse: dyehouseName,
+              machine: machineName,
+              plannedCapacity: batch.plannedCapacity,
+              dispatchNumber: batch.dispatchNumber,
+              dateSent: batch.dateSent,
+              formationDate: batch.formationDate,
+              status: batch.status || 'draft',
+              // Smart status detection:
+              // - If no dyehouseStatus set but has received qty -> RECEIVED
+              // - If no dyehouseStatus set but has sent qty -> STORE_RAW (مخزن)
+              dyehouseStatus: batch.dyehouseStatus || (
+                totalReceived > 0 ? 'RECEIVED' :
+                totalSent > 0 ? 'STORE_RAW' :
+                undefined
+              ),
+              dyehouseStatusDate: batch.dyehouseStatusDate,
+              dyehouseHistory: batch.dyehouseHistory,
+              notes: batch.notes,
+              accessoryType: batch.accessoryType,
+              batch: batch,
+              partials: batch.partials || []
             });
-          } catch (e) { console.error('Failed to fetch CustomerSheets:', e); }
-
-          const fabricMap: Record<string, string> = {};
-          try {
-            const fabricsSnapshot = await getDocs(collection(db, 'fabrics'));
-            fabricsSnapshot.docs.forEach(doc => {
-              const data = doc.data() as FabricDefinition;
-              fabricMap[data.name] = data.shortName || data.name;
-            });
-          } catch (e) { console.error('Failed to fetch fabrics:', e); }
-
-          const allItems: ActiveWorkItem[] = [];
-
-          snapshot.docs.forEach(docSnap => {
-            const order = { id: docSnap.id, ...docSnap.data() } as OrderRow;
-            const clientId = order.customerId || 'unknown';
-            const clientName = clientMap[clientId] || 'Unknown Client';
-
-            if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
-              order.dyeingPlan.forEach((batch, idx) => {
-                if (batch.status !== 'sent') return;
-                
-                // Calculate sent quantities (same logic as ClientOrdersPage)
-                const sentEvents = batch.sentEvents || [];
-                const sentRaw = sentEvents.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
-                const sentAcc = sentEvents.reduce((s, e) => s + (Number(e.accessorySent) || 0), 0) + (Number(batch.quantitySentAccessory) || 0);
-                const totalSent = sentRaw + sentAcc;
-                
-                // Calculate received quantities (same logic as ClientOrdersPage)
-                const receiveEvents = batch.receiveEvents || [];
-                const recRaw = receiveEvents.reduce((s, e) => s + (Number(e.quantityRaw) || 0), 0) + (Number(batch.receivedQuantity) || 0);
-                const recAcc = receiveEvents.reduce((s, e) => s + (Number(e.quantityAccessory) || 0), 0);
-                const totalReceived = recRaw + recAcc;
-                
-                const dyehouseName = batch.dyehouse || order.dyehouse || 'Unassigned';
-                const machineName = batch.plannedCapacity ? `${batch.plannedCapacity}kg` : (batch.machine || order.dyehouseMachine || '');
-                
-                allItems.push({
-                  id: `${order.id}-${idx}`,
-                  orderId: order.id,
-                  batchIdx: idx,
-                  clientId: clientId,
-                  clientName: clientName,
-                  orderReference: order.orderReference,
-                  fabric: order.material,
-                  fabricShortName: parseFabricName(order.material).shortName || order.material,
-                  color: batch.color,
-                  colorHex: batch.colorHex,
-                  quantity: batch.quantity,
-                  quantitySent: totalSent,
-                  quantitySentRaw: sentRaw,
-                  quantitySentAccessory: sentAcc,
-                  totalReceived: totalReceived,
-                  totalReceivedRaw: recRaw,
-                  totalReceivedAccessory: recAcc,
-                  dyehouse: dyehouseName,
-                  machine: machineName,
-                  plannedCapacity: batch.plannedCapacity,
-                  dispatchNumber: batch.dispatchNumber,
-                  dateSent: batch.dateSent,
-                  formationDate: batch.formationDate,
-                  status: batch.status || 'draft',
-                  // Smart status detection:
-                  // - If no dyehouseStatus set but has received qty -> RECEIVED
-                  // - If no dyehouseStatus set but has sent qty -> STORE_RAW (مخزن)
-                  dyehouseStatus: batch.dyehouseStatus || (
-                    totalReceived > 0 ? 'RECEIVED' :
-                    totalSent > 0 ? 'STORE_RAW' :
-                    undefined
-                  ),
-                  dyehouseStatusDate: batch.dyehouseStatusDate,
-                  dyehouseHistory: batch.dyehouseHistory,
-                  notes: batch.notes,
-                  accessoryType: batch.accessoryType,
-                  batch: batch,
-                  partials: batch.partials || []
-                });
-              });
-            }
           });
-
-          setItems(allItems);
-        } catch (e) {
-          console.error('Error processing orders snapshot:', e);
-        } finally {
-          setLoading(false);
         }
-      },
-      (error) => {
-        console.error('Orders onSnapshot error:', error);
-        setLoading(false);
-      }
-    );
+      });
+
+      setItems(allItems);
+      setLoading(false);
+    });
 
     return () => unsubscribe();
   }, []);
