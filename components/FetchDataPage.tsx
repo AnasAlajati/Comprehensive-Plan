@@ -8,7 +8,7 @@ import { PlanItem, MachineStatus, CustomerOrder, MachineRow, FabricDefinition } 
 import { LinkOrderModal } from './LinkOrderModal';
 import { toJpeg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
-import { CheckCircle, Send, Truck, Layout, Factory, X, Check, Sparkles, Edit, ArrowRight, History, Plus, Search, Calendar, FileText, Book, Trash2, AlertTriangle, ChevronDown, CheckCircle2, UserPlus, PlusCircle, User } from 'lucide-react';
+import { CheckCircle, Send, Truck, Layout, Factory, X, Check, Sparkles, Edit, ArrowRight, History, Plus, Search, Calendar, FileText, Book, Trash2, AlertTriangle, ChevronDown, CheckCircle2, UserPlus, PlusCircle, User, Scissors } from 'lucide-react';
 import { ProfessionalDatePicker } from './ProfessionalDatePicker';
 import { ExternalProductionSheet } from './ExternalProductionSheet'; // New Component - Force Refresh
 import { StandaloneFabricEditor } from './FabricEditor';
@@ -482,7 +482,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [reasonModal, setReasonModal] = useState<{ isOpen: boolean; newName: string }>({ isOpen: false, newName: '' });
   const [isAddingWorker, setIsAddingWorker] = useState(false);
   const [newWorkerName, setNewWorkerName] = useState('');
-  const [workerSelectionModal, setWorkerSelectionModal] = useState<{ isOpen: boolean; machineId: string; logId: string; selectedWorker: string }>({ isOpen: false, machineId: '', logId: '', selectedWorker: '' });
+  const [workerSelectionModal, setWorkerSelectionModal] = useState<{ isOpen: boolean; machineId: string; logId: string; selectedWorker: string; forScrapEntryIndex?: number }>({ isOpen: false, machineId: '', logId: '', selectedWorker: '' });
+  const [scrapEntriesModal, setScrapEntriesModal] = useState<{ isOpen: boolean; machineId: string; logId: string; entries: Array<{ reason: string; amount: string; workerResponsible?: string }> } | null>(null);
   
   // Centralized fabric save handler using DataService.upsertFabric
   const handleFabricSaved = async (savedFabric: FabricDefinition) => {
@@ -1131,6 +1132,15 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   // Handle worker selection when "اهمال عامل" is selected
   const handleWorkerSelection = async (machineId: string, logId: string, workerName: string) => {
     try {
+      // If called from inside scrap entries modal (forScrapEntryIndex is set), update entry worker only
+      if (workerSelectionModal.forScrapEntryIndex !== undefined && scrapEntriesModal) {
+        const updated = [...scrapEntriesModal.entries];
+        updated[workerSelectionModal.forScrapEntryIndex] = { ...updated[workerSelectionModal.forScrapEntryIndex], workerResponsible: workerName };
+        setScrapEntriesModal({ ...scrapEntriesModal, entries: updated });
+        setWorkerSelectionModal({ isOpen: false, machineId: '', logId: '', selectedWorker: '' });
+        return;
+      }
+
       const log = filteredLogs.find(l => l.machineId === machineId && l.id === logId);
       if (!log) return;
 
@@ -1159,6 +1169,61 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
       showMessage('✅ Scrap reason added');
     } catch (error: any) {
       showMessage('❌ Error: ' + error.message, true);
+    }
+  };
+
+  // Handle saving multiple scrap entries from the scrap entries modal
+  const handleSaveScrapEntries = async (machineId: string, logId: string, entries: Array<{ reason: string; amount: string; workerResponsible?: string }>) => {
+    const validEntries = entries.filter(e => e.reason && Number(e.amount) > 0);
+    const total = validEntries.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+    const primaryReason = validEntries.length === 1 ? validEntries[0].reason : validEntries.length > 1 ? 'متعدد' : '';
+    const scrapEntries = validEntries.map(e => ({ reason: e.reason, amount: Number(e.amount), ...(e.workerResponsible ? { workerResponsible: e.workerResponsible } : {}) }));
+    // Find worker responsible from "اهمال عامل" entries
+    const workerEntry = validEntries.find(e => e.reason === 'اهمال عامل' && e.workerResponsible);
+    const workerResponsible = workerEntry?.workerResponsible || null;
+
+    // Optimistic update
+    setAllLogs(prev => prev.map(log => {
+      if (log.machineId === machineId && log.id === logId) {
+        return { ...log, scrap: total, reason: primaryReason, scrapEntries, ...(workerResponsible !== null ? { workerResponsible } : {}) };
+      }
+      return log;
+    }));
+    setScrapEntriesModal(null);
+
+    try {
+      const machines = await DataService.getMachinesFromMachineSS();
+      const machine = machines.find(m => m.id === machineId);
+      if (!machine) return;
+
+      const rawLog = fpSubLogsMapRef.current.get(String(machineId))?.find((l: any) => l.date === selectedDate);
+      const logData: any = rawLog
+        ? { ...rawLog }
+        : { id: selectedDate, date: selectedDate, dayProduction: 0, scrap: 0, status: machine.status || '', fabric: '', client: '', avgProduction: machine.avgProduction || 0, remainingMfg: 0, reason: '', timestamp: new Date().toISOString() };
+      delete logData._machineId;
+
+      logData.scrap = total;
+      logData.reason = primaryReason;
+      logData.scrapEntries = scrapEntries;
+      if (workerResponsible) {
+        logData.workerResponsible = workerResponsible;
+      }
+
+      const updatePayload: any = {
+        lastLogDate: logData.date,
+        lastLogData: { date: logData.date, dayProduction: logData.dayProduction, scrap: total, status: logData.status, fabric: logData.fabric, client: logData.client, remainingMfg: logData.remainingMfg, reason: primaryReason, customStatusNote: logData.customStatusNote },
+        lastUpdated: new Date().toISOString()
+      };
+      if (logData.date === activeDay) {
+        updatePayload.reason = primaryReason;
+      }
+
+      await DataService.updateMachineInMachineSS(machineId, updatePayload);
+      await DataService.updateDailyLog(machineId, logData.date, logData);
+      showMessage('✅ Updated');
+    } catch (error: any) {
+      showMessage('❌ Error: ' + error.message, true);
+      handleFetchLogs(selectedDate);
     }
   };
 
@@ -2812,59 +2877,50 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
                         {/* Scrap */}
                         <td className="border border-slate-200 p-0 hidden md:table-cell">
-                          <input
-                            key={`${log.id}-scrap-${log.scrap}`}
+                          <button
                             id={getCellId(log.machineId, 'scrap')}
-                            type="number"
-                            defaultValue={log.scrap || 0}
-                            data-force-nav="true"
-                            onFocus={() => {
-                              handleCellFocus(idx, 'scrap');
-                              window.dispatchEvent(new Event('searchdropdown:forceclose'));
+                            onClick={() => {
+                              if (userRole !== 'admin' && userRole !== 'daily_planner') return;
+                              const existingEntries = (log.scrapEntries && log.scrapEntries.length > 0)
+                                ? log.scrapEntries.map((e: any) => ({ reason: e.reason, amount: String(e.amount), workerResponsible: e.workerResponsible }))
+                                : log.scrap > 0
+                                  ? [{ reason: log.reason || '', amount: String(log.scrap), workerResponsible: log.workerResponsible }]
+                                  : [{ reason: '', amount: '' }];
+                              setScrapEntriesModal({ isOpen: true, machineId: log.machineId, logId: log.id, entries: existingEntries });
                             }}
-                            onBlur={(e) => handleBlur(e, log.machineId, log.id, 'scrap')}
-                            onKeyDown={(e) => handleKeyDown(e, idx, 'scrap')}
                             disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
-                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none font-bold ${userRole !== 'admin' && userRole !== 'daily_planner' ? 'cursor-not-allowed opacity-60' : ''} ${log.scrap > 0 ? 'text-red-600' : ''}`}
-                          />
+                            className={`w-full h-full p-2 text-center font-bold transition-colors hover:bg-red-50 ${userRole !== 'admin' && userRole !== 'daily_planner' ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} ${log.scrap > 0 ? 'text-red-600' : 'text-slate-400'}`}
+                          >
+                            {log.scrap > 0 ? log.scrap : '—'}
+                          </button>
                         </td>
 
                         {/* Reason */}
                         <td className="border border-slate-200 p-0 hidden md:table-cell relative">
-                          <div className="flex items-center h-full w-full">
-                            <select
-                              id={getCellId(log.machineId, 'reason')}
-                              value={log.reason || ''}
-                              data-force-nav="true"
-                              onFocus={() => {
-                                handleCellFocus(idx, 'reason');
-                                window.dispatchEvent(new Event('searchdropdown:forceclose'));
-                              }}
-                              onChange={(e) => handleReasonSelect(e.target.value, log.machineId, log.id)}
-                              onKeyDown={(e) => handleKeyDown(e, idx, 'reason')}
-                              disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
-                              className={`flex-1 h-full p-2 bg-transparent focus:bg-blue-50 focus:outline-none border-none disabled:cursor-not-allowed disabled:opacity-60 text-sm text-center appearance-none cursor-pointer ${!log.reason ? 'text-slate-400' : 'text-slate-700'}`}
-                              style={{ textAlignLast: 'center' }}
-                            >
-                              <option value="" className="text-slate-400">---</option>
-                              {scrapReasons.map(reason => (
-                                <option key={reason.id} value={reason.name} className="text-slate-700">{reason.name}</option>
-                              ))}
-                            </select>
-                            <div className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                              <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                              </svg>
-                            </div>
-                            <button
-                              onClick={() => setReasonModal({ isOpen: true, newName: '' })}
-                              className="h-full px-2 hover:bg-blue-50 text-blue-600 font-bold border-r border-slate-200 transition-colors flex items-center justify-center"
-                              title="Add new reason"
-                              disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
-                            >
-                              +
-                            </button>
-                          </div>
+                          <button
+                            onClick={() => {
+                              if (userRole !== 'admin' && userRole !== 'daily_planner') return;
+                              const existingEntries = (log.scrapEntries && log.scrapEntries.length > 0)
+                                ? log.scrapEntries.map((e: any) => ({ reason: e.reason, amount: String(e.amount), workerResponsible: e.workerResponsible }))
+                                : log.scrap > 0
+                                  ? [{ reason: log.reason || '', amount: String(log.scrap), workerResponsible: log.workerResponsible }]
+                                  : [{ reason: '', amount: '' }];
+                              setScrapEntriesModal({ isOpen: true, machineId: log.machineId, logId: log.id, entries: existingEntries });
+                            }}
+                            disabled={userRole !== 'admin' && userRole !== 'daily_planner'}
+                            title={log.scrapEntries && log.scrapEntries.length > 1 ? log.scrapEntries.map((e: any) => `${e.reason}: ${e.amount}`).join('\n') : log.reason || ''}
+                            className={`w-full h-full p-2 text-center text-xs font-semibold transition-colors hover:bg-orange-50 ${userRole !== 'admin' && userRole !== 'daily_planner' ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} ${log.scrapEntries && log.scrapEntries.length > 1 ? 'text-slate-700' : log.reason ? 'text-slate-700' : 'text-slate-400'}`}
+                          >
+                            {log.scrapEntries && log.scrapEntries.length > 1 ? (() => {
+                              const top = [...log.scrapEntries].sort((a: any, b: any) => (Number(b.amount) || 0) - (Number(a.amount) || 0))[0];
+                              return (
+                                <span className="flex items-center justify-center gap-1">
+                                  <span>{top?.reason || '---'}</span>
+                                  <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-slate-200 text-slate-500 font-bold" style={{ fontSize: '9px' }}>+{log.scrapEntries.length - 1}</span>
+                                </span>
+                              );
+                            })() : log.reason || '---'}
+                          </button>
                         </td>
 
                         {/* End Date (Calculated) */}
@@ -3775,58 +3831,34 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                 {/* Scrap */}
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">Scrap (السقط)</label>
-                  <input
-                    key={`details-scrap-${detailsModal.log.scrap}`}
-                    type="number"
-                    defaultValue={detailsModal.log.scrap || 0}
-                    onBlur={(e) => handleBlur(e, detailsModal.log.machineId, detailsModal.log.id, 'scrap')}
-                    className="w-full p-2 border border-slate-300 rounded text-center font-bold"
-                  />
+                  <div className="w-full p-2 bg-slate-50 border border-slate-200 rounded text-center font-bold text-red-600">
+                    {detailsModal.log.scrap > 0 ? `${detailsModal.log.scrap} كجم` : '—'}
+                  </div>
                 </div>
 
                 {/* Reason */}
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">Reason (السبب)</label>
-                  <div className="flex gap-2 relative">
-                    <select
-                      value={detailsModal.log.reason || ''}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        if (val === 'اهمال عامل') {
-                          setWorkerSelectionModal({
-                            isOpen: true,
-                            machineId: detailsModal.log.machineId,
-                            logId: detailsModal.log.id,
-                            selectedWorker: detailsModal.log.workerResponsible || ''
-                          });
-                        } else {
-                          handleUpdateLog(detailsModal.log.machineId, detailsModal.log.id, 'reason', val);
-                        }
-                      }}
-                      className={`flex-1 p-2 border border-slate-300 rounded text-right appearance-none cursor-pointer ${!detailsModal.log.reason ? 'text-slate-400' : 'text-slate-700'}`}
-                    >
-                      <option value="" className="text-slate-400">---</option>
-                      {scrapReasons.map(reason => (
-                        <option key={reason.id} value={reason.name} className="text-slate-700">{reason.name}</option>
-                      ))}
-                    </select>
-                    <div className="absolute left-14 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                      <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                    <button
-                      onClick={() => setReasonModal({ isOpen: true, newName: '' })}
-                      className="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 font-bold rounded transition-colors text-sm flex items-center justify-center"
-                      title="Add new reason"
-                    >
-                      +
-                    </button>
-                  </div>
+                  <button
+                    onClick={() => {
+                      const log = detailsModal.log;
+                      const existingEntries = (log.scrapEntries && log.scrapEntries.length > 0)
+                        ? log.scrapEntries.map((e: any) => ({ reason: e.reason, amount: String(e.amount), workerResponsible: e.workerResponsible }))
+                        : log.scrap > 0
+                          ? [{ reason: log.reason || '', amount: String(log.scrap), workerResponsible: log.workerResponsible }]
+                          : [{ reason: '', amount: '' }];
+                      setScrapEntriesModal({ isOpen: true, machineId: log.machineId, logId: log.id, entries: existingEntries });
+                    }}
+                    className={`w-full p-2 border border-slate-300 rounded text-center text-sm font-medium hover:bg-orange-50 transition-colors cursor-pointer ${!detailsModal.log.reason ? 'text-slate-400' : detailsModal.log.scrapEntries?.length > 1 ? 'text-orange-600' : 'text-slate-700'}`}
+                  >
+                    {detailsModal.log.scrapEntries?.length > 1
+                      ? `متعدد (${detailsModal.log.scrapEntries.length}) — انقر للتعديل`
+                      : detailsModal.log.reason || '--- انقر لإضافة سبب ---'}
+                  </button>
                 </div>
 
                 {/* Worker Responsible (if reason is اهمال عامل) */}
-                {detailsModal.log.reason === 'اهمال عامل' && (
+                {(detailsModal.log.reason === 'اهمال عامل' || (detailsModal.log.scrapEntries || []).some((e: any) => e.reason === 'اهمال عامل')) && (
                   <div>
                     <label className="block text-xs font-bold text-slate-500 mb-1">Worker Responsible (العامل المسؤول)</label>
                     <input
@@ -4009,6 +4041,140 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           <div className="animate-spin rounded-full h-16 w-16 border-4 border-white/20 border-t-white mb-4"></div>
           <h3 className="text-xl font-bold">Generating PDF...</h3>
           <p className="text-slate-300 mt-2">Please wait while we prepare your document.</p>
+        </div>
+      )}
+
+      {/* Scrap Entries Modal */}
+      {scrapEntriesModal?.isOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
+              <h2 className="text-base font-semibold text-slate-800 flex items-center gap-2.5">
+                <span className="w-7 h-7 rounded-md bg-slate-100 flex items-center justify-center text-slate-500">
+                  <Scissors size={15} />
+                </span>
+                أسباب السقط
+              </h2>
+              <button onClick={() => setScrapEntriesModal(null)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-6">
+              {/* Column Labels */}
+              <div className="flex gap-2 items-center mb-2 px-1">
+                <span className="flex-1 text-xs font-medium text-slate-400 text-right">السبب</span>
+                <span className="w-24 text-xs font-medium text-slate-400 text-center">الكمية (كجم)</span>
+                <span className="w-6" />
+              </div>
+
+              {/* Entries */}
+              <div className="space-y-2.5 mb-4">
+                {scrapEntriesModal.entries.map((entry, i) => (
+                  <div key={i} className="flex flex-col gap-1.5">
+                    <div className="flex gap-2 items-center">
+                      <select
+                        value={entry.reason}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const updated = [...scrapEntriesModal.entries];
+                          if (val === 'اهمال عامل') {
+                            updated[i] = { ...updated[i], reason: val };
+                            setScrapEntriesModal({ ...scrapEntriesModal, entries: updated });
+                            setWorkerSelectionModal({
+                              isOpen: true,
+                              machineId: scrapEntriesModal.machineId,
+                              logId: scrapEntriesModal.logId,
+                              selectedWorker: entry.workerResponsible || '',
+                              forScrapEntryIndex: i
+                            });
+                          } else {
+                            updated[i] = { ...updated[i], reason: val, workerResponsible: undefined };
+                            setScrapEntriesModal({ ...scrapEntriesModal, entries: updated });
+                          }
+                        }}
+                        className="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-400 text-right bg-slate-50 hover:border-slate-300 transition-colors"
+                      >
+                        <option value="">-- اختر السبب --</option>
+                        {scrapReasons.map(r => (
+                          <option key={r.id} value={r.name}>{r.name}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="0"
+                        value={entry.amount}
+                        onChange={(e) => {
+                          const updated = [...scrapEntriesModal.entries];
+                          updated[i] = { ...updated[i], amount: e.target.value };
+                          setScrapEntriesModal({ ...scrapEntriesModal, entries: updated });
+                        }}
+                        className="w-24 px-3 py-2 border border-slate-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-slate-400 bg-slate-50 hover:border-slate-300 transition-colors"
+                      />
+                      <button
+                        onClick={() => {
+                          const updated = scrapEntriesModal.entries.filter((_, idx) => idx !== i);
+                          setScrapEntriesModal({ ...scrapEntriesModal, entries: updated.length ? updated : [{ reason: '', amount: '' }] });
+                        }}
+                        className="w-6 flex items-center justify-center text-slate-300 hover:text-slate-500 transition-colors"
+                      >
+                        <X size={15} />
+                      </button>
+                    </div>
+                    {entry.reason === 'اهمال عامل' && (
+                      <button
+                        onClick={() => setWorkerSelectionModal({
+                          isOpen: true,
+                          machineId: scrapEntriesModal.machineId,
+                          logId: scrapEntriesModal.logId,
+                          selectedWorker: entry.workerResponsible || '',
+                          forScrapEntryIndex: i
+                        })}
+                        className={`self-end text-xs px-3 py-1.5 rounded-md border font-medium transition-colors flex items-center gap-1.5 ${entry.workerResponsible ? 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100' : 'bg-orange-50 border-orange-200 text-orange-600 hover:bg-orange-100'}`}
+                      >
+                        <AlertTriangle size={11} />
+                        {entry.workerResponsible ? `العامل: ${entry.workerResponsible}` : 'تحديد العامل المسؤول'}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Add row button */}
+              <button
+                onClick={() => setScrapEntriesModal({ ...scrapEntriesModal, entries: [...scrapEntriesModal.entries, { reason: '', amount: '' }] })}
+                className="w-full py-2 border border-dashed border-slate-300 text-slate-400 hover:border-slate-400 hover:text-slate-600 rounded-lg text-sm font-medium transition-colors mb-5"
+              >
+                + إضافة سبب
+              </button>
+
+              {/* Total */}
+              <div className="flex justify-between items-center bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 mb-5">
+                <span className="text-slate-500 text-sm">الإجمالي</span>
+                <span className="text-slate-800 font-semibold text-lg">
+                  {+scrapEntriesModal.entries.reduce((sum, e) => sum + (Number(e.amount) || 0), 0).toFixed(3)} كجم
+                </span>
+              </div>
+
+              {/* Actions */}
+              <div className="flex gap-2.5">
+                <button
+                  onClick={() => handleSaveScrapEntries(scrapEntriesModal.machineId, scrapEntriesModal.logId, scrapEntriesModal.entries)}
+                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-semibold rounded-lg text-sm transition-colors"
+                >
+                  حفظ
+                </button>
+                <button
+                  onClick={() => setScrapEntriesModal(null)}
+                  className="flex-1 py-2.5 bg-white hover:bg-slate-50 text-slate-600 font-semibold rounded-lg text-sm border border-slate-200 transition-colors"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

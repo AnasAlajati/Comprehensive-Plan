@@ -530,7 +530,18 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
           if (dailyStats[log.date]) dailyStats[log.date].scrap += scrap;
 
           if (scrap > 0) {
-            scrapReasons[reason] = (scrapReasons[reason] || 0) + scrap;
+            // If there are multiple scrap entries, distribute by each entry's reason
+            if (log.scrapEntries && log.scrapEntries.length > 0) {
+              log.scrapEntries.forEach((entry: any) => {
+                const entryAmount = Number(entry.amount) || 0;
+                if (entryAmount > 0) {
+                  const entryReason = entry.reason || 'غير محدد';
+                  scrapReasons[entryReason] = (scrapReasons[entryReason] || 0) + entryAmount;
+                }
+              });
+            } else {
+              scrapReasons[reason] = (scrapReasons[reason] || 0) + scrap;
+            }
           }
         }
       });
@@ -592,9 +603,21 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
           monthMap[month].production += prod;
           if (prod > 0) monthMap[month].workingDays.add(log.date);
           if (scrap > 0) {
-            const reason = (log.reason || 'غير محدد').trim();
-            allReasons.add(reason);
-            monthMap[month].scrapByReason[reason] = (monthMap[month].scrapByReason[reason] || 0) + scrap;
+            // If there are multiple scrap entries, distribute by each entry's reason
+            if (log.scrapEntries && log.scrapEntries.length > 0) {
+              log.scrapEntries.forEach((entry: any) => {
+                const entryAmount = Number(entry.amount) || 0;
+                if (entryAmount > 0) {
+                  const entryReason = (entry.reason || 'غير محدد').trim();
+                  allReasons.add(entryReason);
+                  monthMap[month].scrapByReason[entryReason] = (monthMap[month].scrapByReason[entryReason] || 0) + entryAmount;
+                }
+              });
+            } else {
+              const reason = (log.reason || 'غير محدد').trim();
+              allReasons.add(reason);
+              monthMap[month].scrapByReason[reason] = (monthMap[month].scrapByReason[reason] || 0) + scrap;
+            }
           }
         }
       });
@@ -688,10 +711,22 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
       (subLogsByMachineId.get(String(machine.id)) || []).forEach((log: any) => {
         if (log.date >= rangeStart && log.date <= rangeEnd) {
           const scrap = Number(log.scrap) || 0;
-          if (scrap > 0 && log.workerResponsible) {
-            const worker = (log.workerResponsible as string).trim();
-            workerMap[worker] = (workerMap[worker] || 0) + scrap;
-            total += scrap;
+          if (scrap > 0) {
+            // Check per-entry workerResponsible first
+            if (log.scrapEntries && log.scrapEntries.length > 0) {
+              log.scrapEntries.forEach((entry: any) => {
+                const entryAmount = Number(entry.amount) || 0;
+                const entryWorker = (entry.workerResponsible || '').trim();
+                if (entryAmount > 0 && entryWorker) {
+                  workerMap[entryWorker] = (workerMap[entryWorker] || 0) + entryAmount;
+                  total += entryAmount;
+                }
+              });
+            } else if (log.workerResponsible) {
+              const worker = (log.workerResponsible as string).trim();
+              workerMap[worker] = (workerMap[worker] || 0) + scrap;
+              total += scrap;
+            }
           }
         }
       });

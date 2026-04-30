@@ -113,12 +113,18 @@ export interface CustomerOrder {
   seasonName?: string;   // Season display name (e.g. "Summer 2026")
 }
 
+export interface ScrapEntry {
+  reason: string;
+  amount: number;
+}
+
 export interface DailyLogEntry {
   id?: string; // Firestore Doc ID
   machineId?: string | number; // Link to parent machine
   date: string;
   dayProduction: number;
   scrap: number;
+  scrapEntries?: ScrapEntry[];
   status: MachineStatus;
   remainingMfg?: number;
   reason?: string;
