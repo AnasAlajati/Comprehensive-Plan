@@ -2342,9 +2342,9 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
 
       {/* ─── Client Orders Summary View ─── */}
       {view === 'clients' && (
-        <div className="max-w-full mx-auto px-4 py-6" dir="rtl">
+        <div className="max-w-full mx-auto px-4 py-5" dir="rtl">
           {/* Title Bar */}
-          <div className="mb-6 bg-white rounded-xl border border-slate-200 px-6 py-5 flex flex-wrap items-center justify-between gap-4 shadow-sm">
+          <div className="mb-4 bg-white rounded-xl border border-slate-200 px-5 py-4 flex flex-wrap items-center justify-between gap-4 shadow-sm">
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 rounded-xl bg-teal-50 flex items-center justify-center border border-teal-100 shadow-sm">
                 <Users className="w-6 h-6 text-teal-600" />
@@ -2372,18 +2372,18 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
           {/* Table */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm" style={{ minWidth: 900 }}>
-                <thead className="bg-slate-50 border-b border-slate-200">
+              <table className="w-full text-sm table-fixed" style={{ minWidth: 980 }}>
+                <thead className="bg-slate-50 border-b border-slate-200 sticky top-0 z-10">
                   <tr className="text-slate-600 text-xs font-bold uppercase tracking-wider">
-                    <th className="px-4 py-4 text-center w-12">#</th>
-                    <th className="px-4 py-4 text-center">كود العميل</th>
-                    <th className="px-4 py-4 text-right">اسم العميل</th>
-                    <th className="px-4 py-4 text-center">تاريخ استلام الاوردر</th>
-                    <th className="px-4 py-4 text-center">الكمية المطلوبة</th>
-                    <th className="px-4 py-4 text-center">ما تم تصنيعه</th>
-                    <th className="px-4 py-4 text-center">المتبقى</th>
-                    <th className="px-4 py-4 text-center">التسليمات</th>
-                    <th className="px-4 py-4 text-center">متبقي تسليم</th>
+                    <th className="px-3 py-3 text-center w-12">#</th>
+                    <th className="px-3 py-3 text-center w-28">كود العميل</th>
+                    <th className="px-3 py-3 text-right w-48">اسم العميل</th>
+                    <th className="px-3 py-3 text-center w-56">تاريخ استلام الاوردر</th>
+                    <th className="px-3 py-3 text-center w-32">الكمية المطلوبة</th>
+                    <th className="px-3 py-3 text-center w-32">ما تم تصنيعه</th>
+                    <th className="px-3 py-3 text-center w-28">المتبقى</th>
+                    <th className="px-3 py-3 text-center w-28">التسليمات</th>
+                    <th className="px-3 py-3 text-center w-32">متبقي تسليم</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -2396,15 +2396,18 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
                   {clientOrderRows.map((row, idx) => {
                     const storedName = clientRealNames[row.clientId] || '';
                     const isEditing = editingRealNameId === row.clientId;
+                    const uniqueOrderDates = [...new Set(row.orderDates)].sort();
+                    const visibleOrderDates = uniqueOrderDates.slice(0, 3);
+                    const extraDatesCount = Math.max(0, uniqueOrderDates.length - visibleOrderDates.length);
                     return (
-                      <tr key={row.clientId} className="hover:bg-slate-50/80 transition-colors bg-white group/row">
-                        <td className="px-4 py-3.5 text-center text-slate-400 font-medium tabular-nums">{idx + 1}</td>
-                        <td className="px-4 py-3.5 text-center">
-                          <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-md font-bold text-slate-700 bg-slate-100 border border-slate-200 text-xs shadow-sm">
+                      <tr key={row.clientId} className="hover:bg-slate-50/80 transition-colors bg-white group/row align-top">
+                        <td className="px-3 py-3 text-center text-slate-400 font-medium tabular-nums">{idx + 1}</td>
+                        <td className="px-3 py-3 text-center">
+                          <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-md font-bold text-slate-700 bg-slate-100 border border-slate-200 text-xs shadow-sm whitespace-nowrap">
                             {row.clientCode}
                           </span>
                         </td>
-                        <td className="px-4 py-3.5 text-right">
+                        <td className="px-3 py-3 text-right">
                           {isEditing ? (
                             <div className="flex items-center gap-1.5">
                               <input
@@ -2417,51 +2420,51 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
                                   if (e.key === 'Escape') setEditingRealNameId(null);
                                 }}
                                 placeholder="اسم العميل..."
-                                className="flex-1 px-3 py-1.5 text-sm border border-teal-400 rounded-md focus:outline-none focus:ring-2 focus:ring-teal-400/20 min-w-0 text-right shadow-sm"
+                                className="flex-1 px-3 py-1.5 text-sm border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-0 text-right shadow-sm"
                               />
-                              <button onClick={() => handleSaveRealName(row.clientId, editingRealNameValue)} className="p-1.5 text-white bg-teal-600 rounded-md hover:bg-teal-700 shadow-sm transition-colors"><Check size={16} /></button>
-                              <button onClick={() => setEditingRealNameId(null)} className="p-1.5 text-slate-600 bg-slate-100 rounded-md hover:bg-slate-200 border border-slate-200 transition-colors"><X size={16} /></button>
+                              <button onClick={() => handleSaveRealName(row.clientId, editingRealNameValue)} className="p-1.5 text-white bg-blue-600 rounded hover:bg-blue-700 shadow-sm transition-colors"><Check size={16} /></button>
+                              <button onClick={() => setEditingRealNameId(null)} className="p-1.5 text-slate-600 bg-slate-100 rounded hover:bg-slate-200 border border-slate-200 transition-colors"><X size={16} /></button>
                             </div>
                           ) : (
-                            <div className="flex items-center gap-2 group">
-                              <span className="font-bold text-slate-800 text-base">{storedName || <span className="text-slate-400 font-normal text-sm">لم يتم التحديد</span>}</span>
+                            <div className="flex items-start gap-2 group min-h-[2.5rem]">
+                              <span className="font-medium text-slate-800 text-sm leading-6 break-words">{storedName || <span className="text-slate-400 font-normal italic text-sm">لم يتم التحديد</span>}</span>
                               {canEditFabric && (
                                 <button
                                   onClick={() => { setEditingRealNameId(row.clientId); setEditingRealNameValue(storedName); }}
-                                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded-md"
+                                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded"
                                   title="تعديل اسم العميل"
                                 ><Edit2 size={14} /></button>
                               )}
                             </div>
                           )}
                         </td>
-                        <td className="px-4 py-3.5 text-center text-slate-500 text-xs font-medium">
-                          {row.orderDates.length > 0
-                            ? <div className="flex flex-col gap-1 items-center">{[...new Set(row.orderDates)].map(d => <span key={d} className="bg-slate-50 border border-slate-100 rounded px-2 py-0.5 text-slate-600">{d}</span>)}</div>
+                        <td className="px-3 py-3 text-center text-slate-500 text-xs font-medium">
+                          {uniqueOrderDates.length > 0
+                            ? <div className="flex flex-wrap gap-1 justify-center max-w-full" title={uniqueOrderDates.join(' | ')}>{visibleOrderDates.map(d => <span key={d} className="bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5 text-slate-600 whitespace-nowrap">{d}</span>)}{extraDatesCount > 0 && <span className="bg-blue-50 text-blue-700 border border-blue-100 rounded px-1.5 py-0.5 font-medium whitespace-nowrap">+{extraDatesCount}</span>}</div>
                             : <span className="text-slate-300">-</span>}
                         </td>
-                        <td className="px-4 py-3.5 text-center font-bold text-slate-700 tabular-nums text-base">{row.totalRequired > 0 ? row.totalRequired.toLocaleString() : <span className="text-slate-300 font-normal">-</span>}</td>
-                        <td className="px-4 py-3.5 text-center font-bold text-teal-700 tabular-nums text-base">{row.totalManufactured > 0 ? row.totalManufactured.toLocaleString() : <span className="text-slate-300 font-normal">-</span>}</td>
-                        <td className="px-4 py-3.5 text-center tabular-nums">
-                          <span className={row.totalRemaining > 0 ? 'font-bold text-orange-600 bg-orange-50 px-2.5 py-1 rounded-md border border-orange-100 text-sm' : 'text-slate-300'}>{row.totalRemaining > 0 ? row.totalRemaining.toLocaleString() : '-'}</span>
+                        <td className="px-3 py-3 text-center font-medium text-slate-800 tabular-nums text-sm">{row.totalRequired > 0 ? row.totalRequired.toLocaleString() : <span className="text-slate-300 font-normal">-</span>}</td>
+                        <td className="px-3 py-3 text-center font-medium text-emerald-700 tabular-nums text-sm">{row.totalManufactured > 0 ? row.totalManufactured.toLocaleString() : <span className="text-slate-300 font-normal">-</span>}</td>
+                        <td className="px-3 py-3 text-center tabular-nums">
+                          <span className={row.totalRemaining > 0 ? 'inline-flex items-center justify-center min-w-[5rem] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 text-sm shadow-sm' : 'text-slate-300'}>{row.totalRemaining > 0 ? row.totalRemaining.toLocaleString() : '-'}</span>
                         </td>
-                        <td className="px-4 py-3.5 text-center font-bold text-indigo-600 tabular-nums text-base">{row.totalDeliveries > 0 ? row.totalDeliveries.toLocaleString() : <span className="text-slate-300 font-normal">-</span>}</td>
-                        <td className="px-4 py-3.5 text-center tabular-nums">
-                          <span className={row.deliveryRemaining > 0 ? 'font-bold text-red-600 bg-red-50 px-2.5 py-1 rounded-md border border-red-100 text-sm' : 'text-slate-300'}>{row.deliveryRemaining > 0 ? row.deliveryRemaining.toLocaleString() : '-'}</span>
+                        <td className="px-3 py-3 text-center font-medium text-blue-700 tabular-nums text-sm">{row.totalDeliveries > 0 ? row.totalDeliveries.toLocaleString() : <span className="text-slate-300 font-normal">-</span>}</td>
+                        <td className="px-3 py-3 text-center tabular-nums">
+                          <span className={row.deliveryRemaining > 0 ? 'font-medium text-slate-800 text-sm' : 'text-slate-300'}>{row.deliveryRemaining > 0 ? row.deliveryRemaining.toLocaleString() : '-'}</span>
                         </td>
                       </tr>
                     );
                   })}
                 </tbody>
                 {clientOrderRows.length > 0 && (
-                  <tfoot className="bg-slate-50 border-t-2 border-slate-200">
-                    <tr className="text-slate-800 font-bold">
-                      <td colSpan={4} className="px-4 py-4 text-left text-sm">الإجمالي الكلي</td>
-                      <td className="px-4 py-4 text-center tabular-nums text-slate-900 text-base">{clientOrderRows.reduce((a, r) => a + r.totalRequired, 0).toLocaleString()}</td>
-                      <td className="px-4 py-4 text-center tabular-nums text-teal-700 text-base">{clientOrderRows.reduce((a, r) => a + r.totalManufactured, 0).toLocaleString()}</td>
-                      <td className="px-4 py-4 text-center tabular-nums text-orange-600 text-base">{clientOrderRows.reduce((a, r) => a + r.totalRemaining, 0).toLocaleString()}</td>
-                      <td className="px-4 py-4 text-center tabular-nums text-indigo-600 text-base">{clientOrderRows.reduce((a, r) => a + r.totalDeliveries, 0).toLocaleString()}</td>
-                      <td className="px-4 py-4 text-center tabular-nums text-red-600 text-base">{clientOrderRows.reduce((a, r) => a + r.deliveryRemaining, 0).toLocaleString()}</td>
+                  <tfoot className="bg-slate-50 border-t border-slate-200">
+                    <tr className="text-slate-700 font-semibold shadow-sm">
+                      <td colSpan={4} className="px-3 py-3.5 text-left text-sm">الإجمالي الكلي</td>
+                      <td className="px-3 py-3.5 text-center tabular-nums text-slate-900 text-sm">{clientOrderRows.reduce((a, r) => a + r.totalRequired, 0).toLocaleString()}</td>
+                      <td className="px-3 py-3.5 text-center tabular-nums text-emerald-700 text-sm">{clientOrderRows.reduce((a, r) => a + r.totalManufactured, 0).toLocaleString()}</td>
+                      <td className="px-3 py-3.5 text-center tabular-nums text-slate-900 text-sm">{clientOrderRows.reduce((a, r) => a + r.totalRemaining, 0).toLocaleString()}</td>
+                      <td className="px-3 py-3.5 text-center tabular-nums text-blue-700 text-sm">{clientOrderRows.reduce((a, r) => a + r.totalDeliveries, 0).toLocaleString()}</td>
+                      <td className="px-3 py-3.5 text-center tabular-nums text-slate-900 text-sm">{clientOrderRows.reduce((a, r) => a + r.deliveryRemaining, 0).toLocaleString()}</td>
                     </tr>
                   </tfoot>
                 )}
