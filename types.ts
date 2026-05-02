@@ -407,6 +407,7 @@ export interface OrderRow {
   reorderReason?: string; // NEW: Optional reason when reorderType is restock
   createdAt?: string;
   createdBy?: string;
+  quickDeliveries?: Array<{ id: string; date: string; fabricQty: number; accessoryQty: number; notes?: string }>; // Quick deliveries without color assignment
   
   // Audit Info
   lastUpdatedBy?: string;

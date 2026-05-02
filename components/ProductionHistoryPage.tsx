@@ -762,7 +762,11 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
           if (!byMonth[m]) return;
           const prod = Number(log.dayProduction) || 0;
           const scrap = Number(log.scrap) || 0;
-          if (machine.type === 'BOUS') {
+          const isSample = log.status === 'Samples';
+          if (isSample) {
+            // Samples production is counted as scrap, not regular output (consistent with production history view)
+            if (prod > 0) byMonth[m].scrap += prod;
+          } else if (machine.type === 'BOUS') {
             byMonth[m].bous += prod;
           } else {
             byMonth[m].wide += prod;
@@ -1018,7 +1022,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
 
     if (exportSheets.prod) {
       const aoa: any[][] = [
-        [hS('#'), hS('الشهر'), hS('أيام التشغيل'), hS('المكن العريض'), hS('البوص'), hS('خارجي'), hS('إجمالي الانتاج'), hS('الداخلي بدون بوص'), hS('السقط'), hS('تسليمات العملاء')],
+        [hS('#'), hS('الشهر'), hS('أيام التشغيل'), hS('المكن العريض'), hS('البوص'), hS('خارجي'), hS('إجمالي الانتاج'), hS('الداخلي بدون بوص'), hS('السقط+انتاج العينات'), hS('تسليمات العملاء')],
         ...prodStats.rows.map(r => [dS(r.idx), dS(r.monthName), dS(r.workingDays), dS(fmtN(r.wide)), dS(fmtN(r.bous)), dS(fmtN(r.external)), dS(fmtN(r.totalProduction)), dS(fmtN(r.netProduction)), dS(fmtN(r.scrap)), dS(fmtN(r.deliveries))]),
         [tS(''), tS('الإجمالي'), tS(prodStats.totals.workingDays), tS(fmtN(prodStats.totals.wide)), tS(fmtN(prodStats.totals.bous)), tS(fmtN(prodStats.totals.external)), tS(fmtN(prodStats.totals.totalProduction)), tS(fmtN(prodStats.totals.netProduction)), tS(fmtN(prodStats.totals.scrap)), tS(fmtN(prodStats.totals.deliveries))],
       ];
@@ -1326,7 +1330,7 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
                     <th className="px-4 py-3 text-center border-l border-b border-slate-200 whitespace-nowrap" style={{ minWidth: 90 }}>البوص</th>
                     <th className="px-4 py-3 text-center border-l border-b border-slate-200 whitespace-nowrap bg-orange-50/50 text-orange-700" style={{ minWidth: 100 }}>الخارجي</th>
                     <th className="px-4 py-3 text-center border-l border-b border-slate-200 whitespace-nowrap" style={{ minWidth: 100 }}>اجمالي الانتاج</th>
-                    <th className="px-4 py-3 text-center border-l border-b border-slate-200 whitespace-nowrap bg-red-50/50 text-red-700" style={{ minWidth: 90 }}>السقط</th>
+                    <th className="px-4 py-3 text-center border-l border-b border-slate-200 whitespace-nowrap bg-red-50/50 text-red-700" style={{ minWidth: 90 }}>السقط+انتاج العينات</th>
                     <th className="px-4 py-3 text-center border-b border-slate-200 whitespace-nowrap bg-indigo-50/50 text-indigo-700" style={{ minWidth: 120 }}>صافي تسليمات العملاء</th>
                   </tr>
                 </thead>

@@ -1,8 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { X, Plus, Trash2, Calendar, RotateCcw } from 'lucide-react';
+import { X, Plus, Trash2, Calendar, RotateCcw, Zap } from 'lucide-react';
 import { DyeingBatch, DeliveryEvent, ReturnEvent } from '../types';
 import { updateDoc, doc, getDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
+
+interface QuickDelivery {
+  id: string;
+  date: string;
+  fabricQty: number;
+  accessoryQty: number;
+  notes?: string;
+}
 
 interface CustomerDeliveryModalProps {
   isOpen: boolean;
@@ -10,6 +18,8 @@ interface CustomerDeliveryModalProps {
   customerId: string;
   orderId: string;
   batches: DyeingBatch[] | null; // All batches/colors for this order
+  quickDeliveries?: QuickDelivery[]; // Order-level quick deliveries
+  onQuickDeliveriesChange?: (deliveries: QuickDelivery[]) => void;
 }
 
 export const CustomerDeliveryModal: React.FC<CustomerDeliveryModalProps> = ({
@@ -18,7 +28,10 @@ export const CustomerDeliveryModal: React.FC<CustomerDeliveryModalProps> = ({
   customerId,
   orderId,
   batches,
+  quickDeliveries: initialQuickDeliveries = [],
+  onQuickDeliveriesChange,
 }) => {
+  const [activeTab, setActiveTab] = useState<'quick' | 'colors'>('quick');
   const [colorBatches, setColorBatches] = useState<DyeingBatch[]>([]);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedColorId, setSelectedColorId] = useState<string | null>(null);
@@ -27,10 +40,21 @@ export const CustomerDeliveryModal: React.FC<CustomerDeliveryModalProps> = ({
   const [showForm, setShowForm] = useState(false);
   const [formType, setFormType] = useState<'delivery' | 'return'>('delivery');
 
+  // Quick entry state
+  const [quickDeliveries, setQuickDeliveries] = useState<QuickDelivery[]>(initialQuickDeliveries);
+  const [quickForm, setQuickForm] = useState<{ date: string; fabricQty: string; accessoryQty: string; notes: string }>({
+    date: new Date().toISOString().split('T')[0],
+    fabricQty: '',
+    accessoryQty: '',
+    notes: '',
+  });
+  const [quickLoading, setQuickLoading] = useState(false);
+
   useEffect(() => {
     if (isOpen && batches) {
       setColorBatches(batches);
       setShowForm(false);
+      setActiveTab('quick');
       // Initialize delivery data for all colors
       const initData: typeof deliveryData = {};
       batches.forEach(batch => {
@@ -40,6 +64,7 @@ export const CustomerDeliveryModal: React.FC<CustomerDeliveryModalProps> = ({
       if (batches.length > 0) {
         setSelectedColorId(batches[0].id);
       }
+      setQuickDeliveries(initialQuickDeliveries || []);
     }
   }, [isOpen, batches]);
 
@@ -229,7 +254,57 @@ export const CustomerDeliveryModal: React.FC<CustomerDeliveryModalProps> = ({
     }
   };
 
-  if (!isOpen || !batches || batches.length === 0) return null;
+  const handleAddQuickDelivery = async () => {
+    const fabricQty = Number(quickForm.fabricQty) || 0;
+    const accessoryQty = Number(quickForm.accessoryQty) || 0;
+    if (fabricQty <= 0 && accessoryQty <= 0) {
+      alert('❌ Enter fabric or accessory quantity');
+      return;
+    }
+    setQuickLoading(true);
+    try {
+      const orderRef = doc(db, 'CustomerSheets', customerId, 'orders', orderId);
+      const docSnap = await getDoc(orderRef);
+      if (!docSnap.exists()) { alert('❌ Order not found'); setQuickLoading(false); return; }
+      const newEntry: QuickDelivery = {
+        id: `quick_${Date.now()}`,
+        date: quickForm.date,
+        fabricQty,
+        accessoryQty,
+        notes: quickForm.notes || undefined,
+      };
+      const existing: QuickDelivery[] = docSnap.data().quickDeliveries || [];
+      const updated = [...existing, newEntry];
+      await updateDoc(orderRef, { quickDeliveries: updated });
+      setQuickDeliveries(updated);
+      onQuickDeliveriesChange?.(updated);
+      setQuickForm({ date: new Date().toISOString().split('T')[0], fabricQty: '', accessoryQty: '', notes: '' });
+    } catch (e) {
+      alert('❌ Failed to save: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setQuickLoading(false);
+    }
+  };
+
+  const handleDeleteQuickDelivery = async (id: string) => {
+    setQuickLoading(true);
+    try {
+      const orderRef = doc(db, 'CustomerSheets', customerId, 'orders', orderId);
+      const docSnap = await getDoc(orderRef);
+      if (!docSnap.exists()) { setQuickLoading(false); return; }
+      const existing: QuickDelivery[] = docSnap.data().quickDeliveries || [];
+      const updated = existing.filter(d => d.id !== id);
+      await updateDoc(orderRef, { quickDeliveries: updated });
+      setQuickDeliveries(updated);
+      onQuickDeliveriesChange?.(updated);
+    } catch (e) {
+      alert('❌ Failed to delete: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setQuickLoading(false);
+    }
+  };
+
+  if (!isOpen || !batches) return null;
 
   const currentColor = colorBatches.find(b => b.id === selectedColorId);
 
@@ -237,18 +312,145 @@ export const CustomerDeliveryModal: React.FC<CustomerDeliveryModalProps> = ({
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-slate-200">
-          <div>
-            <h2 className="text-2xl font-bold text-slate-800">Customer Delivery</h2>
-            <p className="text-sm text-slate-500 mt-1">Track deliveries for all colors in this order</p>
+        <div className="flex items-center justify-between px-6 pt-6 pb-0 border-b border-slate-200">
+          <div className="flex-1">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-xl font-bold text-slate-800">Customer Delivery</h2>
+              <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+                <X size={22} />
+              </button>
+            </div>
+            {/* Tabs */}
+            <div className="flex gap-1">
+              <button
+                onClick={() => setActiveTab('quick')}
+                className={`flex items-center gap-1.5 px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${activeTab === 'quick' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+              >
+                <Zap size={14} />
+                Quick Entry
+              </button>
+              <button
+                onClick={() => setActiveTab('colors')}
+                className={`flex items-center gap-1.5 px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${activeTab === 'colors' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+              >
+                By Color
+                {colorBatches.length > 0 && <span className="text-xs bg-slate-100 text-slate-500 rounded-full px-1.5">{colorBatches.length}</span>}
+              </button>
+            </div>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-            <X size={24} />
-          </button>
         </div>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
+
+          {/* ── QUICK ENTRY TAB ── */}
+          {activeTab === 'quick' && (
+            <div>
+              {/* Add form */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 mb-6">
+                <h3 className="text-sm font-semibold text-slate-700 mb-4">Add Delivery Entry</h3>
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-500 mb-1 block">Date</label>
+                    <input
+                      type="date"
+                      value={quickForm.date}
+                      onChange={e => setQuickForm(f => ({ ...f, date: e.target.value }))}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-500 mb-1 block">Notes (optional)</label>
+                    <input
+                      type="text"
+                      value={quickForm.notes}
+                      onChange={e => setQuickForm(f => ({ ...f, notes: e.target.value }))}
+                      placeholder="e.g. Invoice #1234"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div>
+                    <label className="text-xs font-medium text-slate-500 mb-1 block">Fabric (kg)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={quickForm.fabricQty}
+                      onChange={e => setQuickForm(f => ({ ...f, fabricQty: e.target.value }))}
+                      placeholder="0"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-500 mb-1 block">Accessory (kg)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={quickForm.accessoryQty}
+                      onChange={e => setQuickForm(f => ({ ...f, accessoryQty: e.target.value }))}
+                      placeholder="0"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={handleAddQuickDelivery}
+                  disabled={quickLoading}
+                  className="w-full py-2.5 bg-slate-800 hover:bg-slate-900 disabled:bg-slate-300 text-white font-semibold rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
+                >
+                  <Plus size={15} />
+                  {quickLoading ? 'Saving...' : 'Save Delivery'}
+                </button>
+              </div>
+
+              {/* History */}
+              {quickDeliveries.length > 0 ? (
+                <div>
+                  <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">History</h3>
+                  <div className="space-y-2">
+                    {[...quickDeliveries].reverse().map(d => (
+                      <div key={d.id} className="flex items-center justify-between bg-white border border-slate-200 rounded-lg px-4 py-3">
+                        <div className="flex items-center gap-4">
+                          <span className="text-xs text-slate-500 font-medium w-24">{d.date}</span>
+                          <span className="text-sm font-semibold text-slate-800">{d.fabricQty} kg fabric</span>
+                          {d.accessoryQty > 0 && (
+                            <span className="text-sm text-emerald-700 font-medium">+ {d.accessoryQty} kg acc</span>
+                          )}
+                          {d.notes && <span className="text-xs text-slate-400">{d.notes}</span>}
+                        </div>
+                        <button
+                          onClick={() => handleDeleteQuickDelivery(d.id)}
+                          disabled={quickLoading}
+                          className="text-slate-300 hover:text-red-500 transition-colors"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Totals */}
+                  <div className="mt-4 flex gap-4 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3">
+                    <div className="text-sm">
+                      <span className="text-slate-500">Total Fabric:</span>
+                      <span className="ml-2 font-bold text-slate-800">{quickDeliveries.reduce((s, d) => s + d.fabricQty, 0)} kg</span>
+                    </div>
+                    <div className="text-sm">
+                      <span className="text-slate-500">Total Accessory:</span>
+                      <span className="ml-2 font-bold text-emerald-700">{quickDeliveries.reduce((s, d) => s + d.accessoryQty, 0)} kg</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-8 text-slate-400 text-sm">No quick deliveries recorded yet</div>
+              )}
+            </div>
+          )}
+
+          {/* ── BY COLOR TAB ── */}
+          {activeTab === 'colors' && (<>
           {/* Colors Grid */}
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
             {colorBatches.map(batch => {
@@ -569,6 +771,7 @@ export const CustomerDeliveryModal: React.FC<CustomerDeliveryModalProps> = ({
               )}
             </div>
           )}
+          </>)}
         </div>
 
         {/* Footer */}

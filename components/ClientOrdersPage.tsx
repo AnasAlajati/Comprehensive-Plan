@@ -2512,10 +2512,15 @@ const MemoizedOrderRow = React.memo(({
               const totalAccReturned = allReturns.reduce((s, e) => {
                 return s + Object.values(e.accessoryReturns || {}).reduce((a, b) => a + (b || 0), 0);
               }, 0);
+
+              // Count quick deliveries (order-level, no color)
+              const quickDeliveries = row.quickDeliveries || [];
+              const quickFabric = quickDeliveries.reduce((s, d) => s + (Number(d.fabricQty) || 0), 0);
+              const quickAcc = quickDeliveries.reduce((s, d) => s + (Number(d.accessoryQty) || 0), 0);
               
-              // Net = Delivered - Returned
-              const netQty = totalDelivered - totalReturned;
-              const netAcc = totalAccDelivered - totalAccReturned;
+              // Net = Delivered - Returned + Quick
+              const netQty = totalDelivered - totalReturned + quickFabric;
+              const netAcc = totalAccDelivered - totalAccReturned + quickAcc;
               
               return (
                 <button
@@ -10405,13 +10410,15 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
 
         {/* Customer Delivery Modal */}
-        {deliveryModal.isOpen && deliveryModal.batches && (
+        {deliveryModal.isOpen && deliveryModal.batches !== null && (
           <CustomerDeliveryModal
             isOpen={deliveryModal.isOpen}
             onClose={() => setDeliveryModal({ ...deliveryModal, isOpen: false, batches: null })}
             customerId={deliveryModal.customerId}
             orderId={deliveryModal.orderId}
             batches={deliveryModal.batches}
+            quickDeliveries={flatOrders.find(o => o.id === deliveryModal.orderId)?.quickDeliveries || []}
+            onQuickDeliveriesChange={(updated) => handleUpdateOrder(deliveryModal.orderId, { quickDeliveries: updated })}
           />
         )}
 
