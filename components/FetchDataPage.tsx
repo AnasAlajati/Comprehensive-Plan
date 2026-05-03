@@ -3905,6 +3905,8 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
         <ExternalProductionSheet 
           date={selectedDate} 
           onClose={() => setShowExternalSheet(false)}
+          seasonId={flSeason || undefined}
+          seasonName={flSeason ? (flSeasonOptions.find(s => s.id === flSeason)?.name || undefined) : undefined}
           onUpdateTotal={(total, scrap) => {
              setExternalProduction(total);
              const s = scrap || 0;

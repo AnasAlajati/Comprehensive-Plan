@@ -239,8 +239,19 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
             if (!clientMap[cid]) clientMap[cid] = { clientId: cid, clientCode, orderDates: [], totalRequired: 0, totalManufactured: 0, totalRemaining: 0, totalDeliveries: 0 };
             if (o.orderReceiptDate) clientMap[cid].orderDates.push(o.orderReceiptDate);
             clientMap[cid].totalRequired += Number(o.requiredQty) || 0;
-            clientMap[cid].totalManufactured += Number(o.manufacturedQty) || 0;
-            clientMap[cid].totalRemaining += Number(o.remainingQty) || 0;
+            // Compute manufactured from dyeingPlan receive events (receiveEvents.quantityRaw or legacy receivedQuantity)
+            let orderManufactured = 0;
+            (o.dyeingPlan || []).forEach((batch: any) => {
+              if (batch.receiveEvents && batch.receiveEvents.length > 0) {
+                batch.receiveEvents.forEach((ev: any) => {
+                  orderManufactured += Number(ev.quantityRaw) || 0;
+                });
+              } else {
+                orderManufactured += Number(batch.receivedQuantity) || 0;
+              }
+            });
+            clientMap[cid].totalManufactured += orderManufactured;
+            // remaining is computed after all orders are summed (see below)
             // Sum delivery events from dyeingPlan batches
             let deliveries = Number(o.batchDeliveries) || 0;
             (o.dyeingPlan || []).forEach((batch: any) => {
@@ -252,7 +263,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
           });
         }));
         const rows = Object.values(clientMap)
-          .map(r => ({ ...r, deliveryRemaining: Math.max(0, r.totalRequired - r.totalDeliveries) }))
+          .map(r => ({ ...r, totalRemaining: Math.max(0, r.totalRequired - r.totalManufactured), deliveryRemaining: Math.max(0, r.totalRequired - r.totalDeliveries) }))
           .sort((a, b) => b.totalRequired - a.totalRequired);
         setClientOrderRows(rows);
       } catch (e) { console.error('Error fetching client orders:', e); }

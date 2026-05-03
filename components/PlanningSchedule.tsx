@@ -8,7 +8,7 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { doc, onSnapshot, setDoc, updateDoc, collection, getDocs, deleteDoc, collectionGroup, query, where } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { Search, Play, GripVertical, Factory, Plus, History } from 'lucide-react';
+import { Search, Play, GripVertical, Factory, Plus, History, X } from 'lucide-react';
 
 // Global CSS to hide number input spinners
 const globalStyles = `
@@ -257,6 +257,33 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
   const [viewMode, setViewMode] = useState<'INTERNAL' | 'EXTERNAL'>(initialViewMode);
   const [externalFactories, setExternalFactories] = useState<ExternalFactory[]>([]);
   const [newFactoryName, setNewFactoryName] = useState('');
+
+  // Order picker for external plans
+  const [extOrderPicker, setExtOrderPicker] = useState<{
+    isOpen: boolean;
+    factoryId: string;
+    planIndex: number;
+    season: string;
+    clientId: string;
+    fabric: string;
+    orderId: string;
+  }>({ isOpen: false, factoryId: '', planIndex: -1, season: '', clientId: '', fabric: '', orderId: '' });
+  const [seasons, setSeasons] = useState<{ id: string; name: string }[]>([]);
+  const [allFlatOrders, setAllFlatOrders] = useState<any[]>([]);
+
+  // Load seasons
+  useEffect(() => {
+    getDocs(collection(db, 'Seasons')).then(snap => {
+      setSeasons(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+    }).catch(() => {});
+  }, []);
+
+  // Load flat orders (sub-collection) for order picker
+  useEffect(() => {
+    getDocs(collectionGroup(db, 'orders')).then(snap => {
+      setAllFlatOrders(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+    }).catch(() => {});
+  }, []);
 
   // Load External Factories
   useEffect(() => {
@@ -1981,14 +2008,24 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                           />
                         </td>
                         <td className="p-1 relative group">
-                           <SearchDropdown
-                            id={`ext-client-${factory.id}-${index}`}
-                            options={clients}
-                            value={plan.client || ''}
-                            onChange={(val) => handleUpdateExternalPlan(factory.id, index, 'client', val)}
-                            placeholder="-"
-                            className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent font-bold text-slate-700"
-                          />
+                           <button
+                            onClick={() => setExtOrderPicker({
+                              isOpen: true,
+                              factoryId: factory.id,
+                              planIndex: index,
+                              season: (plan as any).seasonId || '',
+                              clientId: (plan as any).clientId || '',
+                              fabric: plan.fabric || '',
+                              orderId: (plan as any).orderId || ''
+                            })}
+                            className={`w-full text-center py-1.5 px-2 rounded border transition-colors text-xs font-bold ${
+                              plan.client
+                                ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
+                                : 'bg-white border-dashed border-slate-300 text-slate-400 hover:border-blue-300 hover:text-blue-500'
+                            }`}
+                          >
+                            {plan.client || '+ Link Order'}
+                          </button>
                           {plan.client && (
                             <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 bg-slate-800 text-white text-xs rounded shadow-lg z-20 whitespace-nowrap pointer-events-none">
                               {plan.client}
@@ -2220,6 +2257,204 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
           machines={rawMachineDocs}
         />
       )}
+
+      {/* External Order Picker Modal */}
+      {extOrderPicker.isOpen && (() => {
+        const pickerSeason = extOrderPicker.season;
+        const pickerClientId = extOrderPicker.clientId;
+        const selectedSeasonName = seasons.find(s => s.id === pickerSeason)?.name || '';
+
+        const orderMatchesSeason = (o: any) => {
+          if (!pickerSeason) return true;
+          if (o.seasonId) return o.seasonId === pickerSeason || o.seasonName === selectedSeasonName;
+          return pickerSeason === '2025-summer';
+        };
+
+        const filteredClients = pickerSeason
+          ? clients.filter((c: any) => allFlatOrders.some(o => o.customerId === c.id && orderMatchesSeason(o)))
+          : clients;
+        const sortedClients = [...filteredClients].sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
+
+        const clientOrders = pickerClientId
+          ? allFlatOrders.filter(o => o.customerId === pickerClientId && orderMatchesSeason(o))
+          : [];
+
+        const selectedClientName = clients.find((c: any) => c.id === pickerClientId)?.name || '';
+        const canApply = !!(pickerClientId && extOrderPicker.fabric && extOrderPicker.orderId);
+
+        return (
+          <div
+            className="fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center p-4"
+            onClick={() => setExtOrderPicker(p => ({ ...p, isOpen: false }))}
+          >
+            <div
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-4 flex items-center justify-between">
+                <div>
+                  <p className="text-indigo-200 text-xs font-medium uppercase tracking-wide">Link Order to External Plan</p>
+                  <h2 className="text-white font-bold text-lg leading-tight">
+                    {externalFactories.find(f => f.id === extOrderPicker.factoryId)?.name || 'External Factory'}
+                  </h2>
+                </div>
+                <button
+                  onClick={() => setExtOrderPicker(p => ({ ...p, isOpen: false }))}
+                  className="p-2 text-indigo-200 hover:text-white hover:bg-white/20 rounded-full transition"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 overflow-auto max-h-[70vh]">
+                {/* Season */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Season</label>
+                  <div className="flex flex-wrap gap-2">
+                    {seasons.length === 0 && <span className="text-sm text-slate-400 italic">No seasons found</span>}
+                    {seasons.map(s => (
+                      <button
+                        key={s.id}
+                        onClick={() => setExtOrderPicker(p => ({ ...p, season: s.id, clientId: '', fabric: '', orderId: '' }))}
+                        className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                          pickerSeason === s.id
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                            : 'bg-white text-slate-600 border-slate-300 hover:border-indigo-400 hover:text-indigo-600'
+                        }`}
+                      >
+                        {s.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Client */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">
+                    Client
+                    {pickerSeason && sortedClients.length > 0 && (
+                      <span className="ml-2 text-slate-400 font-normal normal-case">{sortedClients.length} available</span>
+                    )}
+                  </label>
+                  {!pickerSeason ? (
+                    <p className="text-sm text-slate-400 italic">Select a season first</p>
+                  ) : sortedClients.length === 0 ? (
+                    <p className="text-sm text-amber-600">No clients have orders in this season.</p>
+                  ) : (
+                    <select
+                      value={pickerClientId}
+                      onChange={e => setExtOrderPicker(p => ({ ...p, clientId: e.target.value, fabric: '', orderId: '' }))}
+                      className="w-full border-2 border-slate-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-indigo-500 transition-colors"
+                    >
+                      <option value="">— Choose client —</option>
+                      {sortedClients.map((c: any) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* Fabric / Order */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">
+                    Fabric / Order
+                    {pickerClientId && clientOrders.length > 0 && (
+                      <span className="ml-2 text-slate-400 font-normal normal-case">
+                        {clientOrders.filter((o: any) => o.material).length} order{clientOrders.filter((o: any) => o.material).length !== 1 ? 's' : ''}
+                      </span>
+                    )}
+                  </label>
+                  {!pickerClientId ? (
+                    <p className="text-sm text-slate-400 italic">Select a client first</p>
+                  ) : clientOrders.length === 0 ? (
+                    <p className="text-sm text-amber-600">No orders found for this client &amp; season.</p>
+                  ) : (
+                    <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto pr-1">
+                      {clientOrders.filter((o: any) => o.material).map((o: any) => {
+                        const isSelected = extOrderPicker.fabric === o.material && extOrderPicker.orderId === o.id;
+                        return (
+                          <button
+                            key={o.id}
+                            onClick={() => setExtOrderPicker(p => ({ ...p, fabric: o.material, orderId: o.id }))}
+                            className={`w-full text-left px-4 py-3 rounded-xl border-2 transition-all ${
+                              isSelected
+                                ? 'border-indigo-500 bg-indigo-50 shadow-sm'
+                                : 'border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className={`font-semibold text-sm leading-snug ${isSelected ? 'text-indigo-700' : 'text-slate-800'}`}>{o.material}</div>
+                            <div className="flex gap-3 mt-1 flex-wrap">
+                              <span className="text-[11px] text-slate-400 font-mono">#{o.id.slice(0, 8)}</span>
+                              {o.requiredQty > 0 && <span className="text-[11px] text-slate-500">Req: <span className="font-medium">{Number(o.requiredQty).toLocaleString()} kg</span></span>}
+                              {o.remainingQty > 0 && <span className="text-[11px] text-slate-500">Rem: <span className="font-medium text-amber-600">{Number(o.remainingQty).toLocaleString()} kg</span></span>}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Preview */}
+                {canApply && (
+                  <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl px-4 py-3 flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] text-indigo-500 font-bold uppercase tracking-wide mb-0.5">Will be saved as</p>
+                      <p className="text-sm font-bold text-indigo-800 truncate">{selectedClientName}</p>
+                      <p className="text-xs text-indigo-600 truncate">{extOrderPicker.fabric}</p>
+                      {extOrderPicker.orderId && <p className="text-[10px] text-indigo-400 font-mono mt-0.5">Order #{extOrderPicker.orderId.slice(0, 8)}</p>}
+                    </div>
+                    <div className="text-indigo-400 text-xl">→</div>
+                    <div className="shrink-0 font-bold text-indigo-700 text-sm">
+                      {externalFactories.find(f => f.id === extOrderPicker.factoryId)?.name}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="border-t border-slate-100 px-5 py-4 flex gap-3">
+                <button
+                  onClick={() => setExtOrderPicker(p => ({ ...p, isOpen: false }))}
+                  className="flex-1 py-2.5 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold text-sm hover:bg-slate-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={!canApply}
+                  onClick={async () => {
+                    if (!canApply) return;
+                    const { factoryId, planIndex, fabric, orderId, season } = extOrderPicker;
+                    // Save client name, fabric, orderId and seasonId all at once
+                    const factory = externalFactories.find(f => f.id === factoryId);
+                    if (!factory) return;
+                    const updatedPlans = [...factory.plans];
+                    updatedPlans[planIndex] = {
+                      ...updatedPlans[planIndex],
+                      client: selectedClientName,
+                      fabric,
+                      orderId,
+                      seasonId: season,
+                    };
+                    // Auto-generate reference
+                    if (selectedClientName && fabric) {
+                      const initials = fabric.split(/[\s-]+/).map((w: string) => w[0]).join('').toUpperCase();
+                      updatedPlans[planIndex].orderReference = `${selectedClientName}-${initials}`;
+                    }
+                    await updateDoc(doc(db, 'ExternalPlans', factoryId), { plans: updatedPlans });
+                    setExternalFactories(externalFactories.map(f => f.id === factoryId ? { ...f, plans: updatedPlans } : f));
+                    setExtOrderPicker(p => ({ ...p, isOpen: false }));
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  Apply
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

@@ -1070,7 +1070,8 @@ const MemoizedOrderRow = React.memo(({
   selectedCustomerSeasonId,
   selectedCustomerSeasonName,
   ordersColVis,
-  onReorder
+  onReorder,
+  allExternalLogs
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -1118,6 +1119,7 @@ const MemoizedOrderRow = React.memo(({
   selectedCustomerSeasonName?: string;
   ordersColVis?: Record<string, boolean>;
   onReorder: (row: OrderRow, reorderType?: 'طلب عميل' | 'استعواض') => Promise<void>;
+  allExternalLogs?: any[];
 }) => {
   // Viewer role is read-only
   const isReadOnly = userRole === 'viewer';
@@ -1231,9 +1233,22 @@ const MemoizedOrderRow = React.memo(({
         }
       });
     });
+
+    // Also sum external production records.
+    // External logs without clientSeason are legacy (field was never saved) — treat as season-match.
+    (allExternalLogs || []).forEach((ext: any) => {
+      if (!ext || normalize(ext.client) !== targetClient) return;
+      if (!isReOrder && normalize(ext.fabric) !== targetFabric) return;
+      if (isReOrder && ext.orderId !== row.id) return;
+      const extSeasonOk = !ext.clientSeason
+        || !selectedCustomerSeasonId
+        || ext.clientSeason === selectedCustomerSeasonId
+        || ext.clientSeason === selectedCustomerSeasonName;
+      if (extSeasonOk) total += Number(ext.receivedQty) || 0;
+    });
     
     return total;
-  }, [machines, selectedCustomerName, row.material, row.id, row.reorderOfId, selectedCustomerSeasonId, selectedCustomerSeasonName]);
+  }, [machines, selectedCustomerName, row.material, row.id, row.reorderOfId, selectedCustomerSeasonId, selectedCustomerSeasonName, allExternalLogs]);
 
   // Calculate Assigned Machines Summary & Total Capacity
   const { summary: assignedMachinesSummary, totalCapacity, totalSent, totalReceived, totalDelivered, scrapPercentage, scrapQuantity, groupedBatches } = useMemo(() => {
@@ -5089,6 +5104,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
   const [externalFactories, setExternalFactories] = useState<any[]>([]);
   const [externalScrapMap, setExternalScrapMap] = useState<Record<string, number>>({});
+  const [rawExternalLogs, setRawExternalLogs] = useState<any[]>([]);
   const [showExportModal, setShowExportModal] = useState(false);
   const [selectedClientsForExport, setSelectedClientsForExport] = useState<Set<string>>(new Set());
   const [showDyehouseExportModal, setShowDyehouseExportModal] = useState(false);
@@ -5502,19 +5518,24 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             const q = query(collection(db, 'externalProduction'), where('client', '==', client.name));
             unsubExternalLogs = onSnapshot(q, (snapshot) => {
                 const scrapMap: Record<string, number> = {};
+                const rawLogs: any[] = [];
                 snapshot.docs.forEach(doc => {
                     const data = doc.data();
                     const fabric = (data.fabric || '').trim().toLowerCase();
                     const scrap = Number(data.scrap) || 0;
                     scrapMap[fabric] = (scrapMap[fabric] || 0) + scrap;
+                    rawLogs.push({ id: doc.id, ...data });
                 });
                 setExternalScrapMap(scrapMap);
+                setRawExternalLogs(rawLogs);
             });
         } else {
              setExternalScrapMap({});
+             setRawExternalLogs([]);
         }
     } else {
         setExternalScrapMap({});
+        setRawExternalLogs([]);
     }
 
     return () => {
@@ -6154,19 +6175,27 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
   const orderTotals = useMemo(() => {
     if (!selectedCustomer || !selectedCustomer.orders) {
-      return { ordered: 0, manufactured: 0, remaining: 0, colored: 0, progress: 0 };
+      return { ordered: 0, manufactured: 0, remaining: 0, colored: 0, progress: 0, accessory: 0, orderedPlusAccessory: 0 };
     }
 
     let totalOrdered = 0;
     let totalRemaining = 0;
     let totalColored = 0;
+    let totalAccessory = 0;
 
     selectedCustomer.orders.forEach(order => {
         const required = order.requiredQty || 0;
         totalOrdered += required;
+        totalAccessory += Number(order.accessoryQty) || 0;
 
-        // Use row remainingQty directly for performance
-        const displayRemaining = order.remainingQty ?? (required - (order.producedQty || 0));
+        // Mirror the same displayRemaining logic used in OrderRowCard:
+        // if the order has an active machine → use statusInfo.remaining (live from logs)
+        // otherwise fall back to the stored remainingQty on the order doc
+        const orderIdStatus = orderIdStatsMap.get(order.id);
+        const statusInfoBase = order.reorderOfId ? null : (order.material ? statsMap.get(order.material) : null);
+        const rowStatusInfo = orderIdStatus ?? statusInfoBase;
+        const hasActive = rowStatusInfo && rowStatusInfo.active && rowStatusInfo.active.length > 0;
+        const displayRemaining = hasActive ? (rowStatusInfo.remaining ?? 0) : (order.remainingQty ?? (required - (order.producedQty || 0)));
         totalRemaining += displayRemaining;
         
         // Sum all dyehouse plan batch capacities (colored by customer)
@@ -6190,8 +6219,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     const totalManufactured = Math.max(0, totalOrdered - totalRemaining);
     const progress = totalOrdered > 0 ? (totalManufactured / totalOrdered) * 100 : 0;
 
-    return { ordered: totalOrdered, manufactured: totalManufactured, remaining: totalRemaining, colored: totalColored, progress };
-  }, [selectedCustomer]);
+    return { ordered: totalOrdered, manufactured: totalManufactured, remaining: totalRemaining, colored: totalColored, progress, accessory: totalAccessory, orderedPlusAccessory: totalOrdered + totalAccessory };
+  }, [selectedCustomer, statsMap, orderIdStatsMap]);
 
   const totalYarnRequirements = useMemo(() => {
     if (!selectedCustomer || !selectedCustomer.orders) return [];
@@ -8279,6 +8308,10 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
           return sum + (delivered + accDelivered) - (returned + accReturned);
         }, 0);
         
+        // Calculate total accessory
+        const totalAccessoryQty = orders.reduce((sum, o) => sum + (Number(o.accessoryQty) || 0), 0);
+        const totalOrderedPlusAccessory = totalOrdered + totalAccessoryQty;
+
         // Footer Headers Row
         wsData.push([
             { v: "ما تم تشكيله من طلبية العميل", s: footerHeaderStyle }, // Left Table Header
@@ -8333,6 +8366,20 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             null,
             { v: "اجمالى التسليمات (خامة+اكسسوار)", s: footerHeaderStyle }, // Right Header (Bottom)
             { v: totalDelivered, s: footerValueStyle }
+        ]);
+
+        // Footer Row 4 — Accessory totals
+        wsData.push([
+            { v: "اجمالى الاكسسوار", s: footerHeaderStyle },
+            { v: totalAccessoryQty, s: footerValueStyle },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            { v: "اجمالى الطلبية + الاكسسوار", s: footerHeaderStyle },
+            { v: totalOrderedPlusAccessory, s: footerValueStyle }
         ]);
         
         // Footer Merges
@@ -9147,7 +9194,11 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                               groupedOrders.ordered.map((row) => {
                                 const orderIdStatus = orderIdStatsMap.get(row.id);
                                 const statusInfoBase = row.reorderOfId ? null : (row.material ? statsMap.get(row.material) : null);
-                                const statusInfo = orderIdStatus ?? statusInfoBase;
+                                const baseStatusInfo = orderIdStatus ?? statusInfoBase;
+                                const extScrap = externalScrapMap[(row.material || '').trim().toLowerCase()] || 0;
+                                const statusInfo = baseStatusInfo
+                                  ? { ...baseStatusInfo, scrap: (baseStatusInfo.scrap || 0) + extScrap }
+                                  : (extScrap > 0 ? { active: [], planned: [], scrap: extScrap, remaining: 0, startDate: null, endDate: null, others: '' } : null);
                                 const statusMatchType: 'orderId' | 'legacy' = (orderIdStatus || row.reorderOfId) ? 'orderId' : 'legacy';
                                 const isSelected = selectedRows.has(row.id);
                                 const flashNew = newRowFlashId === row.id;
@@ -9189,6 +9240,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                     handleCreateDyehouse={handleCreateDyehouse}
                                     machines={machines}
                                     subLogsByMachineId={subLogsByMachineId}
+                                    allExternalLogs={rawExternalLogs}
                                     externalFactories={externalFactories}
                                     allOrders={flatOrders}
                                     userRole={userRole}
@@ -9256,7 +9308,11 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                  filteredOrders.map(order => {
                                    const orderIdStatus = orderIdStatsMap.get(order.id);
                                    const statusInfoBase = order.reorderOfId ? null : (order.material ? statsMap.get(order.material) : null);
-                                   const statusInfo = orderIdStatus ?? statusInfoBase;
+                                   const baseStatusInfoCard = orderIdStatus ?? statusInfoBase;
+                                   const extScrapCard = externalScrapMap[(order.material || '').trim().toLowerCase()] || 0;
+                                   const statusInfo = baseStatusInfoCard
+                                     ? { ...baseStatusInfoCard, scrap: (baseStatusInfoCard.scrap || 0) + extScrapCard }
+                                     : (extScrapCard > 0 ? { active: [], planned: [], scrap: extScrapCard, remaining: 0, startDate: null, endDate: null, others: '' } : null);
                                    const fabricDef = fabrics.find(f => f.name === order.material);
                                    const imageUrl = fabricDef ? fabricDef.imageUrl : undefined;
                                    const hasHistory = historySet.has(order.material || '');
@@ -9367,6 +9423,26 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                     className="bg-blue-600 h-2.5 rounded-full transition-all duration-500" 
                                     style={{ width: `${Math.min(100, Math.max(0, orderTotals.progress))}%` }}
                                 ></div>
+                            </div>
+                        </div>
+
+                        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
+                            <div>
+                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Accessory</p>
+                                <p className="text-2xl font-bold text-purple-600 mt-1">{orderTotals.accessory.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
+                            </div>
+                            <div className="p-3 bg-purple-50 rounded-full">
+                                <Package className="w-6 h-6 text-purple-600" />
+                            </div>
+                        </div>
+
+                        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
+                            <div>
+                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Ordered + Accessory</p>
+                                <p className="text-2xl font-bold text-slate-700 mt-1">{orderTotals.orderedPlusAccessory.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
+                            </div>
+                            <div className="p-3 bg-slate-100 rounded-full">
+                                <Package className="w-6 h-6 text-slate-600" />
                             </div>
                         </div>
                           </>

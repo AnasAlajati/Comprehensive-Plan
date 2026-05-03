@@ -191,7 +191,10 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
                     logSeason: data.clientSeason || undefined
                 };
 
-                if (logSeasonMatches(data.clientSeason)) {
+                // External logs without clientSeason are legacy (field was never saved).
+                // Treat them as matching the current season rather than cross-season.
+                const extSeasonOk = !data.clientSeason || logSeasonMatches(data.clientSeason);
+                if (extSeasonOk) {
                     logsData.push(entry);
                 } else {
                     crossSeasonLogsData.push(entry);
