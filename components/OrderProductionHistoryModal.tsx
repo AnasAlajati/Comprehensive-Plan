@@ -159,6 +159,35 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
             crossSeasonLogsData.push(entry);
           }
         }
+
+        // Also check extraSessions (edge case: multiple customers on same day)
+        ((log.extraSessions || []) as any[]).forEach((session: any, sIdx: number) => {
+          const sessionClient = normalize(session.client || '');
+          const sessionFabric = normalize(session.fabric || '');
+          // Prefer orderId match (precise) over legacy name+fabric match
+          const sessionMatch = session.orderId
+            ? session.orderId === order.id
+            : (sessionClient === targetClient && sessionFabric === targetFabric) ||
+              (session.client === clientName && session.fabric === order.material);
+          if (sessionMatch) {
+            const sessionEntry: ProductionLog = {
+              id: `${machineName}-${log.date}-${docId}-s${sIdx}`,
+              date: log.date,
+              machineName,
+              dayProduction: Number(session.dayProduction) || 0,
+              remaining: Number(session.remainingMfg) || 0,
+              scrap: 0,
+              reason: '',
+              isExternal: false,
+              logSeason: session.clientSeason || log.clientSeason || undefined
+            };
+            if (logSeasonMatches(session.clientSeason || log.clientSeason)) {
+              logsData.push(sessionEntry);
+            } else {
+              crossSeasonLogsData.push(sessionEntry);
+            }
+          }
+        });
       });
 
       const totalScanned = allSubDocs.reduce((sum, arr) => sum + arr.length, 0);

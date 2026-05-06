@@ -118,6 +118,15 @@ export interface ScrapEntry {
   amount: number;
 }
 
+export interface ExtraSession {
+  client: string;
+  clientSeason?: string;
+  fabric: string;
+  orderId?: string;
+  dayProduction: number;
+  remainingMfg?: number;
+}
+
 export interface DailyLogEntry {
   id?: string; // Firestore Doc ID
   machineId?: string | number; // Link to parent machine
@@ -136,6 +145,7 @@ export interface DailyLogEntry {
   customStatusNote?: string;
   lowStockAlertSent?: boolean; // NEW: Track if alert was sent
   note?: string; // Added for split runs or extra info
+  extraSessions?: ExtraSession[]; // Edge case: multiple customers on same day
 }
 
 export interface MachineRow {

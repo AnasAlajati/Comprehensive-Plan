@@ -1231,6 +1231,18 @@ const MemoizedOrderRow = React.memo(({
         if (isMatch) {
           total += Number(log.dayProduction) || 0;
         }
+
+        // Also check extraSessions (edge case: multiple customers on same day)
+        ((log as any).extraSessions || []).forEach((session: any) => {
+          const sessionFabric = normalize(session.fabric || '');
+          // Prefer orderId match (precise) over legacy name+fabric match
+          const sessionMatch = session.orderId
+            ? session.orderId === row.id
+            : clientOk(session.client) && sessionFabric === targetFabric && (!session.clientSeason || logSeasonOk(session));
+          if (sessionMatch) {
+            total += Number(session.dayProduction) || 0;
+          }
+        });
       });
     });
 
@@ -1527,7 +1539,7 @@ const MemoizedOrderRow = React.memo(({
     }
     // ── Match Source Analysis ──────────────────────────────────────────────
     // Scan every machine's dailyLogs for logs that carry orderId === row.id
-    type OrderIdLogRow = { machineName: string; date: string; status: string; clientSeason: string; remaining: number; fabric: string; client: string; };
+    type OrderIdLogRow = { machineName: string; date: string; status: string; clientSeason: string; remaining: number; fabric: string; client: string; isExtraSession?: boolean; };
     const orderIdMatchedLogs: OrderIdLogRow[] = [];
     machines.forEach(machine => {
       (subLogsByMachineId?.get(String(machine.id)) || []).forEach((log: any) => {
@@ -1542,6 +1554,21 @@ const MemoizedOrderRow = React.memo(({
             client: log.client || '-',
           });
         }
+        // Also scan extraSessions for orderId match
+        (log.extraSessions || []).forEach((session: any) => {
+          if (session.orderId === row.id) {
+            orderIdMatchedLogs.push({
+              machineName: machine.name,
+              date: log.date || '-',
+              status: log.status || '-',
+              clientSeason: session.clientSeason || log.clientSeason || '(none)',
+              remaining: Number(session.remainingMfg) || 0,
+              fabric: session.fabric || '-',
+              client: session.client || '-',
+              isExtraSession: true,
+            });
+          }
+        });
       });
     });
     orderIdMatchedLogs.sort((a, b) => b.date.localeCompare(a.date));
@@ -4779,7 +4806,10 @@ const MemoizedOrderRow = React.memo(({
                       <tbody>
                         {orderDebugData.orderIdMatchedLogs.map((l: any, i: number) => (
                           <tr key={i} className="border-t border-slate-100">
-                            <td className="px-3 py-1.5 font-mono">{l.machineName}</td>
+                            <td className="px-3 py-1.5 font-mono">
+                              {l.machineName}
+                              {l.isExtraSession && <span className="ml-1 text-[10px] bg-indigo-100 text-indigo-700 px-1 rounded">extra</span>}
+                            </td>
                             <td className="px-3 py-1.5 font-mono">{l.date}</td>
                             <td className="px-3 py-1.5">{l.status}</td>
                             <td className="px-3 py-1.5 font-mono text-slate-500">{l.clientSeason}</td>
@@ -5606,10 +5636,16 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     // 1. Internal Machines
     machines.forEach(machine => {
         const machineLogs = subLogsByMachineId.get(String(machine.id)) || [];
-        machineLogs.forEach(log => {
+        machineLogs.forEach((log: any) => {
             if (custClientOk(log.client) && log.fabric && logSeasonOk(log)) {
                 fabrics.add(log.fabric);
             }
+            // Also check extraSessions for this client's fabrics
+            (log.extraSessions || []).forEach((session: any) => {
+                if (custClientOk(session.client) && session.fabric && logSeasonOk(session)) {
+                    fabrics.add(session.fabric);
+                }
+            });
         });
     });
 
@@ -5965,7 +6001,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
     machines.forEach(m => {
       const mLogs = subLogsByMachineId.get(String(m.id)) || [];
-      // Active day log with orderId
+      // Active day log with orderId (main session)
       const activeLog = mLogs.find((l: any) => l.date === activeDay && l.orderId && orderIds.has(l.orderId));
       if (activeLog) {
         const entry = intermediateMap.get(activeLog.orderId);
@@ -5982,8 +6018,21 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
           }
         }
       }
+      // Active day: also check extraSessions
+      mLogs.filter((l: any) => l.date === activeDay).forEach((log: any) => {
+        (log.extraSessions || []).forEach((session: any) => {
+          if (!session.orderId || !orderIds.has(session.orderId)) return;
+          const entry = intermediateMap.get(session.orderId);
+          if (!entry) return;
+          if (Number(session.dayProduction) > 0) {
+            if (!entry.active.includes(m.name)) entry.active.push(m.name);
+            const remaining = Number(session.remainingMfg || 0);
+            if (remaining) entry.remainingFromMachine += remaining;
+          }
+        });
+      });
 
-      // All history logs with orderId
+      // All history logs with orderId (main session)
       mLogs.forEach((log: any) => {
         if (!log.orderId || !orderIds.has(log.orderId)) return;
         const entry = intermediateMap.get(log.orderId);
@@ -5999,6 +6048,15 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             entry.active.push(finishedLabel);
           }
         }
+      });
+      // All history logs: also check extraSessions
+      mLogs.forEach((log: any) => {
+        (log.extraSessions || []).forEach((session: any) => {
+          if (!session.orderId || !orderIds.has(session.orderId)) return;
+          const entry = intermediateMap.get(session.orderId);
+          if (!entry) return;
+          if (log.date) entry.logDates.push(log.date);
+        });
       });
 
       // Future plans with orderId

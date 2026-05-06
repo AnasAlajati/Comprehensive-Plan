@@ -770,6 +770,11 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
   const [flOrderId, setFlOrderId] = useState<string>('');
   const [flMachineId, setFlMachineId] = useState<string>('');
   const [flLogId, setFlLogId] = useState<string>('');
+  const [flIsExtraSession, setFlIsExtraSession] = useState(false);
+  const [flExtraProduced, setFlExtraProduced] = useState<string>('');
+  const [flExtraRemaining, setFlExtraRemaining] = useState<string>('');
+  const [flExtraSessionEditIndex, setFlExtraSessionEditIndex] = useState<number>(-1); // -1 = new, 0+ = editing
+  const [expandedExtraSessions, setExpandedExtraSessions] = useState<Set<string>>(new Set());
   const flatOrdersLoadedRef = useRef(false);
 
   // Only subscribe to orders when the lookup modal is first opened — not on mount
@@ -812,7 +817,67 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     setFlClient(currentClientId);
     setFlFabric(log?.fabric || '');
     setFlOrderId(currentOrderId);
+    setFlIsExtraSession(false);
+    setFlExtraProduced('');
+    setFlExtraRemaining('');
     setShowFabricLookup(true);
+  };
+
+  const openExtraSessionLookup = (machineId: string, logId: string, editIndex = -1) => {
+    // If editing an existing session, pre-fill its data
+    if (editIndex >= 0) {
+      const log = allLogs.find((l: any) => l.machineId === machineId);
+      const session = log?.extraSessions?.[editIndex];
+      if (session) {
+        const clientId = clients.find((c: any) => c.name === session.client)?.id || '';
+        const seasonId = session.clientSeason
+          ? (flSeasonOptions.find((s: any) => s.name === session.clientSeason || s.id === session.clientSeason)?.id || '')
+          : '';
+        setFlMachineId(machineId);
+        setFlLogId(logId);
+        setFlSeason(seasonId);
+        setFlClient(clientId);
+        setFlFabric(session.fabric || '');
+        setFlOrderId(session.orderId || '');
+        setFlExtraProduced(String(session.dayProduction ?? ''));
+        setFlExtraRemaining(String(session.remainingMfg ?? ''));
+        setFlExtraSessionEditIndex(editIndex);
+        setFlIsExtraSession(true);
+        setShowFabricLookup(true);
+        return;
+      }
+    }
+    setFlMachineId(machineId);
+    setFlLogId(logId);
+    setFlSeason('');
+    setFlClient('');
+    setFlFabric('');
+    setFlOrderId('');
+    setFlExtraProduced('');
+    setFlExtraRemaining('');
+    setFlExtraSessionEditIndex(-1);
+    setFlIsExtraSession(true);
+    setShowFabricLookup(true);
+  };
+
+  const handleDeleteExtraSession = async (machineId: string, sessionIndex: number) => {
+    // Optimistic update
+    setAllLogs(prev => (prev as any[]).map((l: any) =>
+      l.machineId === machineId
+        ? { ...l, extraSessions: (l.extraSessions || []).filter((_: any, i: number) => i !== sessionIndex) }
+        : l
+    ));
+    try {
+      const existingLog = fpSubLogsMapRef.current.get(String(machineId))?.find((l: any) => l.date === selectedDate);
+      if (!existingLog) return;
+      const updated = (existingLog.extraSessions || []).filter((_: any, i: number) => i !== sessionIndex);
+      const logData = { ...existingLog, extraSessions: updated };
+      delete logData._machineId;
+      await DataService.updateDailyLog(machineId, selectedDate, logData);
+      showMessage('✅ Session removed');
+    } catch (error: any) {
+      showMessage('❌ Error: ' + error.message, true);
+    }
   };
 
   const handleClientFabricSelect = async (clientId: string, fabricName: string, orderId: string) => {
@@ -821,6 +886,43 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
     const seasonId = flSeason;
     const seasonOption = flSeasonOptions.find(s => s.id === seasonId);
     const seasonName = seasonOption?.name || '';
+
+    // --- Extra Session Mode: add or edit an extraSessions entry ---
+    if (flIsExtraSession) {
+      const newSession = {
+        client: clientName,
+        clientSeason: seasonName,
+        fabric: fabricName,
+        orderId,
+        dayProduction: Number(flExtraProduced) || 0,
+        remainingMfg: Number(flExtraRemaining) || 0,
+      };
+      const isEditing = flExtraSessionEditIndex >= 0;
+      setAllLogs(prev => (prev as any[]).map((l: any) => {
+        if (l.machineId !== flMachineId) return l;
+        const extras = [...(l.extraSessions || [])];
+        if (isEditing) { extras[flExtraSessionEditIndex] = newSession; }
+        else { extras.push(newSession); }
+        return { ...l, extraSessions: extras };
+      }));
+      setShowFabricLookup(false);
+      setFlIsExtraSession(false);
+      setFlExtraSessionEditIndex(-1);
+      try {
+        const existingLog = fpSubLogsMapRef.current.get(String(flMachineId))?.find((l: any) => l.date === selectedDate);
+        if (!existingLog) { showMessage('❌ Log not found — save main entry first', true); return; }
+        const extras = [...(existingLog.extraSessions || [])];
+        if (isEditing) { extras[flExtraSessionEditIndex] = newSession; }
+        else { extras.push(newSession); }
+        const logData = { ...existingLog, extraSessions: extras };
+        delete logData._machineId;
+        await DataService.updateDailyLog(flMachineId, selectedDate, logData);
+        showMessage(isEditing ? '✅ Session updated' : '✅ Extra session added');
+      } catch (error: any) {
+        showMessage('❌ Error: ' + error.message, true);
+      }
+      return;
+    }
 
     // Optimistic update
     setAllLogs(prev => prev.map(l =>
@@ -2637,7 +2739,9 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                   filteredLogs.map((log: any, idx: number) => {
                     const normalizedStatus = normalizeStatusValue(log.status);
                     const isOther = normalizedStatus === MachineStatus.OTHER;
-                    const diff = ((Number(log.dayProduction) || 0) - (Number(log.avgProduction) || 0)).toFixed(1);
+                    const extraSessionsTotal = ((log as any).extraSessions || []).reduce((s: number, e: any) => s + (Number(e.dayProduction) || 0), 0);
+                    const totalDayProduction = (Number(log.dayProduction) || 0) + extraSessionsTotal;
+                    const diff = (totalDayProduction - (Number(log.avgProduction) || 0)).toFixed(1);
                     const fallbackCustom = !Object.values(MachineStatus).includes(log.status) ? (log.status || '') : '';
                     const customStatusNote = log.customStatusNote || fallbackCustom;
 
@@ -2747,7 +2851,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                         </td>
 
                         {/* Day Production */}
-                        <td className="border border-slate-200 p-0">
+                        <td className="border border-slate-200 p-0 relative group/prod">
                           <input
                             id={getCellId(log.machineId, 'dayProduction')}
                             type="number"
@@ -2761,8 +2865,27 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                             onBlur={(e) => handleUpdateLog(log.machineId, log.id, 'dayProduction', Number(e.target.value), false)}
                             onKeyDown={(e) => handleKeyDown(e, idx, 'dayProduction')}
                             disabled={isReadOnly || (userRole !== 'admin' && userRole !== 'daily_planner')}
-                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none font-semibold text-slate-800 ${isReadOnly || (userRole !== 'admin' && userRole !== 'daily_planner') ? 'cursor-not-allowed opacity-60' : ''}`}
+                            className={`w-full h-full p-2 text-center bg-transparent focus:bg-blue-50 focus:outline-none font-semibold text-slate-800 ${isReadOnly || (userRole !== 'admin' && userRole !== 'daily_planner') ? 'cursor-not-allowed opacity-60' : ''} ${(log as any).extraSessions?.length > 0 ? 'pr-6' : ''}`}
                           />
+                          {(log as any).extraSessions?.length > 0 && (() => {
+                            const extraTotal = (log as any).extraSessions.reduce((s: number, e: any) => s + (Number(e.dayProduction) || 0), 0);
+                            const grandTotal = (Number(log.dayProduction) || 0) + extraTotal;
+                            return (
+                              <>
+                                <span className="absolute bottom-0.5 right-0.5 text-[9px] font-bold text-indigo-600 pointer-events-none leading-none">
+                                  ({grandTotal})
+                                </span>
+                                <div className="hidden group-hover/prod:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-30 bg-slate-800 text-white text-[10px] rounded shadow-lg px-2 py-1.5 whitespace-nowrap pointer-events-none min-w-[120px]">
+                                  <div className="font-semibold text-slate-300 mb-1">Total: {grandTotal} kg</div>
+                                  <div className="flex justify-between gap-3"><span className="text-slate-400">{log.client || 'Session 1'}:</span><span>{Number(log.dayProduction) || 0} kg</span></div>
+                                  {(log as any).extraSessions.map((s: any, i: number) => (
+                                    <div key={i} className="flex justify-between gap-3"><span className="text-slate-400">{s.client || `Session ${i + 2}`}:</span><span>{Number(s.dayProduction) || 0} kg</span></div>
+                                  ))}
+                                  <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+                                </div>
+                              </>
+                            );
+                          })()}
                         </td>
 
                         {/* Difference */}
@@ -2818,10 +2941,28 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                               userRole !== 'admin' && userRole !== 'daily_planner' ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
                             } ${log.client ? 'text-slate-800' : 'text-slate-400'}`}
                           >
-                            {log.client
-                              ? <span className="block whitespace-normal break-words leading-snug text-xs">{log.client}</span>
-                              : <span className="italic">---</span>
-                            }
+                            <span className="flex items-center gap-1">
+                              {log.client
+                                ? <span className="block whitespace-normal break-words leading-snug text-xs">{log.client}</span>
+                                : <span className="italic">---</span>
+                              }
+                              {(log as any).extraSessions?.length > 0 && (
+                                <span
+                                  className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-indigo-100 text-indigo-600 font-bold shrink-0 cursor-pointer hover:bg-indigo-200"
+                                  style={{ fontSize: '9px' }}
+                                  title={`${(log as any).extraSessions.length} more session(s)`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const key = `${log.machineId}-${log.id}`;
+                                    setExpandedExtraSessions(prev => {
+                                      const next = new Set(prev);
+                                      next.has(key) ? next.delete(key) : next.add(key);
+                                      return next;
+                                    });
+                                  }}
+                                >+{(log as any).extraSessions.length}</span>
+                              )}
+                            </span>
                           </button>
                           {log.client && (userRole === 'admin' || userRole === 'daily_planner') && (
                             <button
@@ -2830,9 +2971,45 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                               title="Clear client & fabric"
                             >✕</button>
                           )}
+                          {/* Add extra session button — only when a client is already set */}
+                          {log.client && (userRole === 'admin' || userRole === 'daily_planner') && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); openExtraSessionLookup(log.machineId, log.id); }}
+                              className="absolute bottom-0.5 right-0.5 opacity-0 group-hover/cli:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded text-indigo-400 hover:text-indigo-600 hover:bg-indigo-50 text-[10px] leading-none font-bold"
+                              title="Add extra session (another customer same day)"
+                            >+</button>
+                          )}
                           {log.clientSeason && (
                             <div className="text-[10px] text-slate-400 px-2 pb-0.5 leading-none pointer-events-none select-none">
                               {log.clientSeason}
+                            </div>
+                          )}
+                          {/* Expanded extra sessions */}
+                          {expandedExtraSessions.has(`${log.machineId}-${log.id}`) && (log as any).extraSessions?.length > 0 && (
+                            <div className="absolute left-0 right-0 top-full z-30 bg-white border border-indigo-200 rounded-b shadow-xl p-2 space-y-1.5" style={{ minWidth: '200px' }}>
+                              {(log as any).extraSessions.map((s: any, i: number) => (
+                                <div key={i} className="flex items-start gap-1.5 border border-indigo-100 rounded-lg px-2 py-1.5 bg-indigo-50 group/sess">
+                                  <div className="flex-1 min-w-0">
+                                    <div className="font-semibold text-indigo-700 text-[11px] truncate">{s.client}</div>
+                                    <div className="text-slate-500 text-[10px] truncate">{s.fabric}</div>
+                                    <div className="text-slate-600 font-mono text-[10px]">{s.dayProduction} kg{s.remainingMfg ? <span className="text-slate-400"> · rem: {s.remainingMfg}</span> : ''}</div>
+                                  </div>
+                                  {(userRole === 'admin' || userRole === 'daily_planner') && (
+                                    <div className="flex flex-col gap-0.5 shrink-0 opacity-0 group-hover/sess:opacity-100 transition-opacity">
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); openExtraSessionLookup(log.machineId, log.id, i); }}
+                                        className="w-5 h-5 flex items-center justify-center rounded bg-white border border-slate-200 text-slate-400 hover:text-blue-600 hover:border-blue-300 transition-colors"
+                                        title="Edit session"
+                                      >✎</button>
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); handleDeleteExtraSession(log.machineId, i); }}
+                                        className="w-5 h-5 flex items-center justify-center rounded bg-white border border-slate-200 text-slate-400 hover:text-red-500 hover:border-red-300 transition-colors"
+                                        title="Delete session"
+                                      >✕</button>
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
                             </div>
                           )}
                           {/* Reference Code Tooltip */}
@@ -4366,7 +4543,7 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
           : [];
 
         const selectedClientName = clients.find((c: any) => c.id === flClient)?.name || '';
-        const canApply = !!(flClient && flFabric && flOrderId);
+        const canApply = !!(flClient && flFabric && flOrderId) && (!flIsExtraSession || Number(flExtraProduced) > 0);
 
         return (
           <div
@@ -4378,9 +4555,9 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
               onClick={e => e.stopPropagation()}
             >
               {/* Header */}
-              <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-5 py-4 flex items-center justify-between">
+              <div className={`bg-gradient-to-r ${flIsExtraSession ? 'from-indigo-600 to-violet-600' : 'from-blue-600 to-indigo-600'} px-5 py-4 flex items-center justify-between`}>
                 <div>
-                  <p className="text-blue-200 text-xs font-medium uppercase tracking-wide">Assign to Machine</p>
+                  <p className="text-blue-200 text-xs font-medium uppercase tracking-wide">{flIsExtraSession ? (flExtraSessionEditIndex >= 0 ? 'Edit Session' : 'Add Extra Session') : 'Assign to Machine'}</p>
                   <h2 className="text-white font-bold text-lg leading-tight">{machineName}</h2>
                 </div>
                 <button
@@ -4487,6 +4664,34 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                     </div>
                   )}
                 </div>
+
+                {/* Extra Session: Produced & Remaining */}
+                {flIsExtraSession && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Produced (kg) <span className="text-red-500">*</span></label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={flExtraProduced}
+                        onChange={e => setFlExtraProduced(e.target.value)}
+                        placeholder="0"
+                        className="w-full border-2 border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Remaining (kg)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={flExtraRemaining}
+                        onChange={e => setFlExtraRemaining(e.target.value)}
+                        placeholder="0"
+                        className="w-full border-2 border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 {/* Preview */}
                 {canApply && (
