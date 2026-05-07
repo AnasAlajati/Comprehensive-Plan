@@ -68,11 +68,14 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
   const [crossSeasonInfo, setCrossSeasonInfo] = useState<CrossSeasonInfo[]>([]);
   const [crossSeasonLogs, setCrossSeasonLogs] = useState<ProductionLog[]>([]);
   const [expandedCrossSeasons, setExpandedCrossSeasons] = useState<Set<string>>(new Set());
+  const [legacyLogs, setLegacyLogs] = useState<ProductionLog[]>([]);
+  const [showLegacy, setShowLegacy] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [showInsights, setShowInsights] = useState(false);
 
   useEffect(() => {
     if (isOpen && order) {
+      setShowLegacy(false);
       fetchLogs();
     }
   }, [isOpen, order, machines]);
@@ -93,6 +96,7 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
     try {
       const logsData: ProductionLog[] = [];
       const crossSeasonLogsData: ProductionLog[] = [];
+      const legacyLogsData: ProductionLog[] = [];
       const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
       const targetClient = normalize(clientName);
       const targetFabric = normalize(order.material);
@@ -135,12 +139,14 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
           fabricFoundOnMachines.add(machineName);
         }
 
-        const isMatch = isReOrder
-          ? log.orderId === order.id
-          : (logClient === targetClient && logFabric === targetFabric) ||
-            (log.client === clientName && log.fabric === order.material);
+        // orderId-pinned match (trusted) vs legacy name+fabric match (uncertain)
+        const hasOrderId = !!log.orderId;
+        const isOrderIdMatch = log.orderId === order.id;
+        const isLegacyMatch = !isReOrder && !hasOrderId
+          && ((logClient === targetClient && logFabric === targetFabric) ||
+              (log.client === clientName && log.fabric === order.material));
 
-        if (isMatch) {
+        if (isReOrder ? isOrderIdMatch : (isOrderIdMatch || isLegacyMatch)) {
           const entry: ProductionLog = {
             id: `${machineName}-${log.date}-${docId}`,
             date: log.date,
@@ -153,7 +159,10 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
             logSeason: log.clientSeason || undefined
           };
 
-          if (logSeasonMatches(log.clientSeason)) {
+          if (isLegacyMatch) {
+            // Legacy: goes into separate bucket, not counted in main total
+            legacyLogsData.push(entry);
+          } else if (logSeasonMatches(log.clientSeason)) {
             logsData.push(entry);
           } else {
             crossSeasonLogsData.push(entry);
@@ -164,12 +173,12 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
         ((log.extraSessions || []) as any[]).forEach((session: any, sIdx: number) => {
           const sessionClient = normalize(session.client || '');
           const sessionFabric = normalize(session.fabric || '');
-          // Prefer orderId match (precise) over legacy name+fabric match
-          const sessionMatch = session.orderId
-            ? session.orderId === order.id
-            : (sessionClient === targetClient && sessionFabric === targetFabric) ||
-              (session.client === clientName && session.fabric === order.material);
-          if (sessionMatch) {
+          const sessionHasOrderId = !!session.orderId;
+          const sessionIsOrderIdMatch = session.orderId === order.id;
+          const sessionIsLegacy = !isReOrder && !sessionHasOrderId
+            && ((sessionClient === targetClient && sessionFabric === targetFabric) ||
+                (session.client === clientName && session.fabric === order.material));
+          if (sessionIsOrderIdMatch || sessionIsLegacy) {
             const sessionEntry: ProductionLog = {
               id: `${machineName}-${log.date}-${docId}-s${sIdx}`,
               date: log.date,
@@ -181,7 +190,9 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
               isExternal: false,
               logSeason: session.clientSeason || log.clientSeason || undefined
             };
-            if (logSeasonMatches(session.clientSeason || log.clientSeason)) {
+            if (sessionIsLegacy) {
+              legacyLogsData.push(sessionEntry);
+            } else if (logSeasonMatches(session.clientSeason || log.clientSeason)) {
               logsData.push(sessionEntry);
             } else {
               crossSeasonLogsData.push(sessionEntry);
@@ -276,8 +287,10 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
 
       // Sort by date descending for display
       logsData.sort((a, b) => b.date.localeCompare(a.date));
+      legacyLogsData.sort((a, b) => b.date.localeCompare(a.date));
       
       setLogs(logsData);
+      setLegacyLogs(legacyLogsData);
       setTotalProduction(logsData.reduce((sum, log) => sum + log.dayProduction, 0));
       setDebugInfo(debug);
 
@@ -723,6 +736,38 @@ export const OrderProductionHistoryModal: React.FC<OrderProductionHistoryModalPr
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {/* Legacy match banner — logs matched by client+fabric name only, no order ID */}
+              {legacyLogs.length > 0 && (
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 bg-slate-50 flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                      <span className="text-sm font-semibold text-slate-600">Legacy match found</span>
+                      <span className="text-xs text-slate-400">— {legacyLogs.reduce((s, l) => s + l.dayProduction, 0).toLocaleString()} kg matched by name only (no order ID, not counted)</span>
+                    </div>
+                    <button
+                      onClick={() => setShowLegacy(p => !p)}
+                      className="text-xs font-semibold text-slate-500 hover:text-slate-800 border border-slate-200 bg-white hover:bg-slate-100 px-3 py-1.5 rounded-lg transition-colors"
+                    >
+                      {showLegacy ? 'Hide' : 'View Details'}
+                    </button>
+                  </div>
+                  {showLegacy && (
+                    <div className="p-4 bg-white border-t border-slate-100">
+                      <p className="text-xs text-slate-400 mb-3">These logs match this client and fabric by name but have no <code className="bg-slate-100 px-1 rounded">orderId</code>. They are not counted in PRODUCED until an operator assigns the order ID to each log.</p>
+                      <MachineGroupedTable logsMap={(() => {
+                        const m = new Map<string, ProductionLog[]>();
+                        legacyLogs.forEach(l => {
+                          if (!m.has(l.machineName)) m.set(l.machineName, []);
+                          m.get(l.machineName)!.push(l);
+                        });
+                        return m;
+                      })()} />
+                    </div>
+                  )}
                 </div>
               )}
 

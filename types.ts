@@ -423,6 +423,7 @@ export interface OrderRow {
   lastUpdatedBy?: string;
   lastUpdatedByEmail?: string;
   lastUpdated?: string;
+  customerOrderedQty?: number; // QTY the customer placed in their order (editable by admin/daily_planner only)
 }
 
 export interface ProductionTicket {

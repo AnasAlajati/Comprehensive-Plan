@@ -1194,8 +1194,8 @@ const MemoizedOrderRow = React.memo(({
     }, 0);
   }
 
-  // Calculate Produced from Machine Logs (matches History Modal)
-  const totalProducedFromLogs = useMemo(() => {
+  // Calculate Produced from Machine Logs — split by orderId-pinned (trusted) vs legacy name-match (uncertain)
+  const { producedByOrderId, producedByLegacy } = useMemo(() => {
     const isReOrder = !!row.reorderOfId;
     const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
     const targetClient = normalize(selectedCustomerName);
@@ -1209,58 +1209,63 @@ const MemoizedOrderRow = React.memo(({
         || (combinedNameTarget && n === combinedNameTarget);
     };
     const logSeasonOk = (log: any) => {
-      if (!selectedCustomerSeasonId && !selectedCustomerSeasonName) return true; // customer has no season → match all
-      if (!log.clientSeason) return false; // season selected but log has no tag → exclude (cross-season)
+      if (!selectedCustomerSeasonId && !selectedCustomerSeasonName) return true;
+      if (!log.clientSeason) return false;
       return log.clientSeason === selectedCustomerSeasonId || log.clientSeason === selectedCustomerSeasonName;
     };
-    
-    let total = 0;
-    
-    // Sum from internal machine dailyLogs (sub-collection)
+
+    let byOrderId = 0;
+    let byLegacy = 0;
+
     machines.forEach(machine => {
       const machineLogs = subLogsByMachineId?.get(String(machine.id)) || [];
-      
       machineLogs.forEach((log) => {
         const logFabric = normalize(log.fabric);
-        
-        // ReOrders: only match by orderId; skip legacy client/fabric matching
-        const isMatch = isReOrder
-          ? (log as any).orderId === row.id
-          : clientOk(log.client) && logFabric === targetFabric && logSeasonOk(log);
-        
-        if (isMatch) {
-          total += Number(log.dayProduction) || 0;
+        const logOrderId = (log as any).orderId;
+
+        if (logOrderId) {
+          // orderId present — only count if it matches this order
+          if (logOrderId === row.id) byOrderId += Number(log.dayProduction) || 0;
+        } else if (!isReOrder && clientOk(log.client) && logFabric === targetFabric && logSeasonOk(log)) {
+          // No orderId — legacy name+fabric match
+          byLegacy += Number(log.dayProduction) || 0;
+        } else if (isReOrder && logOrderId === row.id) {
+          byOrderId += Number(log.dayProduction) || 0;
         }
 
-        // Also check extraSessions (edge case: multiple customers on same day)
         ((log as any).extraSessions || []).forEach((session: any) => {
           const sessionFabric = normalize(session.fabric || '');
-          // Prefer orderId match (precise) over legacy name+fabric match
-          const sessionMatch = session.orderId
-            ? session.orderId === row.id
-            : clientOk(session.client) && sessionFabric === targetFabric && (!session.clientSeason || logSeasonOk(session));
-          if (sessionMatch) {
-            total += Number(session.dayProduction) || 0;
+          const sessionOrderId = session.orderId;
+          if (sessionOrderId) {
+            if (sessionOrderId === row.id) byOrderId += Number(session.dayProduction) || 0;
+          } else if (!isReOrder && clientOk(session.client) && sessionFabric === targetFabric && (!session.clientSeason || logSeasonOk(session))) {
+            byLegacy += Number(session.dayProduction) || 0;
           }
         });
       });
     });
 
-    // Also sum external production records.
-    // External logs without clientSeason are legacy (field was never saved) — treat as season-match.
+    // External production: orderId-pinned if present, otherwise legacy
     (allExternalLogs || []).forEach((ext: any) => {
       if (!ext || normalize(ext.client) !== targetClient) return;
-      if (!isReOrder && normalize(ext.fabric) !== targetFabric) return;
-      if (isReOrder && ext.orderId !== row.id) return;
       const extSeasonOk = !ext.clientSeason
         || !selectedCustomerSeasonId
         || ext.clientSeason === selectedCustomerSeasonId
         || ext.clientSeason === selectedCustomerSeasonName;
-      if (extSeasonOk) total += Number(ext.receivedQty) || 0;
+      if (!extSeasonOk) return;
+      const qty = Number(ext.receivedQty) || 0;
+      if (!qty) return;
+      if (ext.orderId) {
+        if (ext.orderId === row.id) byOrderId += qty;
+      } else if (!isReOrder && normalize(ext.fabric) === targetFabric) {
+        byLegacy += qty;
+      }
     });
-    
-    return total;
+
+    return { producedByOrderId: byOrderId, producedByLegacy: byLegacy };
   }, [machines, selectedCustomerName, row.material, row.id, row.reorderOfId, selectedCustomerSeasonId, selectedCustomerSeasonName, allExternalLogs]);
+  // Back-compat alias used in a few legacy spots
+  const totalProducedFromLogs = producedByOrderId;
 
   // Calculate Assigned Machines Summary & Total Capacity
   const { summary: assignedMachinesSummary, totalCapacity, totalSent, totalReceived, totalDelivered, scrapPercentage, scrapQuantity, groupedBatches } = useMemo(() => {
@@ -2075,6 +2080,27 @@ const MemoizedOrderRow = React.memo(({
             </div>
           </td>
 
+          {ordersColVis?.['customerOrderedQty'] !== false && (
+            <td className="p-0 border-r border-slate-200 bg-amber-50/30">
+              {(userRole === 'admin' || userRole === 'daily_planner') ? (
+                <input
+                  type="number"
+                  className="w-full h-full px-2 py-2 text-right bg-transparent outline-none focus:bg-amber-100 font-mono text-amber-800 text-sm font-semibold"
+                  value={row.customerOrderedQty ?? ''}
+                  onChange={(e) => {
+                    const val = e.target.value === '' ? undefined : Number(e.target.value);
+                    handleUpdateOrder(row.id, { customerOrderedQty: val } as any);
+                  }}
+                  placeholder="-"
+                />
+              ) : (
+                <div className="px-2 py-2 text-right font-mono text-amber-800 text-sm font-semibold">
+                  {row.customerOrderedQty != null ? row.customerOrderedQty.toLocaleString() : '-'}
+                </div>
+              )}
+            </td>
+          )}
+
           {ordersColVis?.['reqGsm'] !== false && <td className="p-0 border-r border-slate-200">
             <input 
               type="number"
@@ -2444,9 +2470,17 @@ const MemoizedOrderRow = React.memo(({
 
       {!showDyehouse && (
         <>
-          {/* Produced Qty (From Machine Logs - matches History Modal) */}
+          {/* Produced Qty — only orderId-pinned logs count; legacy name-matches shown on hover only */}
           {ordersColVis?.['produced'] !== false && <td className="p-2 text-right border-r border-slate-200 font-mono font-bold text-emerald-600 bg-emerald-50/30">
-            {totalProducedFromLogs > 0 ? totalProducedFromLogs.toLocaleString() : '-'}
+            <div className="flex items-center justify-end gap-1">
+              <span>{producedByOrderId > 0 ? producedByOrderId.toLocaleString() : '-'}</span>
+              {producedByLegacy > 0 && (
+                <span
+                  className="text-[9px] text-slate-300 hover:text-slate-500 cursor-default select-none italic"
+                  title={`Legacy match: ${producedByLegacy.toLocaleString()} kg found by name+fabric (no order ID). Open history for details.`}
+                >legacy</span>
+              )}
+            </div>
           </td>}
 
           {ordersColVis?.['remaining'] !== false && <td className="p-0 border-r border-slate-200 font-mono font-bold">
@@ -2899,7 +2933,7 @@ const MemoizedOrderRow = React.memo(({
                  </div>
                  <div className="bg-emerald-50/50 p-2.5 rounded-xl border border-emerald-100 flex flex-col shadow-sm">
                     <span className="text-[8px] text-emerald-600 font-bold uppercase tracking-wider mb-0.5">Produced</span>
-                    <div className="font-mono text-lg font-bold text-emerald-700">{totalProducedFromLogs > 0 ? totalProducedFromLogs.toLocaleString() : '-'}</div>
+                    <div className="font-mono text-lg font-bold text-emerald-700" title={producedByLegacy > 0 ? `+${producedByLegacy.toLocaleString()} kg via legacy match (no order ID, not counted)` : undefined}>{producedByOrderId > 0 ? producedByOrderId.toLocaleString() : '-'}</div>
                  </div>
                  <div className={`p-2.5 rounded-xl border flex flex-col shadow-sm ${scrapPercentage > 10 ? 'bg-red-50 border-red-100' : 'bg-white border-indigo-100'}`}>
                     <span className={`text-[8px] font-bold uppercase tracking-wider mb-0.5 ${scrapPercentage > 10 ? 'text-red-500' : 'text-indigo-400'}`}>{scrapPercentage > 10 ? 'Scrap %' : 'Remaining'}</span>
@@ -6108,14 +6142,35 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const allClientsStats = useMemo(() => {
     if (selectedCustomerId !== ALL_CLIENTS_ID) return [];
 
+    const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+
     return customers.map(client => {
       const ordered = client.orders.reduce((sum, o) => sum + (o.requiredQty || 0), 0);
       const remaining = client.orders.reduce((sum, o) => sum + (o.remainingQty || 0), 0);
       const delivery = client.orders.reduce((sum, o) => sum + (o.batchDeliveries || 0), 0);
-      
-      const manufactured = Math.max(0, ordered - remaining);
       const remainingDelivery = Math.max(0, ordered - delivery);
-      
+
+      const targetClient = normalize(client.name);
+
+      // Sum manufactured from actual machine logs (per client, across all orders)
+      let manufactured = 0;
+      machines.forEach(machine => {
+        (subLogsByMachineId?.get(String(machine.id)) || []).forEach((log: any) => {
+          if (normalize(log.client) !== targetClient) return;
+          manufactured += Number(log.dayProduction) || 0;
+          (log.extraSessions || []).forEach((session: any) => {
+            if (normalize(session.client) === targetClient) {
+              manufactured += Number(session.dayProduction) || 0;
+            }
+          });
+        });
+      });
+      (rawExternalLogs || []).forEach((ext: any) => {
+        if (normalize(ext.client) === targetClient) {
+          manufactured += Number(ext.receivedQty) || 0;
+        }
+      });
+
       const dates = Array.from(new Set(client.orders.map(o => o.orderReceiptDate).filter(Boolean))).sort();
 
       return {
@@ -6123,7 +6178,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         stats: { ordered, manufactured, remaining, delivery, remainingDelivery, dates }
       };
     }).sort((a, b) => b.stats.ordered - a.stats.ordered);
-  }, [customers, selectedCustomerId]);
+  }, [customers, selectedCustomerId, machines, subLogsByMachineId, rawExternalLogs]);
 
   const allYarnStats = useMemo(() => {
     if (selectedCustomerId !== ALL_YARNS_ID) return [];
@@ -6233,52 +6288,158 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
   const orderTotals = useMemo(() => {
     if (!selectedCustomer || !selectedCustomer.orders) {
-      return { ordered: 0, manufactured: 0, remaining: 0, colored: 0, progress: 0, accessory: 0, orderedPlusAccessory: 0 };
+      return { ordered: 0, manufactured: 0, remaining: 0, colored: 0, progress: 0, accessory: 0, orderedPlusAccessory: 0, customerOrdered: 0 };
     }
+
+    const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+
+    // Derive equivalents of OrderRowCard props in parent scope
+    const _custName = selectedCustomer.name || '';
+    const _seasonId = selectedCustomer.createdSeasonId || '';
+    const _seasonName = (selectedCustomer as any).createdSeasonName
+      || (_seasonId ? (seasons.find((s: any) => s.id === _seasonId)?.name || '') : '');
 
     let totalOrdered = 0;
     let totalRemaining = 0;
     let totalColored = 0;
     let totalAccessory = 0;
+    let totalCustomerOrdered = 0;
+    let totalProduced = 0; // summed directly from machine logs (accurate)
 
     selectedCustomer.orders.forEach(order => {
-        const required = order.requiredQty || 0;
+        const required = order.requiredQty ?? 0;
         totalOrdered += required;
+        if (order.customerOrderedQty != null) totalCustomerOrdered += order.customerOrderedQty;
         totalAccessory += Number(order.accessoryQty) || 0;
 
-        // Mirror the same displayRemaining logic used in OrderRowCard:
-        // if the order has an active machine → use statusInfo.remaining (live from logs)
-        // otherwise fall back to the stored remainingQty on the order doc
         const orderIdStatus = orderIdStatsMap.get(order.id);
         const statusInfoBase = order.reorderOfId ? null : (order.material ? statsMap.get(order.material) : null);
         const rowStatusInfo = orderIdStatus ?? statusInfoBase;
         const hasActive = rowStatusInfo && rowStatusInfo.active && rowStatusInfo.active.length > 0;
         const displayRemaining = hasActive ? (rowStatusInfo.remaining ?? 0) : (order.remainingQty ?? (required - (order.producedQty || 0)));
         totalRemaining += displayRemaining;
-        
-        // Sum all dyehouse plan batch capacities (colored by customer)
-        // Each batch represents a machine load, so we count plannedCapacity
-        if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
-          let orderColoredTotal = 0;
-          order.dyeingPlan.forEach(batch => {
-            const batchCapacity = Number(batch.plannedCapacity) || 0;
-            orderColoredTotal += batchCapacity;
-            totalColored += batchCapacity;
+
+        // Sum actual produced from machine logs — orderId-pinned only (mirrors producedByOrderId per row)
+        const isReOrder = !!order.reorderOfId;
+        const targetClient = normalize(_custName);
+        const targetFabric = normalize(order.material);
+        const clientOk = (lc: string) => normalize(lc) === targetClient;
+        const logSeasonOk = (log: any) => {
+          if (!_seasonId && !_seasonName) return true;
+          if (!log.clientSeason) return false;
+          return log.clientSeason === _seasonId || log.clientSeason === _seasonName;
+        };
+        machines.forEach(machine => {
+          (subLogsByMachineId?.get(String(machine.id)) || []).forEach((log: any) => {
+            const logOrderId = log.orderId;
+            if (logOrderId) {
+              // orderId present — only count if it matches this order
+              if (logOrderId === order.id) totalProduced += Number(log.dayProduction) || 0;
+            } else if (!isReOrder && clientOk(log.client) && normalize(log.fabric) === targetFabric && logSeasonOk(log)) {
+              // No orderId — legacy match, do NOT count
+            }
+            // extraSessions
+            (log.extraSessions || []).forEach((session: any) => {
+              if (session.orderId) {
+                if (session.orderId === order.id) totalProduced += Number(session.dayProduction) || 0;
+              }
+              // legacy sessions without orderId: skip
+            });
           });
-          if (orderColoredTotal > 0) {
-            console.log(`Order ${order.material}: ${order.dyeingPlan.length} batches, total capacity: ${orderColoredTotal}kg`);
-          }
+        });
+        // External logs — orderId-pinned only
+        (rawExternalLogs || []).forEach((ext: any) => {
+          if (!ext || normalize(ext.client) !== normalize(_custName)) return;
+          if (!ext.orderId) return; // no orderId = legacy, skip
+          if (ext.orderId !== order.id) return;
+          totalProduced += Number(ext.receivedQty) || 0;
+        });
+
+        if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
+          order.dyeingPlan.forEach(batch => {
+            totalColored += Number(batch.plannedCapacity) || 0;
+          });
         }
     });
 
-    console.log(`Total Colored by Customer: ${totalColored}kg from ${selectedCustomer.orders.length} orders`);
+    const progress = (totalOrdered + totalAccessory) > 0 ? (totalProduced / (totalOrdered + totalAccessory)) * 100 : 0;
 
-    // Manufactured = Ordered - Remaining
-    const totalManufactured = Math.max(0, totalOrdered - totalRemaining);
-    const progress = totalOrdered > 0 ? (totalManufactured / totalOrdered) * 100 : 0;
+    return { ordered: totalOrdered, manufactured: totalProduced, remaining: totalRemaining, colored: totalColored, progress, accessory: totalAccessory, orderedPlusAccessory: totalOrdered + totalAccessory, customerOrdered: totalCustomerOrdered };
+  }, [selectedCustomer, statsMap, orderIdStatsMap, machines, subLogsByMachineId, rawExternalLogs, seasons]);
 
-    return { ordered: totalOrdered, manufactured: totalManufactured, remaining: totalRemaining, colored: totalColored, progress, accessory: totalAccessory, orderedPlusAccessory: totalOrdered + totalAccessory };
-  }, [selectedCustomer, statsMap, orderIdStatsMap]);
+  // Batch-write cachedManufacturedBySeason for ALL customers whenever logs are loaded.
+  // Stored as { "Winter 2026": 3320.5, "seasonId": 1200 } so ProductionHistoryPage
+  // can look up the exact season without cross-season inflation.
+  useEffect(() => {
+    if (!customers.length || !machines.length) return;
+    const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+    const timer = setTimeout(async () => {
+      try {
+        // customerId -> seasonKey -> total
+        const bySeason: Record<string, Record<string, number>> = {};
+        customers.forEach(c => { bySeason[c.id] = {}; });
+
+        const addQty = (customerId: string, seasonKey: string, qty: number) => {
+          if (!bySeason[customerId]) return;
+          bySeason[customerId][seasonKey] = (bySeason[customerId][seasonKey] || 0) + qty;
+        };
+
+        const getSeasonKeys = (rawSeason: any) => {
+          const value = String(rawSeason || '').trim();
+          if (!value) return ['__none__'];
+          const matchedSeason = seasons.find(s => s.id === value || s.name === value);
+          if (!matchedSeason) return [value];
+          return Array.from(new Set([matchedSeason.id, matchedSeason.name].filter(Boolean)));
+        };
+
+        const findCustomerByLogClient = (logClient: string) => customers.find(c => {
+          const shortName = normalize(String((c as any).shortName || ''));
+          return normalize(c.name) === logClient || shortName === logClient;
+        });
+
+        machines.forEach(machine => {
+          (subLogsByMachineId?.get(String(machine.id)) || []).forEach((log: any) => {
+            const logClient = normalize(log.client);
+            const customer = findCustomerByLogClient(logClient);
+            if (!customer) return;
+            const qty = Number(log.dayProduction) || 0;
+            if (qty) {
+              getSeasonKeys(log.clientSeason).forEach(seasonKey => addQty(customer.id, seasonKey, qty));
+            }
+            (log.extraSessions || []).forEach((session: any) => {
+              if (normalize(session.client) === logClient) {
+                const sq = Number(session.dayProduction) || 0;
+                const sessionSeason = session.clientSeason || log.clientSeason;
+                if (sq) {
+                  getSeasonKeys(sessionSeason).forEach(seasonKey => addQty(customer.id, seasonKey, sq));
+                }
+              }
+            });
+          });
+        });
+        (rawExternalLogs || []).forEach((ext: any) => {
+          const extClient = normalize(ext.client);
+          const customer = findCustomerByLogClient(extClient);
+          if (!customer) return;
+          const qty = Number(ext.receivedQty) || 0;
+          if (qty) {
+            getSeasonKeys(ext.clientSeason).forEach(seasonKey => addQty(customer.id, seasonKey, qty));
+          }
+        });
+
+        // Batch write in chunks of 500 (Firestore limit)
+        const entries = Object.entries(bySeason);
+        for (let i = 0; i < entries.length; i += 500) {
+          const batch = writeBatch(db);
+          entries.slice(i, i + 500).forEach(([id, seasonMap]) => {
+            batch.update(doc(db, 'CustomerSheets', id), { cachedManufacturedBySeason: seasonMap });
+          });
+          await batch.commit();
+        }
+      } catch (e) { /* silent */ }
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [customers, machines, subLogsByMachineId, rawExternalLogs, seasons]);
 
   const totalYarnRequirements = useMemo(() => {
     if (!selectedCustomer || !selectedCustomer.orders) return [];
@@ -8964,47 +9125,59 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden bg-white relative">
         {selectedCustomerId === ALL_CLIENTS_ID ? (
-          <div className="flex-1 overflow-auto p-6 bg-slate-50">
-             <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
-                   <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                      <Users className="w-5 h-5 text-blue-600" />
+          <div className="flex-1 overflow-auto p-3 bg-slate-100">
+             <div className="bg-white border border-slate-300 shadow-sm overflow-hidden">
+                <div className="px-3 py-2 border-b border-slate-300 bg-slate-200 flex justify-between items-center">
+                   <h2 className="text-xs font-bold text-slate-700 flex items-center gap-1.5 uppercase tracking-wide">
+                      <Users className="w-3.5 h-3.5 text-blue-600" />
                       All Clients Overview
                    </h2>
-                   <div className="text-sm text-slate-500">
-                      {allClientsStats.length} Active Clients
+                   <div className="text-xs text-slate-500">
+                      {allClientsStats.length} clients
                    </div>
                 </div>
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
-                    <tr>
-                      <th className="px-4 py-3">Client Name</th>
-                      <th className="px-4 py-3">Order Receive Date</th>
-                      <th className="px-4 py-3 text-right">Ordered</th>
-                      <th className="px-4 py-3 text-right">Manufactured</th>
-                      <th className="px-4 py-3 text-right">Remaining</th>
-                      <th className="px-4 py-3 text-right bg-orange-50">Delivery</th>
-                      <th className="px-4 py-3 text-right bg-red-50">Rem. Delivery</th>
+                <table className="w-full text-left border-collapse" style={{fontSize: '12px'}}>
+                  <thead>
+                    <tr className="bg-slate-200 text-slate-600 font-semibold border-b border-slate-400">
+                      <th className="px-2 py-1 border-r border-slate-300">#</th>
+                      <th className="px-2 py-1 border-r border-slate-300">Client Name</th>
+                      <th className="px-2 py-1 border-r border-slate-300">Order Receive Date</th>
+                      <th className="px-2 py-1 text-right border-r border-slate-300">Ordered (kg)</th>
+                      <th className="px-2 py-1 text-right border-r border-slate-300">Manufactured (kg)</th>
+                      <th className="px-2 py-1 text-right border-r border-slate-300">Remaining (kg)</th>
+                      <th className="px-2 py-1 text-right border-r border-slate-300 bg-orange-50">Delivery (kg)</th>
+                      <th className="px-2 py-1 text-right bg-red-50">Rem. Delivery (kg)</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {allClientsStats.map((client) => (
-                      <tr key={client.id} className="hover:bg-slate-50 transition-colors">
-                        <td className="px-4 py-3 font-medium text-slate-800">{client.name}</td>
-                        <td className="px-4 py-3 text-slate-600">
-                          <div className="flex flex-wrap gap-1">
+                  <tbody>
+                    {allClientsStats.map((client, idx) => (
+                      <tr key={client.id} className={`border-b border-slate-200 hover:bg-blue-50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}`}>
+                        <td className="px-2 py-0.5 text-slate-400 border-r border-slate-200 tabular-nums">{idx + 1}</td>
+                        <td className="px-2 py-0.5 font-semibold text-slate-800 border-r border-slate-200 whitespace-nowrap">{client.name}</td>
+                        <td className="px-2 py-0.5 text-slate-600 border-r border-slate-200">
+                          <div className="flex flex-wrap gap-0.5">
                             {client.stats.dates.length > 0 ? client.stats.dates.map((d, i) => (
-                              <span key={i} className="px-1.5 py-0.5 bg-slate-100 rounded text-xs border border-slate-200">{d}</span>
-                            )) : '-'}
+                              <span key={i} className="px-1 py-px bg-slate-100 rounded text-[10px] border border-slate-300">{d}</span>
+                            )) : <span className="text-slate-400">—</span>}
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-right font-mono text-slate-700">{client.stats.ordered.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-right font-mono text-emerald-600">{client.stats.manufactured.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-right font-mono text-amber-600 font-bold">{client.stats.remaining.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-right font-mono text-orange-600 bg-orange-50/30">{client.stats.delivery.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-right font-mono text-red-600 bg-red-50/30 font-bold">{client.stats.remainingDelivery.toLocaleString()}</td>
+                        <td className="px-2 py-0.5 text-right font-mono text-slate-700 border-r border-slate-200 tabular-nums">{client.stats.ordered.toLocaleString()}</td>
+                        <td className="px-2 py-0.5 text-right font-mono text-emerald-700 border-r border-slate-200 tabular-nums">{client.stats.manufactured.toLocaleString()}</td>
+                        <td className="px-2 py-0.5 text-right font-mono text-amber-700 font-semibold border-r border-slate-200 tabular-nums">{client.stats.remaining.toLocaleString()}</td>
+                        <td className="px-2 py-0.5 text-right font-mono text-orange-700 bg-orange-50/50 border-r border-slate-200 tabular-nums">{client.stats.delivery.toLocaleString()}</td>
+                        <td className="px-2 py-0.5 text-right font-mono text-red-700 bg-red-50/50 font-semibold tabular-nums">{client.stats.remainingDelivery.toLocaleString()}</td>
                       </tr>
                     ))}
+                    {/* Totals row */}
+                    <tr className="bg-slate-200 border-t-2 border-slate-400 font-bold">
+                      <td className="px-2 py-1 border-r border-slate-300" colSpan={2}><span className="text-xs text-slate-600 uppercase tracking-wide">Total</span></td>
+                      <td className="px-2 py-1 border-r border-slate-300"></td>
+                      <td className="px-2 py-1 text-right font-mono text-slate-800 border-r border-slate-300 tabular-nums text-xs">{allClientsStats.reduce((s, c) => s + c.stats.ordered, 0).toLocaleString()}</td>
+                      <td className="px-2 py-1 text-right font-mono text-emerald-700 border-r border-slate-300 tabular-nums text-xs">{allClientsStats.reduce((s, c) => s + c.stats.manufactured, 0).toLocaleString()}</td>
+                      <td className="px-2 py-1 text-right font-mono text-amber-700 border-r border-slate-300 tabular-nums text-xs">{allClientsStats.reduce((s, c) => s + c.stats.remaining, 0).toLocaleString()}</td>
+                      <td className="px-2 py-1 text-right font-mono text-orange-700 bg-orange-50/50 border-r border-slate-300 tabular-nums text-xs">{allClientsStats.reduce((s, c) => s + c.stats.delivery, 0).toLocaleString()}</td>
+                      <td className="px-2 py-1 text-right font-mono text-red-700 bg-red-50/50 tabular-nums text-xs">{allClientsStats.reduce((s, c) => s + c.stats.remainingDelivery, 0).toLocaleString()}</td>
+                    </tr>
                   </tbody>
                 </table>
              </div>
@@ -9160,6 +9333,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                             {[
                                               { id: 'reqGsm', label: 'Req GSM' },
                                               { id: 'reqWidth', label: 'Req Width' },
+                                              { id: 'customerOrderedQty', label: 'QTY Customer Ordered' },
                                               { id: 'accessories', label: 'Accessories' },
                                               { id: 'accQty', label: 'Acc. Qty' },
                                               { id: 'status', label: 'Status' },
@@ -9192,6 +9366,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                       </div>
                                     </div>
                                   </th>
+                                  {ordersVisibleCols['customerOrderedQty'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-amber-50 text-amber-700">QTY Customer Ordered</th>}
                                   {ordersVisibleCols['reqGsm'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20">Req GSM</th>}
                                   {ordersVisibleCols['reqWidth'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20">Req Width</th>}
                                   {ordersVisibleCols['accessories'] !== false && <th className="p-3 text-left border-b border-r border-slate-200 min-w-[140px]">Accessories</th>}
@@ -9202,7 +9377,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                 <>
                                   {ordersVisibleCols['status'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-28">Status</th>}
                                   {ordersVisibleCols['dyehousePlan'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-32 bg-indigo-50">Dyehouse Plan</th>}
-                                  {ordersVisibleCols['ordered'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20">Ordered</th>}
+                                  {ordersVisibleCols['ordered'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20">To Be Produced</th>}
                                   {ordersVisibleCols['produced'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20 bg-emerald-50 text-emerald-700">Produced</th>}
                                   {ordersVisibleCols['remaining'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20 bg-slate-50">Remaining</th>}
                                   {ordersVisibleCols['receiveDate'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-24">Receive Date</th>}
@@ -9420,89 +9595,127 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                       </div>
                   )}
                   {viewMode === 'table' && (
-                    <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
+                    <div className="space-y-3">
                         {!isFullyLoaded ? (
-                          // Skeleton for stats cards
-                          Array.from({ length: 5 }).map((_, idx) => (
-                            <div key={`stat-skeleton-${idx}`} className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm animate-pulse">
-                              <div className="h-3 bg-slate-200 rounded w-24 mb-3"></div>
-                              <div className="h-8 bg-slate-200 rounded w-32"></div>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                          {Array.from({ length: 4 }).map((_, idx) => (
+                            <div key={`stat-skeleton-${idx}`} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm animate-pulse">
+                              <div className="h-2.5 bg-slate-200 rounded w-20 mb-3"></div>
+                              <div className="h-7 bg-slate-200 rounded w-24"></div>
                             </div>
-                          ))
+                          ))}
+                          </div>
                         ) : (
                           <>
-                            <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
+                            {/* Primary KPI Row */}
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                              {/* Total To Be Produced */}
+                              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-col gap-2">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">To Be Produced</span>
+                                  <div className="w-7 h-7 bg-blue-50 rounded-lg flex items-center justify-center">
+                                    <Package className="w-3.5 h-3.5 text-blue-500" />
+                                  </div>
+                                </div>
+                                <p className="text-2xl font-bold text-slate-800 leading-none">{orderTotals.orderedPlusAccessory.toLocaleString()}<span className="text-xs font-normal text-slate-400 ml-1">kg</span></p>
+                              </div>
+
+                              {/* Manufactured */}
+                              <div className="bg-white rounded-xl border border-emerald-100 shadow-sm p-4 flex flex-col gap-2">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Manufactured</span>
+                                  <div className="w-7 h-7 bg-emerald-50 rounded-lg flex items-center justify-center">
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                                  </div>
+                                </div>
+                                <p className="text-2xl font-bold text-emerald-600 leading-none">{orderTotals.manufactured.toLocaleString()}<span className="text-xs font-normal text-slate-400 ml-1">kg</span></p>
+                              </div>
+
+                              {/* Remaining */}
+                              <div className="bg-white rounded-xl border border-amber-100 shadow-sm p-4 flex flex-col gap-2">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-bold text-amber-400 uppercase tracking-widest">Remaining</span>
+                                  <div className="w-7 h-7 bg-amber-50 rounded-lg flex items-center justify-center">
+                                    <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
+                                  </div>
+                                </div>
+                                <p className="text-2xl font-bold text-amber-600 leading-none">{orderTotals.remaining.toLocaleString()}<span className="text-xs font-normal text-slate-400 ml-1">kg</span></p>
+                              </div>
+
+                              {/* Progress */}
+                              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-col gap-2">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Progress</span>
+                                  <p className="text-sm font-bold text-blue-600">{orderTotals.progress.toFixed(1)}%</p>
+                                </div>
+                                <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden mt-1">
+                                  <div className="bg-blue-500 h-1.5 rounded-full transition-all duration-500" style={{ width: `${Math.min(100, Math.max(0, orderTotals.progress))}%` }}></div>
+                                </div>
+                                <p className="text-xs text-slate-400">{orderTotals.manufactured.toLocaleString()} / {orderTotals.orderedPlusAccessory.toLocaleString()} kg</p>
+                              </div>
+                            </div>
+
+                            {/* Secondary Row */}
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                              {/* QTY Customer Ordered */}
+                              {orderTotals.customerOrdered > 0 && (
+                                <div className="bg-white rounded-xl border border-amber-200 shadow-sm p-4 flex items-center gap-3">
+                                  <div className="w-9 h-9 bg-amber-50 rounded-lg flex items-center justify-center flex-shrink-0">
+                                    <Package className="w-4 h-4 text-amber-500" />
+                                  </div>
+                                  <div>
+                                    <p className="text-[10px] font-bold text-amber-400 uppercase tracking-widest">QTY Customer Ordered</p>
+                                    <p className="text-xl font-bold text-amber-700 leading-tight">{orderTotals.customerOrdered.toLocaleString()} <span className="text-xs font-normal text-slate-400">kg</span></p>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* QTY Customer Ordered + Accessory */}
+                              {orderTotals.customerOrdered > 0 && (
+                                <div className="bg-white rounded-xl border border-orange-200 shadow-sm p-4 flex items-center gap-3">
+                                  <div className="w-9 h-9 bg-orange-50 rounded-lg flex items-center justify-center flex-shrink-0">
+                                    <Package className="w-4 h-4 text-orange-500" />
+                                  </div>
+                                  <div>
+                                    <p className="text-[10px] font-bold text-orange-400 uppercase tracking-widest">QTY Customer Ordered + Acc.</p>
+                                    <p className="text-xl font-bold text-orange-700 leading-tight">{(orderTotals.customerOrdered + orderTotals.accessory).toLocaleString()} <span className="text-xs font-normal text-slate-400">kg</span></p>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Colored by Customer */}
+                              <div className="bg-white rounded-xl border border-indigo-100 shadow-sm p-4 flex items-center gap-3">
+                                <div className="w-9 h-9 bg-indigo-50 rounded-lg flex items-center justify-center flex-shrink-0">
+                                  <Droplet className="w-4 h-4 text-indigo-500" />
+                                </div>
                                 <div>
-                                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Ordered</p>
-                                    <p className="text-2xl font-bold text-slate-800 mt-1">{orderTotals.ordered.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
+                                  <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Colored by Customer</p>
+                                  <p className="text-xl font-bold text-indigo-700 leading-tight">{orderTotals.colored.toLocaleString()} <span className="text-xs font-normal text-slate-400">kg</span></p>
                                 </div>
-                                <div className="p-3 bg-blue-50 rounded-full">
-                                    <Package className="w-6 h-6 text-blue-600" />
+                              </div>
+
+                              {/* Total Accessory */}
+                              <div className="bg-white rounded-xl border border-purple-100 shadow-sm p-4 flex items-center gap-3">
+                                <div className="w-9 h-9 bg-purple-50 rounded-lg flex items-center justify-center flex-shrink-0">
+                                  <Package className="w-4 h-4 text-purple-500" />
                                 </div>
-                            </div>
-                        
-                        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
-                            <div>
-                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Manufactured</p>
-                                <p className="text-2xl font-bold text-emerald-600 mt-1">{orderTotals.manufactured.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
-                            </div>
-                            <div className="p-3 bg-emerald-50 rounded-full">
-                                <CheckCircle2 className="w-6 h-6 text-emerald-600" />
-                            </div>
-                        </div>
+                                <div>
+                                  <p className="text-[10px] font-bold text-purple-400 uppercase tracking-widest">Total Accessory</p>
+                                  <p className="text-xl font-bold text-purple-700 leading-tight">{orderTotals.accessory.toLocaleString()} <span className="text-xs font-normal text-slate-400">kg</span></p>
+                                </div>
+                              </div>
 
-                        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
-                            <div>
-                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Remaining</p>
-                                <p className="text-2xl font-bold text-amber-600 mt-1">{orderTotals.remaining.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
+                              {/* Total + Accessory */}
+                              <div className="bg-slate-50 rounded-xl border border-slate-200 shadow-sm p-4 flex items-center gap-3">
+                                <div className="w-9 h-9 bg-slate-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                                  <Package className="w-4 h-4 text-slate-500" />
+                                </div>
+                                <div>
+                                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total + Accessory</p>
+                                  <p className="text-xl font-bold text-slate-700 leading-tight">{orderTotals.orderedPlusAccessory.toLocaleString()} <span className="text-xs font-normal text-slate-400">kg</span></p>
+                                </div>
+                              </div>
                             </div>
-                            <div className="p-3 bg-amber-50 rounded-full">
-                                <AlertCircle className="w-6 h-6 text-amber-600" />
-                            </div>
-                        </div>
-
-                        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
-                            <div>
-                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Colored by Customer</p>
-                                <p className="text-2xl font-bold text-indigo-600 mt-1">{orderTotals.colored.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
-                            </div>
-                            <div className="p-3 bg-indigo-50 rounded-full">
-                                <Droplet className="w-6 h-6 text-indigo-600" />
-                            </div>
-                        </div>
-
-                        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex flex-col justify-center">
-                            <div className="flex justify-between items-end mb-2">
-                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Progress</p>
-                                <p className="text-lg font-bold text-blue-600">{orderTotals.progress.toFixed(1)}%</p>
-                            </div>
-                            <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
-                                <div 
-                                    className="bg-blue-600 h-2.5 rounded-full transition-all duration-500" 
-                                    style={{ width: `${Math.min(100, Math.max(0, orderTotals.progress))}%` }}
-                                ></div>
-                            </div>
-                        </div>
-
-                        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
-                            <div>
-                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Accessory</p>
-                                <p className="text-2xl font-bold text-purple-600 mt-1">{orderTotals.accessory.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
-                            </div>
-                            <div className="p-3 bg-purple-50 rounded-full">
-                                <Package className="w-6 h-6 text-purple-600" />
-                            </div>
-                        </div>
-
-                        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between">
-                            <div>
-                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Ordered + Accessory</p>
-                                <p className="text-2xl font-bold text-slate-700 mt-1">{orderTotals.orderedPlusAccessory.toLocaleString()} <span className="text-sm font-normal text-slate-400">kg</span></p>
-                            </div>
-                            <div className="p-3 bg-slate-100 rounded-full">
-                                <Package className="w-6 h-6 text-slate-600" />
-                            </div>
-                        </div>
                           </>
                         )}
                     </div>

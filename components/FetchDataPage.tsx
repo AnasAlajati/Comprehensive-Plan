@@ -2057,26 +2057,30 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
 
   const bousMachines = filteredLogs.filter(m => m.machineType === 'BOUS');
   const wideMachines = filteredLogs.filter(m => m.machineType !== 'BOUS');
+  // Helper: sum dayProduction including all extraSessions on a log entry
+  const logTotalProduction = (m: any) => (Number(m.dayProduction) || 0) + (m.extraSessions || []).reduce((s: number, es: any) => s + (Number(es.dayProduction) || 0), 0);
+  const logTotalScrap = (m: any) => (Number(m.scrap) || 0) + (m.extraSessions || []).reduce((s: number, es: any) => s + (Number(es.scrap) || 0), 0);
+
   // Calculate Samples Production separately
   const samplesProduction = filteredLogs.reduce((sum, m) => {
     if (normalizeStatusValue(m.status) === MachineStatus.SAMPLES) {
-      return sum + (Number(m.dayProduction) || 0);
+      return sum + logTotalProduction(m);
     }
     return sum;
   }, 0);
 
   const bousProduction = bousMachines.reduce((sum, m) => {
     if (normalizeStatusValue(m.status) === MachineStatus.SAMPLES) return sum;
-    return sum + (Number(m.dayProduction) || 0);
+    return sum + logTotalProduction(m);
   }, 0);
   
   const wideProduction = wideMachines.reduce((sum, m) => {
     if (normalizeStatusValue(m.status) === MachineStatus.SAMPLES) return sum;
-    return sum + (Number(m.dayProduction) || 0);
+    return sum + logTotalProduction(m);
   }, 0);
 
   const totalProduction = wideProduction + bousProduction + Number(externalProduction);
-  const totalScrap = filteredLogs.reduce((sum, m) => sum + (Number(m.scrap) || 0), 0) + Number(hallScrap) + Number(labScrap) + Number(externalScrap) + samplesProduction;
+  const totalScrap = filteredLogs.reduce((sum, m) => sum + logTotalScrap(m), 0) + Number(hallScrap) + Number(labScrap) + Number(externalScrap) + samplesProduction;
   const scrapPercentage = totalProduction > 0 ? (totalScrap / totalProduction) * 100 : 0;
   
   const statusCounts = filteredLogs.reduce((acc, m) => {
