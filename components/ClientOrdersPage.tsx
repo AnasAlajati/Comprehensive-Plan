@@ -85,7 +85,8 @@ import {
   List,
   Printer,
   ArrowUpDown,
-  Link2
+  Link2,
+  UserMinus
 } from 'lucide-react';
 import { OrderSummaryCard } from './OrderSummaryCard';
 
@@ -1634,7 +1635,7 @@ const MemoizedOrderRow = React.memo(({
     <>
     <tr 
       data-fabric-name={row.material}
-      className={`transition-colors group text-sm table-view hidden sm:table-row ${flashNew ? 'ring-2 ring-indigo-300 bg-indigo-50/60' : isSelected ? 'bg-blue-50' : isGrouped ? 'bg-indigo-50/40' : ''} ${isGroupParent ? 'border-l-4 border-indigo-400' : (isGrouped ? 'border-l-4 border-indigo-200' : '')} ${isGrouped ? 'hover:bg-indigo-50/60' : 'hover:bg-blue-50/30'}`}
+      className={`transition-colors group text-sm table-view hidden sm:table-row ${row.clientRemoved ? 'bg-red-50/60 opacity-60' : flashNew ? 'ring-2 ring-indigo-300 bg-indigo-50/60' : isSelected ? 'bg-blue-50' : isGrouped ? 'bg-indigo-50/40' : ''} ${isGroupParent ? 'border-l-4 border-indigo-400' : (isGrouped ? 'border-l-4 border-indigo-200' : '')} ${isGrouped ? 'hover:bg-indigo-50/60' : 'hover:bg-blue-50/30'}`}
     >
       {/* Checkbox */}
       <td className="p-0 border-r border-slate-200 text-center align-middle">
@@ -2074,6 +2075,16 @@ const MemoizedOrderRow = React.memo(({
                      <CheckCircle2 className="w-3 h-3 text-emerald-500" />
                      <span>Verified</span>
                    </div>
+                )}
+
+                {/* Client Removed Badge */}
+                {row.clientRemoved && (
+                  <div className="px-2 pb-1 flex items-center gap-1">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-red-100 text-red-700 border-red-200">
+                      <X size={9} />
+                      Client Removed
+                    </span>
+                  </div>
                 )}
               </div>
               {/* Removed absolute calculator button in favor of inline action */}
@@ -2687,6 +2698,29 @@ const MemoizedOrderRow = React.memo(({
                         <div className="text-[10px] text-slate-400 mt-1">{new Date(row.lastUpdated || '').toLocaleString()}</div>
                     </div>
                 </div>
+            )}
+            {!isReadOnly && (userRole === 'admin' || userRole === 'editor') && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const isRemoving = !row.clientRemoved;
+                    const updates: Partial<OrderRow> = {
+                      clientRemoved: isRemoving,
+                      clientRemovedAt: isRemoving ? new Date().toISOString() : undefined,
+                      clientRemovedBy: isRemoving ? (userName || undefined) : undefined,
+                    };
+                    handleUpdateOrder(row.id, updates);
+                  }}
+                  className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium transition-all opacity-0 group-hover:opacity-100 whitespace-nowrap ${
+                    row.clientRemoved
+                      ? 'bg-red-100 text-red-600 border border-red-200 hover:bg-slate-100 hover:text-slate-500 hover:border-slate-200'
+                      : 'bg-slate-100 text-slate-500 border border-slate-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200'
+                  }`}
+                  title={row.clientRemoved ? 'Undo — restore this fabric to the order' : 'Mark as removed by client (excludes from totals)'}
+                >
+                  <UserMinus className="w-3 h-3" />
+                  {row.clientRemoved ? 'Restore' : 'Client Removed'}
+                </button>
             )}
             {!isReadOnly && userRole === 'admin' && (
                 <button 
@@ -6145,9 +6179,9 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
 
     return customers.map(client => {
-      const ordered = client.orders.reduce((sum, o) => sum + (o.requiredQty || 0), 0);
-      const remaining = client.orders.reduce((sum, o) => sum + (o.remainingQty || 0), 0);
-      const delivery = client.orders.reduce((sum, o) => sum + (o.batchDeliveries || 0), 0);
+      const ordered = client.orders.reduce((sum, o) => o.clientRemoved ? sum : sum + (o.requiredQty || 0), 0);
+      const remaining = client.orders.reduce((sum, o) => o.clientRemoved ? sum : sum + (o.remainingQty || 0), 0);
+      const delivery = client.orders.reduce((sum, o) => o.clientRemoved ? sum : sum + (o.batchDeliveries || 0), 0);
       const remainingDelivery = Math.max(0, ordered - delivery);
 
       const targetClient = normalize(client.name);
@@ -6307,6 +6341,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     let totalProduced = 0; // summed directly from machine logs (accurate)
 
     selectedCustomer.orders.forEach(order => {
+        if (order.clientRemoved) return; // Skip client-removed fabrics from totals
         const required = order.requiredQty ?? 0;
         totalOrdered += required;
         if (order.customerOrderedQty != null) totalCustomerOrdered += order.customerOrderedQty;

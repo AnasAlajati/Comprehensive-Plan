@@ -418,6 +418,9 @@ export interface OrderRow {
   createdAt?: string;
   createdBy?: string;
   quickDeliveries?: Array<{ id: string; date: string; fabricQty: number; accessoryQty: number; notes?: string }>; // Quick deliveries without color assignment
+  clientRemoved?: boolean; // NEW: Client removed this fabric from their order
+  clientRemovedAt?: string; // NEW: ISO timestamp when client removed it
+  clientRemovedBy?: string; // NEW: User who marked it as removed
   
   // Audit Info
   lastUpdatedBy?: string;
