@@ -5017,7 +5017,55 @@ interface ClientOrdersPageProps {
   initialMachinesData?: any[];
 }
 
-export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({ 
+// ── Shared card-totals calculator ───────────────────────────────────────────
+// THE single source of truth for a customer's Manufactured + Ordered numbers.
+// The summary card (orderTotals) and the "Populate full list" button both call this,
+// so the saved list is guaranteed to equal the card exactly. Manufactured is counted
+// the same way the card does: internal logs + sessions pinned by orderId, plus external
+// receivedQty where the external's client matches AND its orderId matches the order.
+const computeCustomerCardTotals = (
+  customer: any,
+  externalLogs: any[],
+  machines: any[],
+  subLogsByMachineId: Map<string, any[]> | undefined
+) => {
+  const normalize = (s: string) => (s ? s.trim().toLowerCase() : '');
+  const custName = customer?.name || '';
+  let ordered = 0, customerOrdered = 0, accessory = 0, manufactured = 0, deliveries = 0;
+  const orderDates: string[] = [];
+  (customer?.orders || []).forEach((order: any) => {
+    if (order.clientRemoved) return; // excluded from totals (same as the card)
+    ordered += Number(order.requiredQty) || 0;
+    if (order.customerOrderedQty != null) customerOrdered += Number(order.customerOrderedQty) || 0;
+    accessory += Number(order.accessoryQty) || 0;
+    if (order.orderReceiptDate) orderDates.push(order.orderReceiptDate);
+    // Deliveries: explicit batchDeliveries + every dyeing-plan delivery event
+    deliveries += Number(order.batchDeliveries) || 0;
+    (order.dyeingPlan || []).forEach((batch: any) => {
+      (batch.deliveryEvents || []).forEach((ev: any) => {
+        deliveries += Number(ev.quantityColorDelivered) || 0;
+      });
+    });
+    // Internal machine logs (+ extra sessions), pinned by orderId
+    (machines || []).forEach((machine: any) => {
+      (subLogsByMachineId?.get(String(machine.id)) || []).forEach((log: any) => {
+        if (log.orderId === order.id) manufactured += Number(log.dayProduction) || 0;
+        (log.extraSessions || []).forEach((session: any) => {
+          if (session.orderId === order.id) manufactured += Number(session.dayProduction) || 0;
+        });
+      });
+    });
+    // External logs — same rule the card uses: client name + orderId must match
+    (externalLogs || []).forEach((ext: any) => {
+      if (!ext || normalize(ext.client) !== normalize(custName)) return;
+      if (!ext.orderId || ext.orderId !== order.id) return;
+      manufactured += Number(ext.receivedQty) || 0;
+    });
+  });
+  return { ordered, customerOrdered, accessory, manufactured, deliveries, orderDates, customerOrderedPlusAcc: customerOrdered + accessory };
+};
+
+export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   userRole,
   highlightTarget,
   onHighlightComplete,
@@ -6325,156 +6373,159 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       return { ordered: 0, manufactured: 0, remaining: 0, colored: 0, progress: 0, accessory: 0, orderedPlusAccessory: 0, customerOrdered: 0 };
     }
 
-    const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+    // Manufactured / ordered / customer-ordered / accessory come from the SHARED
+    // calculator — the exact same function the "Populate full list" button uses.
+    const card = computeCustomerCardTotals(selectedCustomer, rawExternalLogs, machines, subLogsByMachineId);
 
-    // Derive equivalents of OrderRowCard props in parent scope
-    const _custName = selectedCustomer.name || '';
-    const _seasonId = selectedCustomer.createdSeasonId || '';
-    const _seasonName = (selectedCustomer as any).createdSeasonName
-      || (_seasonId ? (seasons.find((s: any) => s.id === _seasonId)?.name || '') : '');
-
-    let totalOrdered = 0;
+    // Remaining + colored still need per-order status context (selected-customer only).
     let totalRemaining = 0;
     let totalColored = 0;
-    let totalAccessory = 0;
-    let totalCustomerOrdered = 0;
-    let totalProduced = 0; // summed directly from machine logs (accurate)
-
     selectedCustomer.orders.forEach(order => {
-        if (order.clientRemoved) return; // Skip client-removed fabrics from totals
+        if (order.clientRemoved) return;
         const required = order.requiredQty ?? 0;
-        totalOrdered += required;
-        if (order.customerOrderedQty != null) totalCustomerOrdered += order.customerOrderedQty;
-        totalAccessory += Number(order.accessoryQty) || 0;
-
         const orderIdStatus = orderIdStatsMap.get(order.id);
         const statusInfoBase = order.reorderOfId ? null : (order.material ? statsMap.get(order.material) : null);
         const rowStatusInfo = orderIdStatus ?? statusInfoBase;
         const hasActive = rowStatusInfo && rowStatusInfo.active && rowStatusInfo.active.length > 0;
         const displayRemaining = hasActive ? (rowStatusInfo.remaining ?? 0) : (order.remainingQty ?? (required - (order.producedQty || 0)));
         totalRemaining += displayRemaining;
-
-        // Sum actual produced from machine logs — orderId-pinned only (mirrors producedByOrderId per row)
-        const isReOrder = !!order.reorderOfId;
-        const targetClient = normalize(_custName);
-        const targetFabric = normalize(order.material);
-        const clientOk = (lc: string) => normalize(lc) === targetClient;
-        const logSeasonOk = (log: any) => {
-          if (!_seasonId && !_seasonName) return true;
-          if (!log.clientSeason) return false;
-          return log.clientSeason === _seasonId || log.clientSeason === _seasonName;
-        };
-        machines.forEach(machine => {
-          (subLogsByMachineId?.get(String(machine.id)) || []).forEach((log: any) => {
-            const logOrderId = log.orderId;
-            if (logOrderId) {
-              // orderId present — only count if it matches this order
-              if (logOrderId === order.id) totalProduced += Number(log.dayProduction) || 0;
-            } else if (!isReOrder && clientOk(log.client) && normalize(log.fabric) === targetFabric && logSeasonOk(log)) {
-              // No orderId — legacy match, do NOT count
-            }
-            // extraSessions
-            (log.extraSessions || []).forEach((session: any) => {
-              if (session.orderId) {
-                if (session.orderId === order.id) totalProduced += Number(session.dayProduction) || 0;
-              }
-              // legacy sessions without orderId: skip
-            });
-          });
-        });
-        // External logs — orderId-pinned only
-        (rawExternalLogs || []).forEach((ext: any) => {
-          if (!ext || normalize(ext.client) !== normalize(_custName)) return;
-          if (!ext.orderId) return; // no orderId = legacy, skip
-          if (ext.orderId !== order.id) return;
-          totalProduced += Number(ext.receivedQty) || 0;
-        });
-
         if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
-          order.dyeingPlan.forEach(batch => {
-            totalColored += Number(batch.plannedCapacity) || 0;
-          });
+          order.dyeingPlan.forEach(batch => { totalColored += Number(batch.plannedCapacity) || 0; });
         }
     });
 
-    const progress = (totalOrdered + totalAccessory) > 0 ? (totalProduced / (totalOrdered + totalAccessory)) * 100 : 0;
+    const progress = (card.ordered + card.accessory) > 0 ? (card.manufactured / (card.ordered + card.accessory)) * 100 : 0;
 
-    return { ordered: totalOrdered, manufactured: totalProduced, remaining: totalRemaining, colored: totalColored, progress, accessory: totalAccessory, orderedPlusAccessory: totalOrdered + totalAccessory, customerOrdered: totalCustomerOrdered };
+    return { ordered: card.ordered, manufactured: card.manufactured, remaining: totalRemaining, colored: totalColored, progress, accessory: card.accessory, orderedPlusAccessory: card.ordered + card.accessory, customerOrdered: card.customerOrdered };
   }, [selectedCustomer, statsMap, orderIdStatsMap, machines, subLogsByMachineId, rawExternalLogs, seasons]);
 
-  // Batch-write cachedManufacturedBySeason for ALL customers whenever logs are loaded.
-  // Stored as { "Winter 2026": 3320.5, "seasonId": 1200 } so ProductionHistoryPage
-  // can look up the exact season without cross-season inflation.
+  // ── Manufactured List (auto-saved from each customer's card) ─────────────────
+  // A single Firebase doc per season: manufacturedCache/{seasonId} = { customers: {...} }.
+  // Each entry is saved verbatim from that customer's summary card (orderTotals) the
+  // moment their Orders page is loaded — NOT recomputed anywhere. The list view and any
+  // other page just read this doc.
+  const [showMfgList, setShowMfgList] = useState(false);
+  const [mfgList, setMfgList] = useState<Record<string, any>>({});
+  const [mfgListUpdatedAt, setMfgListUpdatedAt] = useState<string>('');
+  const [buildingMfgList, setBuildingMfgList] = useState(false);
+  const [mfgListProgress, setMfgListProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
+
+  // Read the stored list for the selected season (live).
   useEffect(() => {
-    if (!customers.length || !machines.length) return;
-    const normalize = (s: string) => s ? s.trim().toLowerCase() : '';
+    if (!selectedSeasonId) { setMfgList({}); setMfgListUpdatedAt(''); return; }
+    const unsub = onSnapshot(
+      doc(db, 'manufacturedCache', selectedSeasonId),
+      snap => {
+        const data = snap.exists() ? snap.data() : null;
+        setMfgList((data && data.customers) || {});
+        setMfgListUpdatedAt((data && data.updatedAt) || '');
+      },
+      () => { setMfgList({}); setMfgListUpdatedAt(''); }
+    );
+    return () => unsub();
+  }, [selectedSeasonId]);
+
+  // Save-on-load: copy THIS customer's exact card numbers into the list, keyed by customer.
+  // manufactured = orderTotals.manufactured · ordered = customerOrdered + accessory.
+  // Merges one customer at a time, so the list fills in as you open each client.
+  useEffect(() => {
+    if (!selectedSeasonId || !selectedCustomerId) return;
+    const customer = customers.find(c => c.id === selectedCustomerId);
+    if (!customer) return; // skip All-Clients / Yarns / Remaining-Work views
+    // Same shared calculator the card uses → includes deliveries + order dates.
+    const card = computeCustomerCardTotals(customer, rawExternalLogs, machines, subLogsByMachineId);
+    const manufactured = card.manufactured;
+    const orderedQtyWithAccessory = card.customerOrderedPlusAcc;
+    // Don't overwrite a saved entry with an empty one before logs have loaded.
+    if (!manufactured && !orderedQtyWithAccessory) return;
     const timer = setTimeout(async () => {
       try {
-        // customerId -> seasonKey -> total
-        const bySeason: Record<string, Record<string, number>> = {};
-        customers.forEach(c => { bySeason[c.id] = {}; });
-
-        const addQty = (customerId: string, seasonKey: string, qty: number) => {
-          if (!bySeason[customerId]) return;
-          bySeason[customerId][seasonKey] = (bySeason[customerId][seasonKey] || 0) + qty;
-        };
-
-        const getSeasonKeys = (rawSeason: any) => {
-          const value = String(rawSeason || '').trim();
-          if (!value) return ['__none__'];
-          const matchedSeason = seasons.find(s => s.id === value || s.name === value);
-          if (!matchedSeason) return [value];
-          return Array.from(new Set([matchedSeason.id, matchedSeason.name].filter(Boolean)));
-        };
-
-        const findCustomerByLogClient = (logClient: string) => customers.find(c => {
-          const shortName = normalize(String((c as any).shortName || ''));
-          return normalize(c.name) === logClient || shortName === logClient;
-        });
-
-        machines.forEach(machine => {
-          (subLogsByMachineId?.get(String(machine.id)) || []).forEach((log: any) => {
-            const logClient = normalize(log.client);
-            const customer = findCustomerByLogClient(logClient);
-            if (!customer) return;
-            const qty = Number(log.dayProduction) || 0;
-            if (qty) {
-              getSeasonKeys(log.clientSeason).forEach(seasonKey => addQty(customer.id, seasonKey, qty));
-            }
-            (log.extraSessions || []).forEach((session: any) => {
-              if (normalize(session.client) === logClient) {
-                const sq = Number(session.dayProduction) || 0;
-                const sessionSeason = session.clientSeason || log.clientSeason;
-                if (sq) {
-                  getSeasonKeys(sessionSeason).forEach(seasonKey => addQty(customer.id, seasonKey, sq));
-                }
-              }
-            });
-          });
-        });
-        (rawExternalLogs || []).forEach((ext: any) => {
-          const extClient = normalize(ext.client);
-          const customer = findCustomerByLogClient(extClient);
-          if (!customer) return;
-          const qty = Number(ext.receivedQty) || 0;
-          if (qty) {
-            getSeasonKeys(ext.clientSeason).forEach(seasonKey => addQty(customer.id, seasonKey, qty));
-          }
-        });
-
-        // Batch write in chunks of 500 (Firestore limit)
-        const entries = Object.entries(bySeason);
-        for (let i = 0; i < entries.length; i += 500) {
-          const batch = writeBatch(db);
-          entries.slice(i, i + 500).forEach(([id, seasonMap]) => {
-            batch.update(doc(db, 'CustomerSheets', id), { cachedManufacturedBySeason: seasonMap });
-          });
-          await batch.commit();
-        }
-      } catch (e) { /* silent */ }
-    }, 3000);
+        const seasonObj = seasons.find((s: any) => s.id === selectedSeasonId);
+        await setDoc(
+          doc(db, 'manufacturedCache', selectedSeasonId),
+          {
+            seasonId: selectedSeasonId,
+            seasonName: seasonObj?.name || selectedSeasonId,
+            updatedAt: new Date().toISOString(),
+            customers: {
+              [selectedCustomerId]: {
+                code: customer.name || selectedCustomerId,
+                name: (customer as any).shortName || customer.name || selectedCustomerId,
+                manufactured,
+                orderedQtyWithAccessory,
+                deliveries: card.deliveries,
+                orderDates: card.orderDates,
+              },
+            },
+          },
+          { merge: true } // merge → keeps every other customer's saved entry intact
+        );
+      } catch (e) { console.error('Failed to save manufactured-list entry:', e); }
+    }, 800);
     return () => clearTimeout(timer);
-  }, [customers, machines, subLogsByMachineId, rawExternalLogs, seasons]);
+  }, [selectedSeasonId, selectedCustomerId, customers, orderTotals, seasons]);
+
+  // One press: populate the WHOLE list for EVERY client. Reads customers + their orders
+  // FRESH from Firestore (not the partially-loaded UI state) so it's deterministic and
+  // always includes all clients, however long it takes. Same shared calculator as the card.
+  const handlePopulateFullList = async () => {
+    if (!selectedSeasonId) return;
+    setBuildingMfgList(true);
+    setMfgListProgress({ done: 0, total: 0 });
+    try {
+      // Load all external production + all customers in parallel (2 reads).
+      const [extSnap, customersSnap] = await Promise.all([
+        getDocs(collection(db, 'externalProduction')),
+        getDocs(collection(db, 'CustomerSheets')),
+      ]);
+      const allExternal = extSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const total = customersSnap.docs.length;
+      setMfgListProgress({ done: 0, total });
+
+      const customersMap: Record<string, any> = {};
+      let done = 0;
+      // Fetch each customer's orders subcollection in parallel; fall back to legacy array.
+      await Promise.all(customersSnap.docs.map(async (cdoc) => {
+        const cdata: any = cdoc.data();
+        const cid = cdoc.id;
+        const code = cdata.name || cdata.shortName || cid;
+        const ordersSnap = await getDocs(collection(db, 'CustomerSheets', cid, 'orders'));
+        const raw = ordersSnap.docs.length > 0
+          ? ordersSnap.docs.map(o => ({ ...o.data(), id: o.id }))
+          : (Array.isArray(cdata.orders) ? cdata.orders : []);
+        // Same season rule the Orders page uses.
+        const orders = raw.filter((o: any) => (o.seasonId ? o.seasonId === selectedSeasonId : selectedSeasonId === '2025-summer'));
+        done++;
+        setMfgListProgress({ done, total });
+        if (orders.length === 0) return; // client has no orders this season
+        const customer = { name: code, shortName: cdata.shortName, orders };
+        const card = computeCustomerCardTotals(customer, allExternal, machines, subLogsByMachineId);
+        customersMap[cid] = {
+          code,
+          name: cdata.shortName || code,
+          manufactured: card.manufactured,
+          orderedQtyWithAccessory: card.customerOrderedPlusAcc,
+          deliveries: card.deliveries,
+          orderDates: card.orderDates,
+        };
+      }));
+
+      const seasonObj = seasons.find((s: any) => s.id === selectedSeasonId);
+      // Full replace (no merge) so the list is exactly all clients, every time.
+      await setDoc(doc(db, 'manufacturedCache', selectedSeasonId), {
+        seasonId: selectedSeasonId,
+        seasonName: seasonObj?.name || selectedSeasonId,
+        updatedAt: new Date().toISOString(),
+        customers: customersMap,
+      });
+      setSuccessNotification(`Manufactured list populated for ${Object.keys(customersMap).length} clients.`);
+    } catch (e) {
+      console.error('Failed to populate manufactured list:', e);
+      setSuccessNotification('Failed to populate list — see console.');
+    } finally {
+      setBuildingMfgList(false);
+    }
+  };
 
   const totalYarnRequirements = useMemo(() => {
     if (!selectedCustomer || !selectedCustomer.orders) return [];
@@ -8859,6 +8910,126 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         </div>
       )}
       
+      {/* ── Manufactured List page (button-driven, read verbatim, no recalculation) ── */}
+      {showMfgList && (
+        <div className="fixed inset-0 z-[9998] bg-slate-50 flex flex-col">
+          <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm">
+            <div>
+              <div className="flex items-center gap-2 text-slate-800">
+                <Factory className="w-5 h-5 text-emerald-600" />
+                <h2 className="text-lg font-bold">Manufactured List</h2>
+                <span className="text-sm font-semibold text-slate-500">· {seasons.find(s => s.id === selectedSeasonId)?.name || ''}</span>
+              </div>
+              <p className="text-xs text-slate-400 mt-0.5">
+                {mfgListUpdatedAt ? `Last updated: ${new Date(mfgListUpdatedAt).toLocaleString()}` : 'Open each client once to add them to the list.'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handlePopulateFullList}
+                disabled={buildingMfgList}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+                title="Populate every client at once (same numbers as each card)"
+              >
+                <Package className="w-4 h-4" /> {buildingMfgList ? 'Populating…' : 'Populate All Clients'}
+              </button>
+              <button
+                onClick={() => setShowMfgList(false)}
+                className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-auto p-6 relative">
+            {buildingMfgList && (
+              <div className="absolute inset-0 z-10 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4">
+                <div className="w-12 h-12 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin" />
+                <div className="text-center">
+                  <p className="text-base font-bold text-slate-700">Loading all clients…</p>
+                  <p className="text-sm text-slate-500 mt-1">
+                    {mfgListProgress.total > 0
+                      ? `Processed ${mfgListProgress.done} / ${mfgListProgress.total} clients`
+                      : 'Fetching clients & orders…'}
+                  </p>
+                </div>
+                {mfgListProgress.total > 0 && (
+                  <div className="w-64 h-2 bg-slate-200 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-emerald-600 transition-all duration-200"
+                      style={{ width: `${Math.round((mfgListProgress.done / mfgListProgress.total) * 100)}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+            {Object.keys(mfgList).length === 0 && !buildingMfgList ? (
+              <div className="text-center text-slate-400 py-20">
+                <Factory className="w-10 h-10 mx-auto mb-3 text-slate-300" />
+                <p className="font-medium">No clients saved yet for this season.</p>
+                <p className="text-sm">Press “Populate All Clients” to fill the list in one go — or open a client's Orders page to add them automatically.</p>
+              </div>
+            ) : Object.keys(mfgList).length === 0 ? (
+              <div className="py-20" />
+            ) : (
+              <div className="max-w-5xl mx-auto bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs uppercase tracking-wide">
+                    <tr>
+                      <th className="px-3 py-3 text-center">#</th>
+                      <th className="px-3 py-3 text-center">كود العميل</th>
+                      <th className="px-3 py-3 text-left">اسم العميل</th>
+                      <th className="px-3 py-3 text-center">تاريخ استلام الاوردر</th>
+                      <th className="px-3 py-3 text-right">الكمية المطلوبة</th>
+                      <th className="px-3 py-3 text-right">ما تم تصنيعه</th>
+                      <th className="px-3 py-3 text-right">المتبقى</th>
+                      <th className="px-3 py-3 text-right">التسليمات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {Object.entries(mfgList)
+                      .sort((a: any, b: any) => (Number(b[1]?.orderedQtyWithAccessory) || 0) - (Number(a[1]?.orderedQtyWithAccessory) || 0))
+                      .map(([cid, c]: any, i) => {
+                        const ordered = Number(c.orderedQtyWithAccessory) || 0;
+                        const manufactured = Number(c.manufactured) || 0;
+                        const remaining = Math.max(0, ordered - manufactured);
+                        const deliveries = Number(c.deliveries) || 0;
+                        const dates = [...new Set((c.orderDates || []) as string[])].sort();
+                        return (
+                        <tr key={cid} className="hover:bg-slate-50">
+                          <td className="px-3 py-2.5 text-center text-slate-400">{i + 1}</td>
+                          <td className="px-3 py-2.5 text-center"><span className="px-2 py-0.5 bg-slate-100 rounded text-xs font-bold text-slate-600">{c.code || cid}</span></td>
+                          <td className="px-3 py-2.5 text-left text-slate-700 font-medium">{c.name || c.code || cid}</td>
+                          <td className="px-3 py-2.5 text-center text-xs text-slate-500">
+                            {dates.length > 0
+                              ? <span title={dates.join(' | ')}>{dates.slice(0, 3).join(' · ')}{dates.length > 3 ? ` +${dates.length - 3}` : ''}</span>
+                              : <span className="text-slate-300">-</span>}
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-mono font-semibold text-slate-800">{ordered > 0 ? ordered.toLocaleString() : '-'}</td>
+                          <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{manufactured > 0 ? manufactured.toLocaleString() : '-'}</td>
+                          <td className="px-3 py-2.5 text-right font-mono text-amber-700">{remaining > 0 ? remaining.toLocaleString() : '-'}</td>
+                          <td className="px-3 py-2.5 text-right font-mono text-blue-700">{deliveries > 0 ? deliveries.toLocaleString() : '-'}</td>
+                        </tr>
+                        );
+                      })}
+                  </tbody>
+                  <tfoot className="bg-slate-50 border-t-2 border-slate-200 font-bold text-slate-800">
+                    <tr>
+                      <td className="px-3 py-3 text-center" colSpan={4}>الإجمالي</td>
+                      <td className="px-3 py-3 text-right font-mono">{Object.values(mfgList).reduce((s: number, c: any) => s + (Number(c.orderedQtyWithAccessory) || 0), 0).toLocaleString()}</td>
+                      <td className="px-3 py-3 text-right font-mono text-emerald-700">{Object.values(mfgList).reduce((s: number, c: any) => s + (Number(c.manufactured) || 0), 0).toLocaleString()}</td>
+                      <td className="px-3 py-3 text-right font-mono text-amber-700">{Object.values(mfgList).reduce((s: number, c: any) => s + Math.max(0, (Number(c.orderedQtyWithAccessory) || 0) - (Number(c.manufactured) || 0)), 0).toLocaleString()}</td>
+                      <td className="px-3 py-3 text-right font-mono text-blue-700">{Object.values(mfgList).reduce((s: number, c: any) => s + (Number(c.deliveries) || 0), 0).toLocaleString()}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Top Bar: Control Center */}
       <div className="bg-white border-b border-slate-200 shadow-sm z-20">
         
@@ -8891,6 +9062,13 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                     </select>
                     <ChevronDown className="absolute right-0 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none group-hover:text-indigo-500 transition-colors" />
                 </div>
+                <button
+                    onClick={() => setShowMfgList(true)}
+                    className="mt-1.5 inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold hover:bg-emerald-100 transition-colors w-fit"
+                    title="View / build the Manufactured List for this season"
+                >
+                    <Factory className="w-3.5 h-3.5" /> Manufactured List
+                </button>
             </div>
 
             {/* Client Selector & Add */}

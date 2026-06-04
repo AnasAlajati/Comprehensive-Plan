@@ -2,11 +2,12 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Calendar, Trash2, BarChart3, Factory, ChevronDown, ChevronUp, Download, RefreshCw, X, Info, FileText, ArrowLeft, AlertTriangle, TrendingUp, Package, BarChart2, LayoutGrid, List, ShoppingCart, Users, Edit2, Check } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
 import { MachineRow, Season } from '../types';
-import { collection, getDocs, query, where, documentId, addDoc, serverTimestamp, deleteDoc, doc, setDoc, collectionGroup, onSnapshot, writeBatch } from 'firebase/firestore';
+import { collection, getDocs, query, where, documentId, addDoc, serverTimestamp, deleteDoc, doc, setDoc, collectionGroup, onSnapshot } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { toJpeg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
 import { DataService } from '../services/dataService';
+import { computeCustomerCardTotals } from './cardTotals';
 
 interface ProductionHistoryPageProps {
   machines: MachineRow[];
@@ -56,6 +57,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
     realName: string;
     orderDates: string[];
     totalRequired: number;
+    totalOrderedDisplay: number;
     totalManufactured: number;
     totalRemaining: number;
     totalDeliveries: number;
@@ -66,6 +68,16 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
     fabricBreakdown?: { fabric: string; ordered: number; customerOrdered: number; manufactured: number }[];
   }
   const [clientOrderRows, setClientOrderRows] = useState<ClientOrderSummary[]>([]);
+  // The "manufactured list" published by the Orders page (manufacturedCache/{seasonId}).
+  // customerId -> { manufactured, customerOrderedPlusAcc, ... }. Read verbatim, no recalc.
+  const [manufacturedList, setManufacturedList] = useState<Record<string, any>>({});
+  const [populatingList, setPopulatingList] = useState(false);
+  const [mfgListProgress, setMfgListProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
+  // Dedicated Manufactured-List overlay (user picks which season to view).
+  const [showMfgList, setShowMfgList] = useState(false);
+  const [mfgListSeason, setMfgListSeason] = useState<string>('');
+  const [mfgListData, setMfgListData] = useState<Record<string, any>>({});
+  const [mfgListUpdatedAt, setMfgListUpdatedAt] = useState<string>('');
   const [clientRealNames, setClientRealNames] = useState<Record<string, string>>({});
   const [debugOpenClientId, setDebugOpenClientId] = useState<string | null>(null);
   const [editingRealNameId, setEditingRealNameId] = useState<string | null>(null);
@@ -172,86 +184,10 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
     fetchData();
   }, [startDate, endDate]); // Re-fetch when date changes to get correct daily summaries range
 
-  useEffect(() => {
-    if (view !== 'clients' || !seasons.length) return;
-
-    const normalize = (s: string) => (s ? s.trim().toLowerCase() : '');
-    const timer = setTimeout(async () => {
-      try {
-        const customersSnap = await getDocs(collection(db, 'CustomerSheets'));
-        const customers = customersSnap.docs.map(customerDoc => ({
-          id: customerDoc.id,
-          name: String(customerDoc.data().name || ''),
-          shortName: String(customerDoc.data().shortName || ''),
-        }));
-        if (!customers.length) return;
-
-        const bySeason: Record<string, Record<string, number>> = {};
-        customers.forEach(customer => { bySeason[customer.id] = {}; });
-
-        const addQty = (customerId: string, seasonKey: string, qty: number) => {
-          if (!bySeason[customerId]) return;
-          bySeason[customerId][seasonKey] = (bySeason[customerId][seasonKey] || 0) + qty;
-        };
-
-        const getSeasonKeys = (rawSeason: any) => {
-          const value = String(rawSeason || '').trim();
-          if (!value) return ['__none__'];
-          const matchedSeason = seasons.find(s => s.id === value || s.name === value);
-          if (!matchedSeason) return [value];
-          return Array.from(new Set([matchedSeason.id, matchedSeason.name].filter(Boolean)));
-        };
-
-        const findCustomerByLogClient = (logClient: string) => customers.find(customer => {
-          return normalize(customer.name) === logClient || normalize(customer.shortName) === logClient;
-        });
-
-        allSubLogs.forEach((log: any) => {
-          const logClient = normalize(log.client);
-          const customer = findCustomerByLogClient(logClient);
-          if (!customer) return;
-
-          const qty = Number(log.dayProduction) || 0;
-          if (qty) {
-            getSeasonKeys(log.clientSeason).forEach(seasonKey => addQty(customer.id, seasonKey, qty));
-          }
-
-          (log.extraSessions || []).forEach((session: any) => {
-            if (normalize(session.client) !== logClient) return;
-            const sessionQty = Number(session.dayProduction) || 0;
-            const sessionSeason = session.clientSeason || log.clientSeason;
-            if (sessionQty) {
-              getSeasonKeys(sessionSeason).forEach(seasonKey => addQty(customer.id, seasonKey, sessionQty));
-            }
-          });
-        });
-
-        externalEntries.forEach((entry: any) => {
-          const entryClient = normalize(entry.client);
-          const customer = findCustomerByLogClient(entryClient);
-          if (!customer) return;
-
-          const qty = Number(entry.receivedQty) || 0;
-          if (qty) {
-            getSeasonKeys(entry.clientSeason).forEach(seasonKey => addQty(customer.id, seasonKey, qty));
-          }
-        });
-
-        const entries = Object.entries(bySeason);
-        for (let i = 0; i < entries.length; i += 500) {
-          const batch = writeBatch(db);
-          entries.slice(i, i + 500).forEach(([id, seasonMap]) => {
-            batch.update(doc(db, 'CustomerSheets', id), { cachedManufacturedBySeason: seasonMap });
-          });
-          await batch.commit();
-        }
-      } catch (error) {
-        console.error('Error syncing seasonal manufactured cache:', error);
-      }
-    }, 1500);
-
-    return () => clearTimeout(timer);
-  }, [view, seasons, allSubLogs, externalEntries]);
+  // NOTE: The per-customer manufactured cache is now written exclusively by the
+  // Orders page (ClientOrdersPage `cachedOrderTotalsBySeason`), which is the single
+  // source of truth. This page only READS that snapshot so its numbers always match
+  // the Orders page. The old write-back effect that lived here was removed.
 
   // Fetch daily summaries for the scrap year independently
   useEffect(() => {
@@ -283,9 +219,14 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
         const snap = await getDocs(collection(db, 'Seasons'));
         const loaded = snap.docs.map(d => ({ id: d.id, ...d.data() } as Season));
         setSeasons(loaded);
-        const active = loaded.find(s => s.isActive);
-        if (active) setSelectedSeasonId(active.id);
-        else if (loaded.length > 0) setSelectedSeasonId(loaded[0].id);
+        // Remember the last season chosen here, else active, else first.
+        const remembered = (typeof localStorage !== 'undefined' && localStorage.getItem('ph_selectedSeasonId')) || '';
+        if (remembered && loaded.some(s => s.id === remembered)) setSelectedSeasonId(remembered);
+        else {
+          const active = loaded.find(s => s.isActive);
+          if (active) setSelectedSeasonId(active.id);
+          else if (loaded.length > 0) setSelectedSeasonId(loaded[0].id);
+        }
       } catch (e) { console.error('Error fetching seasons:', e); }
     };
     fetchSeasons();
@@ -301,6 +242,91 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
     fetchRealNames();
   }, []);
 
+  // Remember the chosen season so re-opening this page returns to it.
+  useEffect(() => {
+    if (selectedSeasonId && typeof localStorage !== 'undefined') {
+      localStorage.setItem('ph_selectedSeasonId', selectedSeasonId);
+    }
+  }, [selectedSeasonId]);
+
+  // Subscribe to the manufactured "list" the Orders page publishes for this season.
+  // Real-time: the moment the list is (re)written, the table updates.
+  useEffect(() => {
+    if (!selectedSeasonId) { setManufacturedList({}); return; }
+    const unsub = onSnapshot(
+      doc(db, 'manufacturedCache', selectedSeasonId),
+      snap => setManufacturedList((snap.exists() && snap.data()?.customers) || {}),
+      () => setManufacturedList({})
+    );
+    return () => unsub();
+  }, [selectedSeasonId]);
+
+  // Populate the manufactured list for ALL clients in one press. Uses the SAME shared
+  // calculator (computeCustomerCardTotals) and the SAME season filter the Orders page
+  // uses, so each saved number equals that customer's Orders-page card exactly.
+  const handlePopulateList = async (targetSeasonId?: string) => {
+    const seasonId = targetSeasonId || selectedSeasonId;
+    if (!seasonId) return;
+    setPopulatingList(true);
+    setMfgListProgress({ done: 0, total: 0 });
+    try {
+      const selectedSeason = seasons.find(s => s.id === seasonId);
+      const [extSnap, customersSnap] = await Promise.all([
+        getDocs(collection(db, 'externalProduction')),
+        getDocs(collection(db, 'CustomerSheets')),
+      ]);
+      const allExternal = extSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const total = customersSnap.docs.length;
+      setMfgListProgress({ done: 0, total });
+      const customersMap: Record<string, any> = {};
+      let done = 0;
+      await Promise.all(customersSnap.docs.map(async (cdoc) => {
+        const cdata = cdoc.data();
+        const cid = cdoc.id;
+        const code = cdata.name || cdata.shortName || cid;
+        const ordersSnap = await getDocs(collection(db, 'CustomerSheets', cid, 'orders'));
+        const raw = ordersSnap.docs.length > 0
+          ? ordersSnap.docs.map(o => ({ ...o.data(), id: o.id }))
+          : (Array.isArray(cdata.orders) ? cdata.orders : []);
+        const orders = raw.filter((o: any) => (o.seasonId ? o.seasonId === seasonId : seasonId === '2025-summer'));
+        done++;
+        setMfgListProgress({ done, total });
+        if (orders.length === 0) return;
+        const customer = { name: code, shortName: cdata.shortName, orders };
+        const card = computeCustomerCardTotals(customer, allExternal, machines, subLogsByMachineId);
+        customersMap[cid] = {
+          code,
+          name: cdata.shortName || code,
+          manufactured: card.manufactured,
+          orderedQtyWithAccessory: card.customerOrderedPlusAcc,
+          deliveries: card.deliveries,
+          orderDates: card.orderDates,
+        };
+      }));
+      await setDoc(doc(db, 'manufacturedCache', seasonId), {
+        seasonId,
+        seasonName: selectedSeason?.name || seasonId,
+        updatedAt: new Date().toISOString(),
+        customers: customersMap,
+      });
+    } catch (e) {
+      console.error('Failed to populate manufactured list:', e);
+    } finally {
+      setPopulatingList(false);
+    }
+  };
+
+  // Live-read the chosen season's list while the overlay is open.
+  useEffect(() => {
+    if (!showMfgList || !mfgListSeason) { setMfgListData({}); setMfgListUpdatedAt(''); return; }
+    const unsub = onSnapshot(doc(db, 'manufacturedCache', mfgListSeason), snap => {
+      const data = snap.exists() ? snap.data() : null;
+      setMfgListData((data && data.customers) || {});
+      setMfgListUpdatedAt((data && data.updatedAt) || '');
+    }, () => { setMfgListData({}); setMfgListUpdatedAt(''); });
+    return () => unsub();
+  }, [showMfgList, mfgListSeason]);
+
   // Fetch client orders when season changes
   useEffect(() => {
     if (!selectedSeasonId) return;
@@ -312,6 +338,10 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
         // orderIdToFabric: maps an orderId -> { customerId, fabric } so logs tagged with orderId
         // are pinned to the correct fabric regardless of fabric name in the log.
         const orderIdToFabric: Record<string, { customerId: string; fabric: string }> = {};
+        // orderIdToCustomer: every order (even ones with NO fabric name) -> its customer.
+        // Used to total manufactured per customer exactly like the Orders page summary card,
+        // which credits production by orderId regardless of whether the order has a fabric.
+        const orderIdToCustomer: Record<string, string> = {};
 
         const clientMap: Record<string, { clientId: string; clientCode: string; orderDates: string[]; totalRequired: number; totalManufactured: number; totalRemaining: number; totalDeliveries: number; totalCustomerOrdered: number; totalAccessory: number; fabricOrders: Record<string, { ordered: number; customerOrdered: number }> }> = {};
         const selectedSeason = seasons.find(s => s.id === selectedSeasonId);
@@ -327,6 +357,9 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
           if (!matchesSeason) return;
 
           if (!clientMap[cid]) clientMap[cid] = { clientId: cid, clientCode, orderDates: [], totalRequired: 0, totalManufactured: 0, totalRemaining: 0, totalDeliveries: 0, totalCustomerOrdered: 0, totalAccessory: 0, fabricOrders: {} };
+          // Pin this order to its customer regardless of fabric (matches summary-card logic)
+          const oid = o.id || o.orderId;
+          if (oid) orderIdToCustomer[String(oid)] = cid;
           if (o.orderReceiptDate) clientMap[cid].orderDates.push(o.orderReceiptDate);
           clientMap[cid].totalRequired += Number(o.requiredQty) || 0;
           if (o.customerOrderedQty != null) clientMap[cid].totalCustomerOrdered += Number(o.customerOrderedQty) || 0;
@@ -370,67 +403,47 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
           }
         }));
 
-        // Read cachedManufacturedBySeason for total manufactured
-        customersSnap.docs.forEach(customerDoc => {
-          const entry = clientMap[customerDoc.id];
-          if (!entry) return;
-          const seasonMap = customerDoc.data().cachedManufacturedBySeason || {};
-          const cached = Number(seasonMap[selectedSeasonId])
-            || Number(selectedSeason ? seasonMap[selectedSeason.name] : 0)
-            || 0;
-          entry.totalManufactured = cached;
-        });
+        // The manufactured "list" (manufacturedCache/{seasonId}) is the SINGLE SOURCE
+        // OF TRUTH for the displayed numbers — read verbatim from `manufacturedList`
+        // (kept fresh by the real-time listener), NO recalculation here.
+        const cachedTotalsByCustomer = manufacturedList || {};
 
-        // Build per-fabric manufactured from live logs (for debug panel)
+        // Build per-fabric manufactured from live logs — orderId-pinned ONLY.
+        // This mirrors the Orders page headline exactly (ClientOrdersPage
+        // `producedByOrderId`): production is credited solely via the orderId
+        // stamped on each log. Legacy name+fabric matches without an orderId are
+        // intentionally NOT counted here — the Orders page excludes them from its
+        // Manufactured number too, so counting them would make the two disagree.
         const fabricMfgMap: Record<string, Record<string, number>> = {};
-        const addFabMfg = (customerId: string, fabric: string, qty: number) => {
-          if (!fabricMfgMap[customerId]) fabricMfgMap[customerId] = {};
-          fabricMfgMap[customerId][fabric] = (fabricMfgMap[customerId][fabric] || 0) + qty;
-        };
-        const customersByName: Record<string, string> = {};
-        const customersByShort: Record<string, string> = {};
-        customersSnap.docs.forEach(d => {
-          const data = d.data();
-          if (data.name) customersByName[normalize(data.name)] = d.id;
-          if (data.shortName) customersByShort[normalize(data.shortName)] = d.id;
-        });
-        const findCustId = (logClient: string) => customersByName[logClient] || customersByShort[logClient];
-
-        // Season must explicitly match — logs without clientSeason are excluded
-        // to prevent cross-season inflation (mirrors ClientOrdersPage logic exactly)
-        const seasonOk = (sk: any) => {
-          if (!sk) return false; // no season tag = exclude
-          return sk === selectedSeasonId || (selectedSeason && sk === selectedSeason.name);
-        };
-
-        const addLogQty = (custId: string, logOrderId: string | undefined, logFabric: string, logClient: string, logSeason: any, qty: number) => {
-          if (!qty || !custId || !clientMap[custId]) return;
-          // Priority 1: orderId-based pin (most accurate, no cross-season risk)
-          if (logOrderId && orderIdToFabric[logOrderId]?.customerId === custId) {
-            addFabMfg(custId, orderIdToFabric[logOrderId].fabric, qty);
-            return;
+        // Per-customer manufactured, pinned by orderId regardless of fabric. THIS is the
+        // number that matches the Orders page summary card (orderTotals.manufactured),
+        // because the card also credits production purely by orderId, including orders
+        // that have no fabric name (which the per-fabric map above would drop).
+        const mfgByCustomer: Record<string, number> = {};
+        const addPinnedQty = (logOrderId: string | undefined, qty: number) => {
+          if (!qty || !logOrderId) return;
+          // Total per customer (fabric-independent) — the authoritative manufactured.
+          const cid = orderIdToCustomer[logOrderId];
+          if (cid && clientMap[cid]) mfgByCustomer[cid] = (mfgByCustomer[cid] || 0) + qty;
+          // Per-fabric split — for the admin debug breakdown only.
+          const pin = orderIdToFabric[logOrderId];
+          if (pin && clientMap[pin.customerId]) {
+            if (!fabricMfgMap[pin.customerId]) fabricMfgMap[pin.customerId] = {};
+            fabricMfgMap[pin.customerId][pin.fabric] = (fabricMfgMap[pin.customerId][pin.fabric] || 0) + qty;
           }
-          // Priority 2: client+fabric+season match (strict season required)
-          if (!seasonOk(logSeason)) return;
-          const fab = String(logFabric || '').trim() || '—';
-          addFabMfg(custId, fab, qty);
         };
 
         allSubLogs.forEach((log: any) => {
-          const custId = findCustId(normalize(log.client));
-          if (!custId || !clientMap[custId]) return;
-          addLogQty(custId, log.orderId, log.fabric, log.client, log.clientSeason, Number(log.dayProduction) || 0);
+          addPinnedQty(log.orderId, Number(log.dayProduction) || 0);
+          // Extra sessions pin on their OWN orderId only — a session is a
+          // different client's run on the same day, so it must never inherit the
+          // parent log's orderId (matches ClientOrdersPage session handling).
           (log.extraSessions || []).forEach((s: any) => {
-            const sessionClient = normalize(s.client || log.client);
-            const sessionCustId = findCustId(sessionClient) || custId;
-            if (!clientMap[sessionCustId]) return;
-            addLogQty(sessionCustId, s.orderId || log.orderId, s.fabric || log.fabric, s.client || log.client, s.clientSeason || log.clientSeason, Number(s.dayProduction) || 0);
+            addPinnedQty(s.orderId, Number(s.dayProduction) || 0);
           });
         });
         externalEntries.forEach((entry: any) => {
-          const custId = findCustId(normalize(entry.client));
-          if (!custId || !clientMap[custId]) return;
-          addLogQty(custId, (entry as any).orderId, entry.fabric, entry.client, (entry as any).clientSeason, Number(entry.receivedQty) || 0);
+          addPinnedQty((entry as any).orderId, Number(entry.receivedQty) || 0);
         });
 
         const rows = Object.values(clientMap)
@@ -446,18 +459,37 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
               customerOrdered: r.fabricOrders[fab]?.customerOrdered || 0,
               manufactured: fabricMfgMap[r.clientId]?.[fab] || 0,
             })).sort((a, b) => b.ordered - a.ordered);
-            // Always use live log sum — 0 means nothing was produced, don't inflate with cache
-            const totalManufactured = fabricBreakdown.reduce((s, f) => s + f.manufactured, 0);
+
+            // Live orderId-pinned-per-customer total — matches the Orders page summary
+            // card (credits by orderId regardless of fabric). Snapshot is preferred when
+            // present, but this live number should already equal the card on its own.
+            const liveManufactured = mfgByCustomer[r.clientId] || 0;
+
+            // Prefer the Orders-page snapshot when available; otherwise use the live total.
+            const cached = cachedTotalsByCustomer[r.clientId];
+            const totalManufactured = cached && cached.manufactured != null ? (Number(cached.manufactured) || 0) : liveManufactured;
+            // "Ordered" column = QTY Customer Ordered + Accessory (matches the Orders
+            // page summary card, e.g. 10,800), not raw requiredQty.
+            const totalOrderedDisplay = cached && cached.customerOrderedPlusAcc != null
+              ? (Number(cached.customerOrderedPlusAcc) || 0)
+              : (r.totalCustomerOrdered + r.totalAccessory);
+            // Deliveries + order dates also come from the snapshot when available.
+            const totalDeliveries = cached && cached.deliveries != null ? (Number(cached.deliveries) || 0) : r.totalDeliveries;
+            const orderDates = cached && Array.isArray(cached.orderDates) ? cached.orderDates : r.orderDates;
+
             return {
               ...r,
               totalManufactured,
+              totalOrderedDisplay,
+              totalDeliveries,
+              orderDates,
               debugLines: [],
               fabricBreakdown,
-              totalRemaining: Math.max(0, r.totalRequired - totalManufactured),
-              deliveryRemaining: Math.max(0, r.totalRequired - r.totalDeliveries),
+              totalRemaining: Math.max(0, totalOrderedDisplay - totalManufactured),
+              deliveryRemaining: Math.max(0, totalOrderedDisplay - totalDeliveries),
             };
           })
-          .sort((a, b) => b.totalRequired - a.totalRequired);
+          .sort((a, b) => b.totalOrderedDisplay - a.totalOrderedDisplay);
         setClientOrderRows(rows);
 
         // Write seasonManufacturedCache/{seasonId} — one doc per season with all clients
@@ -492,7 +524,7 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
       finally { setClientOrdersLoading(false); }
     };
     fetchClientOrders();
-  }, [selectedSeasonId, seasons, allSubLogs, externalEntries]);
+  }, [selectedSeasonId, seasons, allSubLogs, externalEntries, manufacturedList]);
 
   const handleSaveRealName = async (clientId: string, name: string) => {
     try {
@@ -1281,8 +1313,8 @@ export const ProductionHistoryPage: React.FC<ProductionHistoryPageProps> = ({ ma
     if (exportSheets.clients && clientOrderRows.length > 0) {
       const aoa: any[][] = [
         [hS('كود العميل'), hS('اسم العميل'), hS('إجمالي المطلوب'), hS('المصنوع'), hS('المتبقي تصنيع'), hS('إجمالي التسليمات'), hS('صافي المتبقي للتسليم')],
-        ...clientOrderRows.map(r => [dS(r.clientCode), dS(clientRealNames[r.clientId] || r.clientCode), dS(r.totalRequired), dS(r.totalManufactured), dS(r.totalRemaining), dS(r.totalDeliveries), dS(r.deliveryRemaining)]),
-        [tS('الإجمالي'), tS(''), tS(clientOrderRows.reduce((a, r) => a + r.totalRequired, 0)), tS(clientOrderRows.reduce((a, r) => a + r.totalManufactured, 0)), tS(clientOrderRows.reduce((a, r) => a + r.totalRemaining, 0)), tS(clientOrderRows.reduce((a, r) => a + r.totalDeliveries, 0)), tS(clientOrderRows.reduce((a, r) => a + r.deliveryRemaining, 0))],
+        ...clientOrderRows.map(r => [dS(r.clientCode), dS(clientRealNames[r.clientId] || r.clientCode), dS(r.totalOrderedDisplay), dS(r.totalManufactured), dS(r.totalRemaining), dS(r.totalDeliveries), dS(r.deliveryRemaining)]),
+        [tS('الإجمالي'), tS(''), tS(clientOrderRows.reduce((a, r) => a + r.totalOrderedDisplay, 0)), tS(clientOrderRows.reduce((a, r) => a + r.totalManufactured, 0)), tS(clientOrderRows.reduce((a, r) => a + r.totalRemaining, 0)), tS(clientOrderRows.reduce((a, r) => a + r.totalDeliveries, 0)), tS(clientOrderRows.reduce((a, r) => a + r.deliveryRemaining, 0))],
       ];
       const ws = XLSX.utils.aoa_to_sheet(aoa);
       ws['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 18 }, { wch: 14 }, { wch: 18 }, { wch: 20 }, { wch: 24 }];
@@ -1472,16 +1504,16 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
                   <BarChart2 size={16} />
                   سقط العمال
                 </button>
-                <button 
-                  onClick={() => setView('clients')}
+                <button
+                  onClick={() => { setMfgListSeason(selectedSeasonId); setShowMfgList(true); }}
                   className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
-                    view === 'clients' 
-                      ? 'bg-white shadow text-teal-700' 
+                    showMfgList
+                      ? 'bg-white shadow text-teal-700'
                       : 'text-slate-500 hover:text-slate-700'
                   }`}
                 >
-                  <Users size={16} />
-                  طلبيات العملاء
+                  <Factory size={16} />
+                  قائمة التصنيع
                 </button>
               </div>
               
@@ -2574,6 +2606,126 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
       )}
 
       {/* ─── Client Orders Summary View ─── */}
+      {/* ── Manufactured List overlay (choose any season) ── */}
+      {showMfgList && (
+        <div className="fixed inset-0 z-[9998] bg-slate-50 flex flex-col" dir="ltr">
+          <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm gap-4 flex-wrap">
+            <div>
+              <div className="flex items-center gap-2 text-slate-800">
+                <Factory className="w-5 h-5 text-indigo-600" />
+                <h2 className="text-lg font-bold">Manufactured List</h2>
+              </div>
+              <p className="text-xs text-slate-400 mt-0.5">
+                {mfgListUpdatedAt ? `Last updated: ${new Date(mfgListUpdatedAt).toLocaleString()}` : 'No data for this season yet — press Populate.'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                <span className="text-slate-600 text-sm font-medium">Season:</span>
+                <select
+                  value={mfgListSeason}
+                  onChange={e => setMfgListSeason(e.target.value)}
+                  className="bg-transparent text-slate-900 text-sm font-bold focus:outline-none cursor-pointer"
+                >
+                  {seasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+              <button
+                onClick={() => handlePopulateList(mfgListSeason)}
+                disabled={populatingList}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+                title="Recompute the list for every client in the selected season"
+              >
+                <Package className="w-4 h-4" /> {populatingList ? 'Populating…' : 'Populate All Clients'}
+              </button>
+              <button
+                onClick={() => setShowMfgList(false)}
+                className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-auto p-6 relative">
+            {populatingList && (
+              <div className="absolute inset-0 z-10 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4">
+                <div className="w-12 h-12 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin" />
+                <div className="text-center">
+                  <p className="text-base font-bold text-slate-700">Loading all clients…</p>
+                  <p className="text-sm text-slate-500 mt-1">
+                    {mfgListProgress.total > 0 ? `Processed ${mfgListProgress.done} / ${mfgListProgress.total} clients` : 'Fetching clients & orders…'}
+                  </p>
+                </div>
+                {mfgListProgress.total > 0 && (
+                  <div className="w-64 h-2 bg-slate-200 rounded-full overflow-hidden">
+                    <div className="h-full bg-emerald-600 transition-all duration-200" style={{ width: `${Math.round((mfgListProgress.done / mfgListProgress.total) * 100)}%` }} />
+                  </div>
+                )}
+              </div>
+            )}
+            {Object.keys(mfgListData).length === 0 && !populatingList ? (
+              <div className="text-center text-slate-400 py-20">
+                <Factory className="w-10 h-10 mx-auto mb-3 text-slate-300" />
+                <p className="font-medium">No clients saved for this season.</p>
+                <p className="text-sm">Press “Populate All Clients” to build the list for the selected season.</p>
+              </div>
+            ) : (
+              <div className="max-w-5xl mx-auto bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs uppercase tracking-wide">
+                    <tr>
+                      <th className="px-3 py-3 text-center">#</th>
+                      <th className="px-3 py-3 text-center">كود العميل</th>
+                      <th className="px-3 py-3 text-left">اسم العميل</th>
+                      <th className="px-3 py-3 text-center">تاريخ استلام الاوردر</th>
+                      <th className="px-3 py-3 text-right">الكمية المطلوبة</th>
+                      <th className="px-3 py-3 text-right">ما تم تصنيعه</th>
+                      <th className="px-3 py-3 text-right">المتبقى</th>
+                      <th className="px-3 py-3 text-right">التسليمات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {Object.entries(mfgListData)
+                      .sort((a: any, b: any) => (Number(b[1]?.orderedQtyWithAccessory) || 0) - (Number(a[1]?.orderedQtyWithAccessory) || 0))
+                      .map(([cid, c]: any, i) => {
+                        const ordered = Number(c.orderedQtyWithAccessory) || 0;
+                        const manufactured = Number(c.manufactured) || 0;
+                        const remaining = Math.max(0, ordered - manufactured);
+                        const deliveries = Number(c.deliveries) || 0;
+                        const dates = [...new Set((c.orderDates || []) as string[])].sort();
+                        return (
+                          <tr key={cid} className="hover:bg-slate-50">
+                            <td className="px-3 py-2.5 text-center text-slate-400">{i + 1}</td>
+                            <td className="px-3 py-2.5 text-center"><span className="px-2 py-0.5 bg-slate-100 rounded text-xs font-bold text-slate-600">{c.code || cid}</span></td>
+                            <td className="px-3 py-2.5 text-left text-slate-700 font-medium">{c.name || c.code || cid}</td>
+                            <td className="px-3 py-2.5 text-center text-xs text-slate-500">
+                              {dates.length > 0 ? <span title={dates.join(' | ')}>{dates.slice(0, 3).join(' · ')}{dates.length > 3 ? ` +${dates.length - 3}` : ''}</span> : <span className="text-slate-300">-</span>}
+                            </td>
+                            <td className="px-3 py-2.5 text-right font-mono font-semibold text-slate-800">{ordered > 0 ? ordered.toLocaleString() : '-'}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{manufactured > 0 ? manufactured.toLocaleString() : '-'}</td>
+                            <td className="px-3 py-2.5 text-right font-mono text-amber-700">{remaining > 0 ? remaining.toLocaleString() : '-'}</td>
+                            <td className="px-3 py-2.5 text-right font-mono text-blue-700">{deliveries > 0 ? deliveries.toLocaleString() : '-'}</td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                  <tfoot className="bg-slate-50 border-t-2 border-slate-200 font-bold text-slate-800">
+                    <tr>
+                      <td className="px-3 py-3 text-center" colSpan={4}>الإجمالي</td>
+                      <td className="px-3 py-3 text-right font-mono">{Object.values(mfgListData).reduce((s: number, c: any) => s + (Number(c.orderedQtyWithAccessory) || 0), 0).toLocaleString()}</td>
+                      <td className="px-3 py-3 text-right font-mono text-emerald-700">{Object.values(mfgListData).reduce((s: number, c: any) => s + (Number(c.manufactured) || 0), 0).toLocaleString()}</td>
+                      <td className="px-3 py-3 text-right font-mono text-amber-700">{Object.values(mfgListData).reduce((s: number, c: any) => s + Math.max(0, (Number(c.orderedQtyWithAccessory) || 0) - (Number(c.manufactured) || 0)), 0).toLocaleString()}</td>
+                      <td className="px-3 py-3 text-right font-mono text-blue-700">{Object.values(mfgListData).reduce((s: number, c: any) => s + (Number(c.deliveries) || 0), 0).toLocaleString()}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {view === 'clients' && (
         <div className="max-w-full mx-auto px-4 py-5" dir="rtl">
           {/* Title Bar */}
@@ -2587,8 +2739,23 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
                 <p className="text-sm text-slate-500 mt-0.5 font-medium">Track order status and deliveries per client</p>
               </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3" dir="ltr">
               {clientOrdersLoading && <RefreshCw className="w-5 h-5 text-teal-600 animate-spin" />}
+              <button
+                onClick={() => { setMfgListSeason(selectedSeasonId); setShowMfgList(true); }}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors shadow-sm"
+                title="Open the Manufactured List (choose any season)"
+              >
+                <Factory className="w-4 h-4" /> Manufactured List
+              </button>
+              <button
+                onClick={() => handlePopulateList()}
+                disabled={populatingList}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold hover:bg-emerald-700 disabled:opacity-60 transition-colors shadow-sm"
+                title="Recompute the list for every client (same numbers as each Orders card)"
+              >
+                <Package className="w-4 h-4" /> {populatingList ? 'Populating…' : 'Populate All Clients'}
+              </button>
               <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 shadow-sm">
                 <span className="text-slate-600 text-sm font-medium">الموسم:</span>
                 <select
@@ -2633,8 +2800,8 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
                     const visibleOrderDates = uniqueOrderDates.slice(0, 3);
                     const extraDatesCount = Math.max(0, uniqueOrderDates.length - visibleOrderDates.length);
                     return (
-                      <>
-                      <tr key={row.clientId} className="hover:bg-slate-50/80 transition-colors bg-white group/row align-top">
+                      <React.Fragment key={row.clientId}>
+                      <tr className="hover:bg-slate-50/80 transition-colors bg-white group/row align-top">
                         <td className="px-3 py-3 text-center text-slate-400 font-medium tabular-nums">{idx + 1}</td>
                         <td className="px-3 py-3 text-center">
                           <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-md font-bold text-slate-700 bg-slate-100 border border-slate-200 text-xs shadow-sm whitespace-nowrap">
@@ -2677,7 +2844,7 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
                             ? <div className="flex flex-wrap gap-1 justify-center max-w-full" title={uniqueOrderDates.join(' | ')}>{visibleOrderDates.map(d => <span key={d} className="bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5 text-slate-600 whitespace-nowrap">{d}</span>)}{extraDatesCount > 0 && <span className="bg-blue-50 text-blue-700 border border-blue-100 rounded px-1.5 py-0.5 font-medium whitespace-nowrap">+{extraDatesCount}</span>}</div>
                             : <span className="text-slate-300">-</span>}
                         </td>
-                        <td className="px-3 py-3 text-center font-medium text-slate-800 tabular-nums text-sm" title={`Customer Ordered: ${row.totalCustomerOrdered.toLocaleString()} + Accessory: ${row.totalAccessory.toLocaleString()}`}>{(row.totalCustomerOrdered + row.totalAccessory) > 0 ? (row.totalCustomerOrdered + row.totalAccessory).toLocaleString() : (row.totalRequired > 0 ? row.totalRequired.toLocaleString() : <span className="text-slate-300 font-normal">-</span>)}</td>
+                        <td className="px-3 py-3 text-center font-medium text-slate-800 tabular-nums text-sm" title={`Customer Ordered + Accessory (from Orders page): ${row.totalOrderedDisplay.toLocaleString()}`}>{row.totalOrderedDisplay > 0 ? row.totalOrderedDisplay.toLocaleString() : <span className="text-slate-300 font-normal">-</span>}</td>
                         <td className="px-3 py-3 text-center tabular-nums text-sm">
                           <div className="flex items-center justify-center gap-1">
                             <span className="font-medium text-emerald-700">{row.totalManufactured > 0 ? row.totalManufactured.toLocaleString() : <span className="text-slate-300 font-normal">-</span>}</span>
@@ -2731,16 +2898,26 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
                                     <td className="pr-4 py-1">Total</td>
                                     <td className="px-3 py-1 text-right font-mono">{(row.fabricBreakdown || []).reduce((s, f) => s + f.ordered, 0).toLocaleString()}</td>
                                     <td className="px-3 py-1 text-right font-mono text-amber-600">{(row.fabricBreakdown || []).reduce((s, f) => s + f.customerOrdered, 0).toLocaleString()}</td>
-                                    <td className="px-3 py-1 text-right font-mono text-emerald-600">{row.totalManufactured.toLocaleString()}</td>
-                                    <td className="px-3 py-1 text-right font-mono">{Math.max(0, (row.fabricBreakdown || []).reduce((s, f) => s + f.ordered, 0) - row.totalManufactured).toLocaleString()}</td>
+                                    <td className="px-3 py-1 text-right font-mono text-emerald-600">{(row.fabricBreakdown || []).reduce((s, f) => s + f.manufactured, 0).toLocaleString()}</td>
+                                    <td className="px-3 py-1 text-right font-mono">{Math.max(0, (row.fabricBreakdown || []).reduce((s, f) => s + (f.ordered - f.manufactured), 0)).toLocaleString()}</td>
                                   </tr>
                                 </tfoot>
                               </table>
                             )}
+                            {(() => {
+                              const livePinned = (row.fabricBreakdown || []).reduce((s, f) => s + f.manufactured, 0);
+                              const diff = Math.round((row.totalManufactured - livePinned) * 100) / 100;
+                              return (
+                                <p className="mt-2 text-[10px] text-slate-400 leading-relaxed">
+                                  Displayed Manufactured = <span className="font-semibold text-emerald-600">{row.totalManufactured.toLocaleString()}</span> (from Orders page snapshot).
+                                  {diff !== 0 && <> Per-fabric live sum above is {livePinned.toLocaleString()}; the {Math.abs(diff).toLocaleString()} kg difference is production pinned to orders this season-breakdown couldn't attribute to a fabric here — the snapshot is authoritative.</>}
+                                </p>
+                              );
+                            })()}
                           </td>
                         </tr>
                       )}
-                      </>
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
@@ -2748,7 +2925,7 @@ const PdfRow = ({ label, value, bg = '#fff' }: { label: string, value: string | 
                   <tfoot className="bg-slate-50 border-t border-slate-200">
                     <tr className="text-slate-700 font-semibold shadow-sm">
                       <td colSpan={4} className="px-3 py-3.5 text-left text-sm">الإجمالي الكلي</td>
-                      <td className="px-3 py-3.5 text-center tabular-nums text-slate-900 text-sm">{clientOrderRows.reduce((a, r) => a + ((r.totalCustomerOrdered + r.totalAccessory) > 0 ? (r.totalCustomerOrdered + r.totalAccessory) : r.totalRequired), 0).toLocaleString()}</td>
+                      <td className="px-3 py-3.5 text-center tabular-nums text-slate-900 text-sm">{clientOrderRows.reduce((a, r) => a + r.totalOrderedDisplay, 0).toLocaleString()}</td>
                       <td className="px-3 py-3.5 text-center tabular-nums text-emerald-700 text-sm">{clientOrderRows.reduce((a, r) => a + r.totalManufactured, 0).toLocaleString()}</td>
                       <td className="px-3 py-3.5 text-center tabular-nums text-slate-900 text-sm">{clientOrderRows.reduce((a, r) => a + r.totalRemaining, 0).toLocaleString()}</td>
                       <td className="px-3 py-3.5 text-center tabular-nums text-blue-700 text-sm">{clientOrderRows.reduce((a, r) => a + r.totalDeliveries, 0).toLocaleString()}</td>

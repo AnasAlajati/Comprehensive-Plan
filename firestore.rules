@@ -224,7 +224,20 @@ service cloud.firestore {
       allow read: if canRead();
       allow write: if canWrite();
     }
-    
+
+    // Manufactured "list" published per season by the Orders page and read by the
+    // Customers-Orders overview (one doc per season: manufacturedCache/{seasonId}).
+    match /manufacturedCache/{seasonId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Per-season manufactured cache doc (legacy/analytics)
+    match /seasonManufacturedCache/{seasonId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
     // ========================================
     // CATCH-ALL: Deny everything else
     // ========================================
