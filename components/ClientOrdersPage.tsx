@@ -1103,7 +1103,7 @@ const MemoizedOrderRow = React.memo(({
   hasHistory: boolean;
   onFilterMachine?: (capacity: string) => void;
   allOrders: OrderRow[];
-  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | null;
   userName?: string;
   onOpenReceiveModal: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
   onOpenSentModal: (orderId: string, batchIdx: number, batch: DyeingBatch) => void;
@@ -2699,10 +2699,11 @@ const MemoizedOrderRow = React.memo(({
                     </div>
                 </div>
             )}
-            {!isReadOnly && (userRole === 'admin' || userRole === 'editor') && (
+            {!isReadOnly && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
+                    if (userRole !== 'admin' && userRole !== 'daily_planner') return;
                     const isRemoving = !row.clientRemoved;
                     const updates: Partial<OrderRow> = {
                       clientRemoved: isRemoving,
@@ -2712,21 +2713,36 @@ const MemoizedOrderRow = React.memo(({
                     handleUpdateOrder(row.id, updates);
                   }}
                   className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium transition-all opacity-0 group-hover:opacity-100 whitespace-nowrap ${
-                    row.clientRemoved
-                      ? 'bg-red-100 text-red-600 border border-red-200 hover:bg-slate-100 hover:text-slate-500 hover:border-slate-200'
-                      : 'bg-slate-100 text-slate-500 border border-slate-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200'
+                    (userRole !== 'admin' && userRole !== 'daily_planner')
+                      ? 'bg-slate-50 text-slate-300 border border-slate-100 cursor-not-allowed'
+                      : row.clientRemoved
+                        ? 'bg-red-100 text-red-600 border border-red-200 hover:bg-slate-100 hover:text-slate-500 hover:border-slate-200'
+                        : 'bg-slate-100 text-slate-500 border border-slate-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200'
                   }`}
-                  title={row.clientRemoved ? 'Undo — restore this fabric to the order' : 'Mark as removed by client (excludes from totals)'}
+                  title={
+                    (userRole !== 'admin' && userRole !== 'daily_planner')
+                      ? 'Only admin or daily planner can mark as removed'
+                      : row.clientRemoved ? 'Undo — restore this fabric to the order' : 'Mark as removed by client (excludes from totals)'
+                  }
                 >
                   <UserMinus className="w-3 h-3" />
                   {row.clientRemoved ? 'Restore' : 'Client Removed'}
                 </button>
             )}
-            {!isReadOnly && userRole === 'admin' && (
-                <button 
+            {!isReadOnly && (userRole === 'admin' || (userRole === 'daily_planner' && !(
+              (row.dyeingPlan && row.dyeingPlan.length > 0 &&
+                row.dyeingPlan.some((b: any) =>
+                  b.dyehouse || b.quantity || b.plannedCapacity ||
+                  (b.sent && b.sent > 0) || (b.received && b.received > 0) ||
+                  (b.colorApprovals && b.colorApprovals.length > 0) ||
+                  (b.deliveryEvents && b.deliveryEvents.length > 0)
+                )
+              ) || (row.batchDeliveries && row.batchDeliveries > 0) || !!row.dyehouse
+            ))) && (
+                <button
                 onClick={() => handleDeleteRow(row.id)}
                 className="p-2 text-slate-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
-                title="Delete Row (Admin Only)"
+                title={userRole === 'daily_planner' ? 'Delete Order' : 'Delete Row (Admin Only)'}
                 >
                 <Trash2 className="w-4 h-4" />
                 </button>
@@ -5008,7 +5024,7 @@ const MemoizedOrderRow = React.memo(({
 });
 
 interface ClientOrdersPageProps {
-  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
+  userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | null;
   highlightTarget?: { client: string; fabric?: string; highlightAddOrder?: boolean } | null;
   onHighlightComplete?: () => void;
   userName?: string;
@@ -7016,10 +7032,50 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
   // Removed getOrderStats in favor of statsMap
 
+  // Daily-planner safe delete: blocks if any colors exist on the order (dyeingPlan entries).
+  const handleDailyPlannerDeleteRow = async (rowId: string) => {
+    if (!selectedCustomerId || !selectedCustomer) return;
+    const order = selectedCustomer.orders.find(o => o.id === rowId);
+    if (!order) return;
+
+    // Block if any colors (dyeingPlan batches) exist — regardless of sent/received state
+    const hasColors = order.dyeingPlan && order.dyeingPlan.length > 0;
+
+    if (hasColors) {
+      alert("لا يمكن حذف هذا الأوردر — يحتوي على ألوان مضافة. يرجى التواصل مع الأدمن لحذفه.\n\nCannot delete: this order has colors added. Please contact an admin.");
+      return;
+    }
+
+    const confirmation = window.confirm("هل تريد حذف هذا الأوردر؟ لا يمكن التراجع عن هذا الإجراء.\n\nDelete this order? This cannot be undone.");
+    if (!confirmation) return;
+
+    const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
+    const user = auth.currentUser;
+    const auditInfo = {
+      lastUpdatedBy: userName || user?.displayName || 'Unknown',
+      lastUpdatedByEmail: user?.email || 'Unknown',
+      lastUpdated: new Date().toISOString(),
+    };
+
+    if (hasSubCollectionData) {
+      await deleteDoc(doc(db, 'CustomerSheets', selectedCustomerId, 'orders', rowId));
+      await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), auditInfo);
+    } else {
+      const updatedOrders = selectedCustomer.orders.filter((o: any) => o.id !== rowId);
+      await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders, ...auditInfo });
+    }
+  };
+
   const handleDeleteRow = async (rowId: string) => {
     if (!selectedCustomerId || !selectedCustomer) return;
-    
-    // 1. Role Check
+
+    // Route daily_planner to the guarded handler
+    if (userRole === 'daily_planner') {
+      await handleDailyPlannerDeleteRow(rowId);
+      return;
+    }
+
+    // 1. Role Check — all other non-admin roles blocked
     if (userRole !== 'admin') {
       alert("Only Administrators can delete order rows. Please contact an admin if this is necessary.");
       return;
@@ -9062,13 +9118,6 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                     </select>
                     <ChevronDown className="absolute right-0 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none group-hover:text-indigo-500 transition-colors" />
                 </div>
-                <button
-                    onClick={() => setShowMfgList(true)}
-                    className="mt-1.5 inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold hover:bg-emerald-100 transition-colors w-fit"
-                    title="View / build the Manufactured List for this season"
-                >
-                    <Factory className="w-3.5 h-3.5" /> Manufactured List
-                </button>
             </div>
 
             {/* Client Selector & Add */}

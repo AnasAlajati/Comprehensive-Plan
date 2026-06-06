@@ -158,12 +158,16 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = pdf.internal.pageSize.getHeight();
-      
-      // Calculate image dimensions to fit A4
+
+      // Always scale down to fit one page — never overflow
       const imgProps = pdf.getImageProperties(dataUrl);
-      const imgHeight = (imgProps.height * pdfWidth) / imgProps.width;
-      
-      pdf.addImage(dataUrl, 'JPEG', 0, 0, pdfWidth, imgHeight);
+      const naturalHeight = (imgProps.height * pdfWidth) / imgProps.width;
+      const scale = naturalHeight > pdfHeight ? pdfHeight / naturalHeight : 1;
+      const finalWidth = pdfWidth * scale;
+      const finalHeight = naturalHeight * scale;
+      const xOffset = (pdfWidth - finalWidth) / 2;
+
+      pdf.addImage(dataUrl, 'JPEG', xOffset, 0, finalWidth, finalHeight);
       pdf.save(`Production_Order_${order.material}_${new Date().toISOString().split('T')[0]}.pdf`);
       
       onMarkPrinted();
@@ -264,12 +268,12 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
         <div className="flex-1 overflow-y-auto p-8 bg-slate-100">
           
           {/* A4 Page Layout */}
-          <div ref={printRef} className="max-w-[210mm] mx-auto bg-white shadow-lg p-[10mm] min-h-[297mm] text-black text-xs" dir="rtl">
+          <div ref={printRef} className="max-w-[210mm] mx-auto bg-white shadow-lg p-[7mm] min-h-[297mm] text-black text-xs" dir="rtl">
             
             {/* 1. Header Section */}
-            <div className="flex border-b-2 border-slate-800 pb-2 mb-4 items-center min-h-[80px]">
+            <div className="flex border-b-2 border-slate-800 pb-1 mb-2 items-center min-h-[60px]">
                 {/* Left: Box */}
-                <div className="w-1/3 h-20 border-2 border-slate-800 flex items-center justify-center bg-slate-50">
+                <div className="w-1/3 h-14 border-2 border-slate-800 flex items-center justify-center bg-slate-50">
                     {/* Placeholder for Logo or QR */}
                 </div>
 
@@ -296,8 +300,8 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
             </div>
 
             {/* 2. Order Data Box */}
-            <div className="mb-4">
-                 <div className="border-2 border-slate-800 bg-slate-200 text-center font-bold py-0.5 text-xs w-full mb-2">بيانات الأوردار</div>
+            <div className="mb-2">
+                 <div className="border-2 border-slate-800 bg-slate-200 text-center font-bold py-0.5 text-xs w-full mb-1">بيانات الأوردار</div>
                  <div className="px-2 space-y-2">
                       {/* Row 1: Client & Fabric */}
                       <div className="flex justify-between items-center gap-4">
@@ -401,7 +405,7 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
             </div>
 
             {/* 3. Yarn Allocation Grid */}
-            <div className="mb-4 border-2 border-slate-800 mt-4">
+            <div className="mb-2 border-2 border-slate-800 mt-2">
                  {/* Header */}
                  <div className="bg-slate-200 border-b border-slate-800 flex font-bold text-xs">
                      <div className="w-1/2 p-0.5 text-center border-l border-slate-800">الخيط</div>
@@ -449,8 +453,8 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
             </div>
 
             {/* 4. Specifications Section (Matrix Table) */}
-            <div className="mb-4 mt-4">
-                <div className="border-2 border-slate-800 bg-slate-200 text-center font-bold py-0.5 text-xs w-full mb-2">المواصفة</div>
+            <div className="mb-2 mt-2">
+                <div className="border-2 border-slate-800 bg-slate-200 text-center font-bold py-0.5 text-xs w-full mb-1">المواصفة</div>
                 
                 {/* Specs Grid */}
                 <div className="border-2 border-slate-800 text-sm">
@@ -492,7 +496,7 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
                 </div>
 
                 {/* Lycra/Viscose Data Section (Attached under grid) */}
-                <div className="border-x-2 border-b-2 border-slate-800 p-2 min-h-[60px] relative mt-1">
+                <div className="border-x-2 border-b-2 border-slate-800 p-1 min-h-[40px] relative mt-0">
                      <div className="absolute top-1 right-2 text-[10px] font-bold underline">بيانات الويسكو:</div>
                      <textarea
                         className="w-full h-full min-h-[40px] bg-transparent resize-none outline-none text-sm text-right mt-4 pr-1 scrollbar-hide"
@@ -501,17 +505,17 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
             </div>
 
             {/* Notes Area */}
-            <div className="border-2 border-slate-800 p-2 min-h-[80px] relative mb-4">
+            <div className="border-2 border-slate-800 p-2 min-h-[50px] relative mb-2">
                  <div className="absolute top-1 right-2 text-[10px] font-bold underline">ملاحظات:</div>
                  <textarea
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
-                    className="w-full h-full min-h-[60px] bg-transparent resize-none outline-none text-sm text-right mt-4 pr-1 scrollbar-hide"
+                    className="w-full h-full min-h-[36px] bg-transparent resize-none outline-none text-sm text-right mt-4 pr-1 scrollbar-hide"
                  />
             </div>
             
             {/* Quantities & Checkboxes (Moved to bottom) */}
-            <div className="flex border-2 border-slate-800 min-h-[70px] mb-4">
+            <div className="flex border-2 border-slate-800 min-h-[55px] mb-2">
                  {/* Checkboxes */}
                  
                  {/* Right Side Part (Data) */}
@@ -600,7 +604,7 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
             </div>
 
             {/* 5. Knitting Data */}
-            <div className="grid grid-cols-1 border-2 border-slate-800 mb-4 mt-2">
+            <div className="grid grid-cols-1 border-2 border-slate-800 mb-2 mt-1">
                  {/* Header */}
                  <div className="bg-slate-200 font-bold border-b border-slate-800 py-0.5 text-xs px-2 text-center">بيانات ماكينة التريكو</div>
                  
@@ -642,15 +646,15 @@ export const FabricProductionOrderModal: React.FC<FabricProductionOrderModalProp
             </div>
 
             {/* 6. Signature Area */}
-            <div className="flex justify-end mt-4 px-8">
+            <div className="flex justify-end mt-2 px-8">
                  <div className="text-center">
-                     <div className="text-sm font-bold mb-8">توقيع المسؤول</div>
+                     <div className="text-sm font-bold mb-5">توقيع المسؤول</div>
                      <div className="w-48 border-b border-slate-800"></div>
                  </div>
             </div>
 
             {/* Footer Text */}
-            <div className="mt-8 flex justify-between text-[10px] text-slate-400 font-mono">
+            <div className="mt-3 flex justify-between text-[10px] text-slate-400 font-mono">
                 <div>FO-PL-005</div>
                 <div>Rev: 02</div>
                 <div>Generated: {new Date().toLocaleDateString()}</div>

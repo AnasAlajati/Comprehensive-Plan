@@ -104,14 +104,21 @@ service cloud.firestore {
     // ========================================
     match /MachineSS/{machineId} {
       allow read: if canRead();
-      allow update: if canWrite(); // Admin, Editor, Factory Manager can update
-      allow create, delete: if isAdmin(); // Only admins can add or delete machines
-      
-      // Subcollection: Daily Logs
+      allow update: if canWrite();
+      allow create, delete: if isAdmin();
+
+      // Subcollection: Daily Logs (direct path access)
       match /dailyLogs/{logDate} {
         allow read: if canRead();
         allow write: if canWrite();
       }
+    }
+
+    // CollectionGroup rule required for collectionGroup("dailyLogs") queries
+    // (Firestore requires a top-level wildcard match for collectionGroup reads)
+    match /{path=**}/dailyLogs/{logDate} {
+      allow read: if canRead();
+      allow write: if canWrite();
     }
     
     // Legacy machines collection
