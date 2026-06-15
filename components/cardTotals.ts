@@ -11,7 +11,8 @@ export const computeCustomerCardTotals = (
   customer: any,
   externalLogs: any[],
   machines: any[],
-  subLogsByMachineId: Map<string, any[]> | undefined
+  subLogsByMachineId: Map<string, any[]> | undefined,
+  transfers: { fromOrderId: string; toOrderId: string; quantity: number }[] = []
 ) => {
   const normalize = (s: string) => (s ? s.trim().toLowerCase() : '');
   const custName = customer?.name || '';
@@ -44,6 +45,11 @@ export const computeCustomerCardTotals = (
       if (!ext || normalize(ext.client) !== normalize(custName)) return;
       if (!ext.orderId || ext.orderId !== order.id) return;
       manufactured += Number(ext.receivedQty) || 0;
+    });
+    // Production transfers: add incoming, subtract outgoing
+    transfers.forEach((t) => {
+      if (t.toOrderId === order.id) manufactured += Number(t.quantity) || 0;
+      if (t.fromOrderId === order.id) manufactured -= Number(t.quantity) || 0;
     });
   });
   return {

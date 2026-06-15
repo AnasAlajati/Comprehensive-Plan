@@ -245,6 +245,14 @@ service cloud.firestore {
       allow write: if canWrite();
     }
 
+    // Production transfers (move produced qty between customer orders)
+    match /productionTransfers/{transferId} {
+      allow read: if canRead();
+      allow create: if canWrite();
+      allow delete: if canWrite();
+      allow update: if false; // transfers are immutable; delete and re-create
+    }
+
     // ========================================
     // CATCH-ALL: Deny everything else
     // ========================================

@@ -5034,7 +5034,8 @@ const computeCustomerCardTotals = (
   customer: any,
   externalLogs: any[],
   machines: any[],
-  subLogsByMachineId: Map<string, any[]> | undefined
+  subLogsByMachineId: Map<string, any[]> | undefined,
+  transfers: { fromOrderId: string; toOrderId: string; quantity: number }[] = []
 ) => {
   const normalize = (s: string) => (s ? s.trim().toLowerCase() : '');
   const custName = customer?.name || '';
@@ -5067,6 +5068,11 @@ const computeCustomerCardTotals = (
       if (!ext || normalize(ext.client) !== normalize(custName)) return;
       if (!ext.orderId || ext.orderId !== order.id) return;
       manufactured += Number(ext.receivedQty) || 0;
+    });
+    // Production transfers: add incoming, subtract outgoing
+    transfers.forEach((t) => {
+      if (t.toOrderId === order.id) manufactured += Number(t.quantity) || 0;
+      if (t.fromOrderId === order.id) manufactured -= Number(t.quantity) || 0;
     });
   });
   return { ordered, customerOrdered, accessory, manufactured, deliveries, orderDates, customerOrderedPlusAcc: customerOrdered + accessory };
@@ -5168,6 +5174,9 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       return localStorage.getItem('selectedClientOrderId') || null;
   });
 
+  // Production transfers for the selected customer (both directions)
+  const [customerTransfers, setCustomerTransfers] = useState<{ id: string; fromOrderId: string; toOrderId: string; quantity: number; fromCustomerName: string; toCustomerName: string; date: string; note: string }[]>([]);
+
   // Persist selection changes
   useEffect(() => {
       if (selectedCustomerId) {
@@ -5175,6 +5184,25 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       } else {
           localStorage.removeItem('selectedClientOrderId');
       }
+  }, [selectedCustomerId]);
+
+  // Fetch production transfers for current customer (both directions)
+  useEffect(() => {
+    if (!selectedCustomerId) { setCustomerTransfers([]); return; }
+    let cancelled = false;
+    Promise.all([
+      getDocs(query(collection(db, 'productionTransfers'), where('fromCustomerId', '==', selectedCustomerId))),
+      getDocs(query(collection(db, 'productionTransfers'), where('toCustomerId', '==', selectedCustomerId))),
+    ]).then(([fromSnap, toSnap]) => {
+      if (cancelled) return;
+      const seen = new Set<string>();
+      const result: any[] = [];
+      [...fromSnap.docs, ...toSnap.docs].forEach(d => {
+        if (!seen.has(d.id)) { seen.add(d.id); result.push({ id: d.id, ...d.data() }); }
+      });
+      setCustomerTransfers(result);
+    }).catch(() => {});
+    return () => { cancelled = true; };
   }, [selectedCustomerId]);
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -6406,7 +6434,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
     // Manufactured / ordered / customer-ordered / accessory come from the SHARED
     // calculator — the exact same function the "Populate full list" button uses.
-    const card = computeCustomerCardTotals(selectedCustomer, rawExternalLogs, machines, subLogsByMachineId);
+    const card = computeCustomerCardTotals(selectedCustomer, rawExternalLogs, machines, subLogsByMachineId, customerTransfers);
 
     // Remaining + colored still need per-order status context (selected-customer only).
     let totalRemaining = 0;
@@ -6428,7 +6456,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     const progress = (card.ordered + card.accessory) > 0 ? (card.manufactured / (card.ordered + card.accessory)) * 100 : 0;
 
     return { ordered: card.ordered, manufactured: card.manufactured, remaining: totalRemaining, colored: totalColored, progress, accessory: card.accessory, orderedPlusAccessory: card.ordered + card.accessory, customerOrdered: card.customerOrdered };
-  }, [selectedCustomer, statsMap, orderIdStatsMap, machines, subLogsByMachineId, rawExternalLogs, seasons]);
+  }, [selectedCustomer, statsMap, orderIdStatsMap, machines, subLogsByMachineId, rawExternalLogs, seasons, customerTransfers]);
 
   // ── Manufactured List (auto-saved from each customer's card) ─────────────────
   // A single Firebase doc per season: manufacturedCache/{seasonId} = { customers: {...} }.
@@ -10985,13 +11013,34 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         {selectedOrderForHistory && (
           <OrderProductionHistoryModal
             isOpen={!!selectedOrderForHistory}
-            onClose={() => setSelectedOrderForHistory(null)}
+            onClose={() => {
+              setSelectedOrderForHistory(null);
+              // Refresh transfers after closing in case a transfer was added/removed
+              if (selectedCustomerId) {
+                Promise.all([
+                  getDocs(query(collection(db, 'productionTransfers'), where('fromCustomerId', '==', selectedCustomerId))),
+                  getDocs(query(collection(db, 'productionTransfers'), where('toCustomerId', '==', selectedCustomerId))),
+                ]).then(([fromSnap, toSnap]) => {
+                  const seen = new Set<string>();
+                  const result: any[] = [];
+                  [...fromSnap.docs, ...toSnap.docs].forEach(d => {
+                    if (!seen.has(d.id)) { seen.add(d.id); result.push({ id: d.id, ...d.data() }); }
+                  });
+                  setCustomerTransfers(result);
+                }).catch(() => {});
+              }
+            }}
             order={selectedOrderForHistory}
             clientName={selectedCustomer?.name || ''}
+            currentCustomerId={selectedCustomerId || ''}
             machines={machines}
             seasonId={selectedCustomer?.createdSeasonId || ''}
             seasonName={(selectedCustomer as any)?.createdSeasonName || (selectedCustomer?.createdSeasonId ? (seasons.find(s => s.id === selectedCustomer.createdSeasonId)?.name || '') : '')}
             forceOrderIdOnly={!!selectedOrderForHistory?.reorderOfId}
+            userRole={userRole}
+            userName={userName}
+            seasons={seasons}
+            allCustomers={customers}
           />
         )}
 
