@@ -9375,14 +9375,14 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                 <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
 
                     
-                    {/* Migration Button */}
-                    {(() => {
+                    {/* Migration Button — admin only, never viewer */}
+                    {userRole !== 'viewer' && (() => {
                         const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
                         const hasLegacyData = rawCustomers.find(c => c.id === selectedCustomerId)?.orders?.length;
-                        
+
                         if (hasLegacyData && !hasSubCollectionData) {
                             return (
-                                <button 
+                                <button
                                     onClick={handleMigrateData}
                                     className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 rounded-md transition-colors text-xs font-medium"
                                 >
@@ -9394,15 +9394,17 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                         return null;
                     })()}
 
-                    <button 
+                    {userRole !== 'viewer' && (
+                    <button
                         onClick={() => handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)}
                         className="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 rounded-md transition-colors text-xs font-medium"
                     >
                         <Trash2 className="w-3.5 h-3.5" />
                         <span className="hidden lg:inline">Delete Client</span>
                     </button>
+                    )}
 
-                    <button 
+                    <button
                         onClick={() => setShowDebug(true)}
                         className="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 hover:text-purple-600 hover:bg-purple-50 border border-transparent hover:border-purple-100 rounded-md transition-colors text-xs font-medium"
                         title="Debug Active Status"
@@ -9410,7 +9412,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                         <Bug className="w-3.5 h-3.5" />
                     </button>
 
-                    <button 
+                    {userRole !== 'viewer' && (
+                    <button
                         id="add-order-btn"
                         onClick={handleAddRow}
                         className={`flex items-center gap-2 px-4 py-1.5 rounded-md transition-all shadow-sm hover:shadow text-xs font-bold tracking-wide ${
@@ -9422,6 +9425,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                         <Plus className="w-4 h-4" />
                         ADD ORDER
                     </button>
+                    )}
                 </div>
             )}
         </div>
