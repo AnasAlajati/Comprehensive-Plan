@@ -1072,7 +1072,8 @@ const MemoizedOrderRow = React.memo(({
   selectedCustomerSeasonName,
   ordersColVis,
   onReorder,
-  allExternalLogs
+  allExternalLogs,
+  transferAdjustment = 0,
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -1121,6 +1122,7 @@ const MemoizedOrderRow = React.memo(({
   ordersColVis?: Record<string, boolean>;
   onReorder: (row: OrderRow, reorderType?: 'طلب عميل' | 'استعواض') => Promise<void>;
   allExternalLogs?: any[];
+  transferAdjustment?: number;
 }) => {
   // Viewer role is read-only
   const isReadOnly = userRole === 'viewer';
@@ -1263,8 +1265,8 @@ const MemoizedOrderRow = React.memo(({
       }
     });
 
-    return { producedByOrderId: byOrderId, producedByLegacy: byLegacy };
-  }, [machines, selectedCustomerName, row.material, row.id, row.reorderOfId, selectedCustomerSeasonId, selectedCustomerSeasonName, allExternalLogs]);
+    return { producedByOrderId: byOrderId + transferAdjustment, producedByLegacy: byLegacy };
+  }, [machines, selectedCustomerName, row.material, row.id, row.reorderOfId, selectedCustomerSeasonId, selectedCustomerSeasonName, allExternalLogs, transferAdjustment]);
   // Back-compat alias used in a few legacy spots
   const totalProducedFromLogs = producedByOrderId;
 
@@ -9812,6 +9814,11 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                     setNoMachineDataModal={setNoMachineDataModal}
                                     ordersColVis={ordersVisibleCols}
                                     onReorder={handleReorderRow}
+                                    transferAdjustment={customerTransfers.reduce((sum, t) => {
+                                      if (t.toOrderId === row.id) return sum + (Number(t.quantity) || 0);
+                                      if (t.fromOrderId === row.id) return sum - (Number(t.quantity) || 0);
+                                      return sum;
+                                    }, 0)}
                                   />
                                 );
                               })
