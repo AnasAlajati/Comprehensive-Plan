@@ -1635,7 +1635,7 @@ const MemoizedOrderRow = React.memo(({
     <>
     <tr 
       data-fabric-name={row.material}
-      className={`transition-colors group text-sm table-view hidden sm:table-row ${row.clientRemoved ? 'bg-red-50/60 opacity-60' : flashNew ? 'ring-2 ring-indigo-300 bg-indigo-50/60' : isSelected ? 'bg-blue-50' : isGrouped ? 'bg-indigo-50/40' : ''} ${isGroupParent ? 'border-l-4 border-indigo-400' : (isGrouped ? 'border-l-4 border-indigo-200' : '')} ${isGrouped ? 'hover:bg-indigo-50/60' : 'hover:bg-blue-50/30'}`}
+      className={`transition-colors group text-sm table-view table-row ${row.clientRemoved ? 'bg-red-50/60 opacity-60' : flashNew ? 'ring-2 ring-indigo-300 bg-indigo-50/60' : isSelected ? 'bg-blue-50' : isGrouped ? 'bg-indigo-50/40' : ''} ${isGroupParent ? 'border-l-4 border-indigo-400' : (isGrouped ? 'border-l-4 border-indigo-200' : '')} ${isGrouped ? 'hover:bg-indigo-50/60' : 'hover:bg-blue-50/30'}`}
     >
       {/* Checkbox */}
       <td className="p-0 border-r border-slate-200 text-center align-middle">
@@ -2169,15 +2169,6 @@ const MemoizedOrderRow = React.memo(({
             <div className="flex items-center justify-between gap-2">
               <div className="flex flex-col gap-1 flex-1 min-w-0">
                 {(() => {
-                  // Check if requiredQty is 0 first
-                  if (row.requiredQty === 0 || !row.requiredQty) {
-                    return (
-                      <span className="text-[10px] text-slate-400 font-medium bg-slate-50 px-2 py-0.5 rounded-full whitespace-nowrap border border-slate-200 w-fit">
-                        No Order Quantity
-                      </span>
-                    );
-                  }
-
                   if (!hasAnyPlan) {
                      if ((displayRemaining || 0) <= 0) {
                         // Finished - check if we have production history
@@ -2754,7 +2745,7 @@ const MemoizedOrderRow = React.memo(({
     {/* Mobile Card View Row */}
     <tr 
       data-fabric-name={row.material}
-      className={`card-view sm:hidden block bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden active:shadow-md transition-all h-full ${isSelected ? 'ring-2 ring-blue-500 border-transparent shadow-blue-100' : ''}`}
+      className={`card-view hidden`}
     >
       <td colSpan={100} className="p-0 block w-full h-full whitespace-normal">
          <div className={`p-3.5 flex flex-col gap-3 h-full ${isSelected ? 'bg-blue-50/30' : 'bg-white'}`}>
@@ -3351,7 +3342,7 @@ const MemoizedOrderRow = React.memo(({
     
     {/* Expanded Dyehouse Plan Row (Desktop Only) */}
     {showDyehouse && isExpanded && (
-      <tr className="bg-slate-50/50 animate-in slide-in-from-top-2 hidden sm:table-row">
+      <tr className="bg-slate-50/50 animate-in slide-in-from-top-2 table-row">
         <td colSpan={1} className="border-r border-slate-200"></td>
         <td colSpan={10} className="p-4 border-b border-slate-200 shadow-inner">
             <div className="bg-white rounded border border-slate-200 overflow-hidden">
@@ -5300,10 +5291,34 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   };
 
   // Orders Table Column Visibility
+  const MOBILE_DEFAULT_COLS: Record<string, boolean> = {
+    customerOrderedQty: true,
+    status: true,
+    ordered: true,
+    produced: true,
+    remaining: true,
+    scrap: true,
+    reqGsm: false,
+    reqWidth: false,
+    accessories: false,
+    accQty: false,
+    dyehousePlan: false,
+    receiveDate: false,
+    promisedDeliveryDate: false,
+    startDate: false,
+    endDate: false,
+    others: false,
+    delivery: false,
+    notes: false,
+    reorder: false,
+  };
   const [ordersVisibleCols, setOrdersVisibleCols] = useState<Record<string, boolean>>(() => {
     try {
       const saved = localStorage.getItem('ordersVisibleCols');
-      return saved ? JSON.parse(saved) : {};
+      if (saved) return JSON.parse(saved);
+      // On first load with no saved preference, use compact defaults on mobile
+      if (typeof window !== 'undefined' && window.innerWidth < 640) return MOBILE_DEFAULT_COLS;
+      return {};
     } catch { return {}; }
   });
   useEffect(() => {
@@ -9547,9 +9562,9 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                 <>
                   {viewMode === 'table' ? (
                       // TABLE VIEW
-                      <div className="sm:bg-white sm:rounded-lg sm:shadow sm:border sm:border-slate-200 overflow-x-auto mb-4">
-                        <table className="w-full text-sm border-collapse whitespace-nowrap sm:table block">
-                          <thead className="bg-slate-100 text-slate-600 font-semibold shadow-sm text-xs uppercase tracking-wider table-view hidden sm:table-header-group">
+                      <div className="bg-white rounded-lg shadow border border-slate-200 overflow-x-auto mb-4">
+                        <table className="w-full text-sm border-collapse whitespace-nowrap table">
+                          <thead className="bg-slate-100 text-slate-600 font-semibold shadow-sm text-xs uppercase tracking-wider table-view table-header-group">
                             <tr>
                               <th className="p-3 w-10 border-b border-r border-slate-200 text-center">
                                 <button onClick={toggleSelectAll} className="text-slate-400 hover:text-slate-600">
@@ -9659,7 +9674,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                               <th className="p-3 w-10 border-b border-slate-200"></th>
                             </tr>
                           </thead>
-                          <tbody className="sm:table-row-group grid grid-cols-2 gap-4 p-4 sm:p-0 sm:contents">
+                          <tbody className="table-row-group">
                             {!isFullyLoaded ? (
                               // Skeleton Loader
                               Array.from({ length: 5 }).map((_, idx) => (
