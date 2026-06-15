@@ -1638,7 +1638,7 @@ const MemoizedOrderRow = React.memo(({
       className={`transition-colors group text-sm table-view table-row ${row.clientRemoved ? 'bg-red-50/60 opacity-60' : flashNew ? 'ring-2 ring-indigo-300 bg-indigo-50/60' : isSelected ? 'bg-blue-50' : isGrouped ? 'bg-indigo-50/40' : ''} ${isGroupParent ? 'border-l-4 border-indigo-400' : (isGrouped ? 'border-l-4 border-indigo-200' : '')} ${isGrouped ? 'hover:bg-indigo-50/60' : 'hover:bg-blue-50/30'}`}
     >
       {/* Checkbox */}
-      <td className="p-0 border-r border-slate-200 text-center align-middle">
+      <td className="p-0 border-r border-slate-200 text-center align-middle hidden sm:table-cell">
         <button onClick={() => toggleSelectRow(row.id)} className="p-2 w-full h-full flex items-center justify-center text-slate-400 hover:text-blue-600">
           {isSelected ? <CheckSquare className="w-4 h-4 text-blue-600" /> : <Square className="w-4 h-4" />}
         </button>
@@ -1881,10 +1881,10 @@ const MemoizedOrderRow = React.memo(({
       ) : (
         <>
           {/* Fabric */}
-          <td className="p-0 border-r border-slate-200 relative group/fabric" title={refCode}>
+          <td className="p-0 border-r border-slate-200 relative group/fabric sticky left-0 z-10 bg-white sm:static sm:z-auto" title={refCode}>
             <div className={`flex items-center h-full w-full gap-2 px-2 py-1.5 rounded-lg border border-slate-100 bg-white shadow-sm ${groupDepth ? 'pl-6' : ''}`}>
               {/* Fabric Image Thumbnail with Hover Popup */}
-              <div className="relative flex-shrink-0 ml-2 group/img">
+              <div className="relative flex-shrink-0 ml-2 group/img hidden sm:block">
                 {fabricDetails?.imageUrl ? (
                   <>
                     <img 
@@ -1969,7 +1969,7 @@ const MemoizedOrderRow = React.memo(({
                 )}
               </div>
               
-              <div className="flex-1 h-full flex flex-col justify-center gap-1 relative min-h-[60px]">
+              <div className="flex-1 h-full flex flex-col justify-center gap-1 relative min-h-[36px] sm:min-h-[60px]">
                 <SearchDropdown
                   id={`fabric-${row.id}`}
                   options={fabrics}
@@ -2678,7 +2678,7 @@ const MemoizedOrderRow = React.memo(({
       )}
 
       {/* Actions */}
-      <td className="p-0 text-center">
+      <td className="p-0 text-center hidden sm:table-cell">
         <div className="flex items-center justify-center gap-1 h-full">
             {userRole === 'admin' && row.lastUpdatedBy && (
                 <div className="group/audit relative">
@@ -5294,7 +5294,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const MOBILE_DEFAULT_COLS: Record<string, boolean> = {
     customerOrderedQty: true,
     status: true,
-    ordered: true,
+    ordered: false,
     produced: true,
     remaining: true,
     scrap: true,
@@ -5312,17 +5312,17 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     notes: false,
     reorder: false,
   };
+  const isMobileScreen = typeof window !== 'undefined' && window.innerWidth < 640;
+  const ordersColsStorageKey = isMobileScreen ? 'ordersVisibleColsMobile' : 'ordersVisibleCols';
   const [ordersVisibleCols, setOrdersVisibleCols] = useState<Record<string, boolean>>(() => {
     try {
-      const saved = localStorage.getItem('ordersVisibleCols');
+      const saved = localStorage.getItem(ordersColsStorageKey);
       if (saved) return JSON.parse(saved);
-      // On first load with no saved preference, use compact defaults on mobile
-      if (typeof window !== 'undefined' && window.innerWidth < 640) return MOBILE_DEFAULT_COLS;
-      return {};
-    } catch { return {}; }
+      return isMobileScreen ? MOBILE_DEFAULT_COLS : {};
+    } catch { return isMobileScreen ? MOBILE_DEFAULT_COLS : {}; }
   });
   useEffect(() => {
-    localStorage.setItem('ordersVisibleCols', JSON.stringify(ordersVisibleCols));
+    localStorage.setItem(ordersColsStorageKey, JSON.stringify(ordersVisibleCols));
   }, [ordersVisibleCols]);
   const handleToggleOrdersCol = (colId: string) => {
     setOrdersVisibleCols(prev => ({ ...prev, [colId]: prev[colId] === false ? true : false }));
@@ -9563,10 +9563,10 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                   {viewMode === 'table' ? (
                       // TABLE VIEW
                       <div className="bg-white rounded-lg shadow border border-slate-200 overflow-x-auto mb-4">
-                        <table className="w-full text-sm border-collapse whitespace-nowrap table">
+                        <table className="w-full text-sm border-collapse whitespace-nowrap table orders-table">
                           <thead className="bg-slate-100 text-slate-600 font-semibold shadow-sm text-xs uppercase tracking-wider table-view table-header-group">
                             <tr>
-                              <th className="p-3 w-10 border-b border-r border-slate-200 text-center">
+                              <th className="p-3 w-10 border-b border-r border-slate-200 text-center hidden sm:table-cell">
                                 <button onClick={toggleSelectAll} className="text-slate-400 hover:text-slate-600">
                                   {selectedCustomer.orders.length > 0 && selectedRows.size === selectedCustomer.orders.length ? (
                                     <CheckSquare className="w-4 h-4 text-blue-600" />
@@ -9587,7 +9587,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                 </>
                               ) : (
                                 <>
-                                  <th className="p-3 text-left border-b border-r border-slate-200 min-w-[350px]">
+                                  <th className="p-3 text-left border-b border-r border-slate-200 min-w-[150px] sm:min-w-[350px] sticky left-0 z-20 bg-slate-100">
                                     <div className="flex items-center gap-2">
                                       <span>Fabric</span>
                                       <div className="relative">
@@ -9615,7 +9615,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                               { id: 'accQty', label: 'Acc. Qty' },
                                               { id: 'status', label: 'Status' },
                                               { id: 'dyehousePlan', label: 'Dyehouse Plan' },
-                                              { id: 'ordered', label: 'Ordered' },
+                                              { id: 'ordered', label: 'To Be Produced' },
                                               { id: 'produced', label: 'Produced' },
                                               { id: 'remaining', label: 'Remaining' },
                                               { id: 'receiveDate', label: 'Receive Date' },
@@ -9643,7 +9643,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                       </div>
                                     </div>
                                   </th>
-                                  {ordersVisibleCols['customerOrderedQty'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-24 bg-amber-50 text-amber-700">QTY Customer Ordered</th>}
+                                  {ordersVisibleCols['customerOrderedQty'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20 sm:w-24 bg-amber-50 text-amber-700"><span className="hidden sm:inline">QTY Customer Ordered</span><span className="sm:hidden">Cust QTY</span></th>}
                                   {ordersVisibleCols['reqGsm'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20">Req GSM</th>}
                                   {ordersVisibleCols['reqWidth'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20">Req Width</th>}
                                   {ordersVisibleCols['accessories'] !== false && <th className="p-3 text-left border-b border-r border-slate-200 min-w-[140px]">Accessories</th>}
@@ -9671,7 +9671,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                               {showDyehouse && (
                                 <th className="p-3 text-right border-b border-r border-slate-200 w-24">المطلوب</th>
                               )}
-                              <th className="p-3 w-10 border-b border-slate-200"></th>
+                              <th className="p-3 w-10 border-b border-slate-200 hidden sm:table-cell"></th>
                             </tr>
                           </thead>
                           <tbody className="table-row-group">

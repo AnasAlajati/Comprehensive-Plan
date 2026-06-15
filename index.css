@@ -44,23 +44,17 @@ input[type="number"] {
 }
 
 @media (max-width: 640px) {
-  .table-view {
-    display: none;
+  .orders-table th {
+    padding: 5px 6px;
+    font-size: 10px;
+    white-space: nowrap;
   }
-  .card-view {
-    display: block;
+  .orders-table td {
+    font-size: 11px;
   }
-}
-
-.card-view {
-  display: none;
-}
-
-@media (max-width: 640px) {
-  .table-view {
-    display: none;
-  }
-  .card-view {
-    display: block;
+  .orders-table input,
+  .orders-table select {
+    font-size: 11px;
+    padding: 3px 5px;
   }
 }
