@@ -9252,58 +9252,17 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
                 <div className="h-4 w-px bg-slate-300 mx-1"></div>
 
-                <button 
-                    onClick={() => setFabricDictionaryModal(true)}
-                    className="flex items-center gap-1.5 px-2 py-1 bg-white border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-200 text-[11px] font-medium rounded-md transition-all whitespace-nowrap"
-                    title="Fabric Dictionary"
-                >
-                    <FileSpreadsheet className="w-3 h-3" />
-                    Dictionary
-                </button>
-
-                <div className="h-4 w-px bg-slate-300 mx-1"></div>
-
-                <button 
-                    onClick={() => setShowExportModal(true)}
-                    className="flex items-center gap-1.5 px-2 py-1 bg-white border border-slate-200 text-slate-500 hover:text-green-600 hover:border-green-200 text-[11px] font-medium rounded-md transition-all whitespace-nowrap"
-                    title="Export Orders Report"
-                >
-                    <FileText className="w-3 h-3" />
-                    Export
-                </button>
-
-                <button 
-                    onClick={() => {
-                        const newState = !showYarnRequirements;
-                        setShowYarnRequirements(newState);
-                        if (newState) {
-                            setShowDyehouse(false);
-                            // setShowRemainingWork(false); // Removed state
-                        }
-                    }}
-                    className={`flex items-center gap-1.5 px-2 py-1 border text-[11px] font-medium rounded-md transition-all whitespace-nowrap ${
-                        showYarnRequirements 
-                        ? 'bg-indigo-600 border-indigo-600 text-white' 
-                        : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
-                    }`}
-                    title="Yarn Requirements"
-                >
-                    <Package className="w-3 h-3" />
-                    Yarn Req.
-                </button>
-
-                <button 
+                <button
                     onClick={() => {
                         const newState = !showDyehouse;
                         setShowDyehouse(newState);
                         if (newState) {
                             setShowYarnRequirements(false);
-                            // setShowRemainingWork(false);
                         }
                     }}
                     className={`flex items-center gap-2 px-3 py-1.5 border text-xs font-semibold rounded-lg shadow-sm transition-all whitespace-nowrap ${
-                        showDyehouse 
-                        ? 'bg-purple-600 border-purple-600 text-white shadow-purple-200' 
+                        showDyehouse
+                        ? 'bg-purple-600 border-purple-600 text-white shadow-purple-200'
                         : 'bg-white border-purple-300 text-purple-600 hover:bg-purple-50'
                     }`}
                     title="Toggle Dyehouse Info columns"
@@ -9314,7 +9273,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
                 {showDyehouse && (
                     <>
-                    <button 
+                    <button
                          onClick={() => setShowDyehouseExportModal(true)}
                          className="flex items-center gap-1.5 px-2 py-1 border border-purple-200 bg-purple-50 text-purple-600 hover:bg-purple-100 text-[11px] font-medium rounded-md transition-all whitespace-nowrap"
                          title="Export Dyehouse / Color Info to Excel"
@@ -9340,6 +9299,45 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                     </button>
                     </>
                 )}
+
+                <div className="h-4 w-px bg-slate-300 mx-1"></div>
+
+                <button
+                    onClick={() => setShowExportModal(true)}
+                    className="flex items-center gap-1.5 px-2 py-1 bg-white border border-slate-200 text-slate-500 hover:text-green-600 hover:border-green-200 text-[11px] font-medium rounded-md transition-all whitespace-nowrap"
+                    title="Export Orders Report"
+                >
+                    <FileText className="w-3 h-3" />
+                    Export
+                </button>
+
+                <button
+                    onClick={() => {
+                        const newState = !showYarnRequirements;
+                        setShowYarnRequirements(newState);
+                        if (newState) {
+                            setShowDyehouse(false);
+                        }
+                    }}
+                    className={`flex items-center gap-1.5 px-2 py-1 border text-[11px] font-medium rounded-md transition-all whitespace-nowrap ${
+                        showYarnRequirements
+                        ? 'bg-indigo-600 border-indigo-600 text-white'
+                        : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                    }`}
+                    title="Yarn Requirements"
+                >
+                    <Package className="w-3 h-3" />
+                    Yarn Req.
+                </button>
+
+                <button
+                    onClick={() => setFabricDictionaryModal(true)}
+                    className="flex items-center gap-1.5 px-2 py-1 bg-white border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-200 text-[11px] font-medium rounded-md transition-all whitespace-nowrap"
+                    title="Fabric Dictionary"
+                >
+                    <FileSpreadsheet className="w-3 h-3" />
+                    Dictionary
+                </button>
             </div>
 
             {/* Right: Client Actions */}
