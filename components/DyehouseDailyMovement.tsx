@@ -4,7 +4,7 @@ import { db } from '../services/firebase';
 import { parseFabricName } from '../services/data';
 import { OrderRow, FabricDefinition, DyeingBatch } from '../types';
 import { DyehouseOrdersMovementPage } from './DyehouseOrdersMovementPage';
-import { 
+import {
   Calendar,
   ArrowRight,
   Factory,
@@ -24,7 +24,8 @@ import {
   TrendingUp,
   Filter,
   GitCommit,
-  Send
+  Send,
+  MessageSquare
 } from 'lucide-react';
 
 // Status Configuration - Same as Active Work
@@ -59,6 +60,11 @@ interface MovementItem {
   toStatus: DyehouseStatusType;
   movementDate: string;
   updatedBy?: string;
+  // Batch note
+  notes?: string;
+  notesDate?: string;
+  notesSource?: string;
+  type?: 'status' | 'note';
 }
 
 interface DyehouseGroup {
@@ -167,9 +173,48 @@ export const DyehouseDailyMovement: React.FC = () => {
                 fromStatus: fromStatus,
                 toStatus: entry.status,
                 movementDate: entryDate,
-                updatedBy: entry.updatedBy || entry.modifiedBy
+                updatedBy: entry.updatedBy || entry.modifiedBy,
+                notes: batch.notes || undefined,
+                notesDate: (batch as any).notesDate || undefined,
+                notesSource: (batch as any).notesSource || undefined,
+                type: 'status'
               });
             });
+
+            // Add a standalone note entry when a note exists on a date with no status change
+            const noteDate = (batch as any).notesDate as string | undefined;
+            if (batch.notes && noteDate) {
+              const hasStatusOnNoteDate = history.some(
+                (h: any) => (h.date || h.enteredAt) === noteDate
+              );
+              if (!hasStatusOnNoteDate) {
+                movements.push({
+                  id: `${order.id}-${idx}-note-${noteDate}`,
+                  orderId: order.id,
+                  batchIdx: idx,
+                  clientId,
+                  clientName,
+                  fabric: order.material,
+                  fabricShortName: parseFabricName(order.material).shortName || order.material,
+                  color: batch.color,
+                  colorHex: batch.colorHex,
+                  quantity: batch.quantity,
+                  quantitySent: totalSent,
+                  dyehouse: dyehouseName,
+                  machine: machineName,
+                  plannedCapacity: batch.plannedCapacity,
+                  dispatchNumber: batch.dispatchNumber,
+                  fromStatus: 'NEW',
+                  toStatus: 'STORE_RAW',
+                  movementDate: noteDate,
+                  updatedBy: (batch as any).notesUpdatedBy || undefined,
+                  notes: batch.notes,
+                  notesDate: noteDate,
+                  notesSource: (batch as any).notesSource || undefined,
+                  type: 'note'
+                });
+              }
+            }
           });
         }
       });
@@ -506,31 +551,65 @@ export const DyehouseDailyMovement: React.FC = () => {
                               <span>#{item.dispatchNumber}</span>
                             )}
                           </div>
+
+                          {/* Batch Note (shown on status rows only; note-type rows display it as the main content) */}
+                          {item.notes && item.type !== 'note' && (
+                            <div className="mt-1.5 flex items-start gap-1.5">
+                              <MessageSquare size={11} className="text-amber-400 flex-shrink-0 mt-0.5" />
+                              <div className="flex items-baseline gap-1.5 flex-wrap min-w-0">
+                                <span className="text-xs text-amber-700 leading-snug">{item.notes}</span>
+                                {item.notesSource === 'activeWork' && (
+                                  <span className="text-[9px] font-bold text-amber-600 bg-amber-100 border border-amber-200 px-1.5 py-px rounded-full uppercase tracking-wide whitespace-nowrap">
+                                    Active Work
+                                  </span>
+                                )}
+                                {item.notesDate && (
+                                  <span className="text-[10px] text-amber-400 whitespace-nowrap">{item.notesDate}</span>
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </div>
 
-                        {/* Status Transition Visual */}
-                        <div className="flex items-center gap-2 shrink-0">
-                          {/* From Status */}
-                          <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg ${fromConfig.bgColor} border ${fromConfig.borderColor}`}>
-                            <FromIcon size={14} className={fromConfig.textColor} />
-                            <span className={`text-xs font-medium ${fromConfig.textColor}`}>
-                              {fromConfig.shortLabel}
-                            </span>
+                        {/* Status Transition or Note-only */}
+                        {item.type === 'note' ? (
+                          <div className="flex items-center gap-2 shrink-0">
+                            <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 px-3 py-2 rounded-lg max-w-xs">
+                              <MessageSquare size={14} className="text-amber-500 shrink-0 mt-0.5" />
+                              <div>
+                                <p className="text-xs text-amber-800 leading-snug">{item.notes}</p>
+                                {item.notesSource === 'activeWork' && (
+                                  <span className="text-[9px] font-bold text-amber-600 bg-amber-100 border border-amber-200 px-1.5 py-px rounded-full uppercase tracking-wide">
+                                    Active Work
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </div>
+                        ) : (
+                          <div className="flex items-center gap-2 shrink-0">
+                            {/* From Status */}
+                            <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg ${fromConfig.bgColor} border ${fromConfig.borderColor}`}>
+                              <FromIcon size={14} className={fromConfig.textColor} />
+                              <span className={`text-xs font-medium ${fromConfig.textColor}`}>
+                                {fromConfig.shortLabel}
+                              </span>
+                            </div>
 
-                          {/* Arrow */}
-                          <div className="flex items-center">
-                            <ArrowRight className="w-5 h-5 text-slate-400" />
-                          </div>
+                            {/* Arrow */}
+                            <div className="flex items-center">
+                              <ArrowRight className="w-5 h-5 text-slate-400" />
+                            </div>
 
-                          {/* To Status */}
-                          <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg ${toConfig.bgColor} border ${toConfig.borderColor} ring-2 ring-offset-1`} style={{ '--tw-ring-color': toConfig.color } as any}>
-                            <ToIcon size={14} className={toConfig.textColor} />
-                            <span className={`text-xs font-medium ${toConfig.textColor}`}>
-                              {toConfig.shortLabel}
-                            </span>
+                            {/* To Status */}
+                            <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg ${toConfig.bgColor} border ${toConfig.borderColor} ring-2 ring-offset-1`} style={{ '--tw-ring-color': toConfig.color } as any}>
+                              <ToIcon size={14} className={toConfig.textColor} />
+                              <span className={`text-xs font-medium ${toConfig.textColor}`}>
+                                {toConfig.shortLabel}
+                              </span>
+                            </div>
                           </div>
-                        </div>
+                        )}
 
                         {/* Updated By */}
                         {item.updatedBy && (

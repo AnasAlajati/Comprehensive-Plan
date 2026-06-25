@@ -275,6 +275,9 @@ export interface DyeingBatch {
   quantity: number;
   machine: string;
   notes: string;
+  notesDate?: string;        // Date when note was last updated
+  notesSource?: string;      // Source of the note (e.g., 'activeWork')
+  notesUpdatedBy?: string;   // Who last updated the note
   dispatchNumber?: string; // رقم الازن
   dateSent?: string;       // تاريخ بعت المصبغة
   formationDate?: string;  // تاريخ التشكيل

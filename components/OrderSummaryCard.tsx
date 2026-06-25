@@ -1,15 +1,16 @@
 import React, { useMemo } from 'react';
-import { 
-  Package, 
-  CheckCircle2, 
-  AlertCircle, 
-  History, 
+import {
+  Package,
+  CheckCircle2,
+  AlertCircle,
+  History,
   Droplet,
   Factory,
   TrendingUp,
   Clock,
   FileText,
-  Calendar
+  Calendar,
+  MessageSquare
 } from 'lucide-react';
 import { OrderRow, MachineSS } from '../types';
 
@@ -401,6 +402,26 @@ export const OrderSummaryCard: React.FC<OrderSummaryCardProps> = ({
                              </div>
                         </div>
                     </div>
+
+                    {/* Batch Note from Active Work */}
+                    {batch.notes && (
+                      <div className="mt-2 flex items-start gap-1.5 bg-amber-50/70 rounded-md p-2 border border-amber-100">
+                        <MessageSquare size={11} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          {batch.notesSource === 'activeWork' && (
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <span className="text-[9px] font-bold text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-px rounded-full uppercase tracking-wide">
+                                Active Work
+                              </span>
+                              {batch.notesDate && (
+                                <span className="text-[10px] text-amber-400">{batch.notesDate}</span>
+                              )}
+                            </div>
+                          )}
+                          <p className="text-xs text-amber-800 leading-relaxed">{batch.notes}</p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}

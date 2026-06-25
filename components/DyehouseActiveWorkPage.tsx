@@ -27,7 +27,8 @@ import {
   Trash2,
   Link2,
   X,
-  Bug
+  Bug,
+  MessageSquare
 } from 'lucide-react';
 
 interface DyehouseActiveWorkPageProps {
@@ -136,6 +137,10 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
     quantity: string;
     note: string;
   } | null>(null);
+
+  // Inline note editing state
+  const [editingNote, setEditingNote] = useState<{ itemId: string; text: string } | null>(null);
+  const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -710,6 +715,35 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
       console.error('Error deleting partial:', error);
     } finally {
       setUpdatingItemId(null);
+    }
+  };
+
+  // Save a note from Active Work
+  const handleSaveNote = async (item: ActiveWorkItem, text: string) => {
+    setSavingNoteId(item.id);
+    try {
+      const orderSnapshot = await getDocs(query(collectionGroup(db, 'orders')));
+      const orderDoc = orderSnapshot.docs.find(d => d.id === item.orderId);
+      if (!orderDoc) return;
+
+      const orderData = orderDoc.data() as OrderRow;
+      const newDyeingPlan = [...(orderData.dyeingPlan || [])];
+      const today = new Date().toISOString().split('T')[0];
+
+      newDyeingPlan[item.batchIdx] = {
+        ...newDyeingPlan[item.batchIdx],
+        notes: text.trim(),
+        notesDate: today,
+        notesSource: 'activeWork',
+        notesUpdatedBy: auth.currentUser?.email || 'Unknown'
+      };
+
+      await updateDoc(orderDoc.ref, { dyeingPlan: newDyeingPlan });
+      setEditingNote(null);
+    } catch (error) {
+      console.error('Error saving note:', error);
+    } finally {
+      setSavingNoteId(null);
     }
   };
 
@@ -1639,12 +1673,76 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
                                 );
                               })()}
                               
-                              {/* Notes */}
-                              {item.notes && (
-                                <div className="px-4 py-1.5 bg-amber-50 text-xs text-amber-700 border-t border-amber-100">
-                                  📝 {item.notes}
-                                </div>
-                              )}
+                              {/* Notes Section */}
+                              <div className={`border-t ${item.notes ? 'border-amber-100' : 'border-slate-100'}`}>
+                                {editingNote?.itemId === item.id ? (
+                                  <div className="px-4 py-2.5 bg-amber-50/80">
+                                    <textarea
+                                      className="w-full text-xs border border-amber-200 rounded-md px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-amber-400 bg-white text-slate-700 placeholder:text-slate-300"
+                                      rows={2}
+                                      placeholder="اكتب ملاحظة..."
+                                      value={editingNote.text}
+                                      onChange={e => setEditingNote({ ...editingNote, text: e.target.value })}
+                                      onKeyDown={e => {
+                                        if (e.key === 'Escape') setEditingNote(null);
+                                        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleSaveNote(item, editingNote.text);
+                                      }}
+                                      autoFocus
+                                      dir="rtl"
+                                    />
+                                    <div className="flex justify-end gap-2 mt-1.5">
+                                      <button
+                                        onClick={() => setEditingNote(null)}
+                                        className="text-xs px-2.5 py-1 rounded text-slate-500 hover:bg-slate-100 transition-colors"
+                                      >
+                                        إلغاء
+                                      </button>
+                                      <button
+                                        onClick={() => handleSaveNote(item, editingNote.text)}
+                                        disabled={savingNoteId === item.id}
+                                        className="text-xs px-2.5 py-1 rounded bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-colors flex items-center gap-1"
+                                      >
+                                        {savingNoteId === item.id && <RefreshCw size={10} className="animate-spin" />}
+                                        حفظ
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : canEdit ? (
+                                  <div
+                                    className={`px-4 py-1.5 flex items-start gap-2 cursor-pointer group transition-colors ${
+                                      item.notes ? 'bg-amber-50 hover:bg-amber-100/80' : 'hover:bg-slate-50'
+                                    }`}
+                                    onClick={() => setEditingNote({ itemId: item.id, text: item.notes || '' })}
+                                  >
+                                    <MessageSquare size={11} className={`mt-0.5 flex-shrink-0 transition-colors ${item.notes ? 'text-amber-500' : 'text-slate-300 group-hover:text-slate-400'}`} />
+                                    {item.notes ? (
+                                      <div className="flex-1 min-w-0">
+                                        <p className="text-xs text-amber-700 leading-relaxed">{item.notes}</p>
+                                        {item.batch.notesDate && (
+                                          <p className="text-[10px] text-amber-400 mt-0.5">
+                                            {new Date(item.batch.notesDate).toLocaleDateString('ar-EG', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                          </p>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span className="text-xs text-slate-300 group-hover:text-slate-400">إضافة ملاحظة...</span>
+                                    )}
+                                    <PenBox size={10} className="flex-shrink-0 mt-0.5 text-amber-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                  </div>
+                                ) : item.notes ? (
+                                  <div className="px-4 py-1.5 bg-amber-50 text-xs text-amber-700 flex items-start gap-2">
+                                    <MessageSquare size={11} className="mt-0.5 flex-shrink-0 text-amber-500" />
+                                    <div>
+                                      <p>{item.notes}</p>
+                                      {item.batch.notesDate && (
+                                        <p className="text-[10px] text-amber-400 mt-0.5">
+                                          {new Date(item.batch.notesDate).toLocaleDateString('ar-EG', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
                             </div>
                           );
                         })}
