@@ -3241,9 +3241,9 @@ const FetchDataPage: React.FC<FetchDataPageProps> = ({
                    <span className="text-xs text-blue-900/60 font-bold mb-1 flex items-center gap-1">
                      خارجي (External)
                    </span>
-                   <input 
-                      type="number" 
-                      value={externalProduction}
+                   <input
+                      type="number"
+                      value={Math.round(externalProduction * 100) / 100}
                       onChange={(e) => setExternalProduction(Number(e.target.value))}
                       onBlur={handleExternalProductionBlur}
                       className="w-full text-center bg-transparent font-bold text-2xl text-blue-700 outline-none border-b border-transparent group-hover:border-blue-300 focus:border-blue-500"

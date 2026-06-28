@@ -71,8 +71,8 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
         const loadedEntries = entriesSnap.docs.map(d => ({ id: d.id, ...d.data() })) as ExternalEntry[];
         setEntries(loadedEntries);
         onUpdateTotal(
-          loadedEntries.reduce((s, e) => s + (Number(e.receivedQty) || 0), 0),
-          loadedEntries.reduce((s, e) => s + (Number(e.scrap) || 0), 0),
+          Math.round(loadedEntries.reduce((s, e) => s + (Number(e.receivedQty) || 0), 0) * 100) / 100,
+          Math.round(loadedEntries.reduce((s, e) => s + (Number(e.scrap) || 0), 0) * 100) / 100,
         );
         setAllCustomers(customersSnap.docs.map(d => ({ id: d.id, name: (d.data() as any).name || d.id })));
         setSeasons(seasonsSnap.docs.map(d => ({ id: d.id, name: (d.data() as any).name || d.id })));
@@ -128,8 +128,8 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
       const updated = [...entries, saved];
       setEntries(updated);
       onUpdateTotal(
-        updated.reduce((s, e) => s + (Number(e.receivedQty) || 0), 0),
-        updated.reduce((s, e) => s + (Number(e.scrap) || 0), 0),
+        Math.round(updated.reduce((s, e) => s + (Number(e.receivedQty) || 0), 0) * 100) / 100,
+        Math.round(updated.reduce((s, e) => s + (Number(e.scrap) || 0), 0) * 100) / 100,
       );
       setReceivedQty(''); setScrapQty(''); setNotes('');
     } catch (err) {
@@ -146,8 +146,8 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
     const updated = entries.filter(e => e.id !== id);
     setEntries(updated);
     onUpdateTotal(
-      updated.reduce((s, e) => s + (Number(e.receivedQty) || 0), 0),
-      updated.reduce((s, e) => s + (Number(e.scrap) || 0), 0),
+      Math.round(updated.reduce((s, e) => s + (Number(e.receivedQty) || 0), 0) * 100) / 100,
+      Math.round(updated.reduce((s, e) => s + (Number(e.scrap) || 0), 0) * 100) / 100,
     );
   };
 
