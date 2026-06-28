@@ -26,7 +26,7 @@ interface UserData {
   id: string;
   email: string;
   displayName: string;
-  role: 'admin' | 'schedule_editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | 'pending';
+  role: 'admin' | 'schedule_editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | 'machine_technician' | 'pending';
   createdAt: any;
   password?: string;
   isOnline?: boolean;
@@ -48,7 +48,7 @@ export const UserManagementPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserName, setNewUserName] = useState('');
-  const [newUserRole, setNewUserRole] = useState<'admin' | 'schedule_editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner'>('viewer');
+  const [newUserRole, setNewUserRole] = useState<'admin' | 'schedule_editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | 'machine_technician'>('viewer');
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState('');
   const [createdUserCreds, setCreatedUserCreds] = useState<{email: string, password: string} | null>(null);
@@ -563,6 +563,7 @@ export const UserManagementPage: React.FC = () => {
               <option value="dyehouse_colors_manager">Dyehouse Colors Manager</option>
               <option value="factory_manager">Factory Manager</option>
               <option value="daily_planner">Daily Planner</option>
+              <option value="machine_technician">Machine Technician</option>
               <option value="admin">Admin</option>
             </select>
           </div>
@@ -796,12 +797,13 @@ export const UserManagementPage: React.FC = () => {
                         value={user.role}
                         onChange={(e) => handleUpdateRole(user.id, e.target.value)}
                         className={`text-xs font-medium px-2.5 py-1 rounded-full border-0 cursor-pointer focus:ring-2 focus:ring-indigo-500
-                          ${user.role === 'admin' ? 'bg-purple-100 text-purple-800' : 
-                            user.role === 'schedule_editor' ? 'bg-blue-100 text-blue-800' : 
+                          ${user.role === 'admin' ? 'bg-purple-100 text-purple-800' :
+                            user.role === 'schedule_editor' ? 'bg-blue-100 text-blue-800' :
                             user.role === 'dyehouse_manager' ? 'bg-cyan-100 text-cyan-800' :
                             user.role === 'dyehouse_colors_manager' ? 'bg-teal-100 text-teal-800' :
                             user.role === 'factory_manager' ? 'bg-orange-100 text-orange-800' :
                             user.role === 'daily_planner' ? 'bg-green-100 text-green-800' :
+                            user.role === 'machine_technician' ? 'bg-indigo-100 text-indigo-800' :
                             user.role === 'pending' ? 'bg-yellow-100 text-yellow-800' :
                             'bg-slate-100 text-slate-800'}`}
                       >
@@ -812,6 +814,7 @@ export const UserManagementPage: React.FC = () => {
                         <option value="dyehouse_colors_manager">Dyehouse Colors Manager</option>
                         <option value="factory_manager">Factory Manager</option>
                         <option value="daily_planner">Daily Planner</option>
+                        <option value="machine_technician">Machine Technician</option>
                         <option value="admin">Admin</option>
                       </select>
                     </td>

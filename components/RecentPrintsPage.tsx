@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { collection, query, orderBy, onSnapshot, limit, doc, getDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { ProductionTicket, MachineRow } from '../types';
+import { ProductionTicket, MachineRow, OrderRow } from '../types';
+import { ReportViewer, CertEntry } from './FabricReportsPage';
 import {
   Printer,
   Calendar,
@@ -14,6 +15,7 @@ import {
   TrendingUp,
   AlertCircle,
   CheckCircle,
+  FileText,
 } from 'lucide-react';
 
 interface RecentPrintsPageProps {
@@ -28,6 +30,7 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
   const [searchTerm, setSearchTerm] = useState('');
   const [dayFilter, setDayFilter] = useState<string>('all'); // 'all', 'today', '3days', '7days', 'custom'
   const [activeDay, setActiveDay] = useState<string>('');
+  const [openReport, setOpenReport] = useState<{ order: OrderRow; clientName: string; cert: CertEntry } | null>(null);
 
   // Fetch active day on mount
   useEffect(() => {
@@ -133,6 +136,17 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
     };
   }, [filteredTickets, groupedByDay]);
 
+  if (openReport) {
+    return (
+      <ReportViewer
+        order={openReport.order}
+        clientName={openReport.clientName}
+        cert={openReport.cert}
+        onClose={() => setOpenReport(null)}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
@@ -149,25 +163,6 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
               <p className="text-slate-500 mt-2">Track and review all production orders printed today and earlier</p>
             </div>
 
-            {/* KPI Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 border border-indigo-200 rounded-lg p-4">
-                <div className="text-xs text-indigo-700 font-semibold uppercase tracking-wider mb-1">Total Prints</div>
-                <div className="text-2xl font-bold text-indigo-900">{stats.totalPrints}</div>
-              </div>
-              <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 border border-emerald-200 rounded-lg p-4">
-                <div className="text-xs text-emerald-700 font-semibold uppercase tracking-wider mb-1">In Production</div>
-                <div className="text-2xl font-bold text-emerald-900">{stats.inProduction}</div>
-              </div>
-              <div className="bg-gradient-to-br from-amber-50 to-amber-100 border border-amber-200 rounded-lg p-4">
-                <div className="text-xs text-amber-700 font-semibold uppercase tracking-wider mb-1">Days</div>
-                <div className="text-2xl font-bold text-amber-900">{stats.daysRepresented}</div>
-              </div>
-              <div className="bg-gradient-to-br from-cyan-50 to-cyan-100 border border-cyan-200 rounded-lg p-4">
-                <div className="text-xs text-cyan-700 font-semibold uppercase tracking-wider mb-1">Total Qty (kg)</div>
-                <div className="text-2xl font-bold text-cyan-900">{stats.totalQty.toLocaleString()}</div>
-              </div>
-            </div>
           </div>
 
           {/* Filters */}
@@ -245,6 +240,7 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
                       ticket={ticket}
                       machines={machines}
                       activeDay={activeDay}
+                      onOpenReport={(order, clientName, cert) => setOpenReport({ order, clientName, cert })}
                     />
                   ))}
                 </div>
@@ -261,7 +257,8 @@ const ReportCard: React.FC<{
   ticket: ProductionTicket;
   machines: MachineRow[];
   activeDay: string;
-}> = ({ ticket, machines, activeDay }) => {
+  onOpenReport: (order: OrderRow, clientName: string, cert: CertEntry) => void;
+}> = ({ ticket, machines, activeDay, onOpenReport }) => {
   const printTime = new Date(ticket.printedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const printDate = new Date(ticket.printedAt).toLocaleDateString('en-GB');
   const isNew = (Date.now() - new Date(ticket.printedAt).getTime()) < 1000 * 60 * 60; // < 1 hour
@@ -416,6 +413,34 @@ const ReportCard: React.FC<{
                "{ticket.snapshot.notes}"
             </div>
           )}
+
+          {/* Open Report Button */}
+          <button
+            onClick={() => {
+              const stubOrder: OrderRow = {
+                id: ticket.orderId,
+                material: ticket.fabricName,
+                machine: ticket.snapshot?.plannedMachines?.[0] || '',
+                requiredQty: ticket.snapshot?.requiredQty || 0,
+                accessory: '', manufacturedQty: 0, remainingQty: 0,
+                orderReceiptDate: '', startDate: '', endDate: '',
+                scrapQty: 0, others: '', notes: '', batchDeliveries: 0, accessoryDeliveries: 0,
+              };
+              const stubCert: CertEntry = {
+                orderId: ticket.orderId,
+                clientName: ticket.customerName,
+                material: ticket.fabricName,
+                sampleNumber: '', date: '', status: 'draft',
+                lastSavedAt: '', finalizedAt: '', finalizedBy: '',
+                rawWeight: '', rawWidth: '', finishedWeight: '', finishedWidth: '',
+              };
+              onOpenReport(stubOrder, ticket.customerName, stubCert);
+            }}
+            className="w-full mt-3 flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-600 text-xs font-semibold transition-colors border border-indigo-100"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            فتح التقرير
+          </button>
 
           {/* Footer Metadata - Clean Row */}
           <div className="pt-3 mt-1 flex items-center justify-between text-xs text-slate-400 border-t border-slate-50">

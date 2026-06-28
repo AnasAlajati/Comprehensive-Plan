@@ -86,9 +86,11 @@ import {
   Printer,
   ArrowUpDown,
   Link2,
-  UserMinus
+  UserMinus,
+  ClipboardList
 } from 'lucide-react';
 import { OrderSummaryCard } from './OrderSummaryCard';
+import { SampleCertificatePage } from './SampleCertificatePage';
 
 const ALL_CLIENTS_ID = 'ALL_CLIENTS';
 const ALL_REMAINING_WORK_ID = 'ALL_REMAINING_WORK';
@@ -1074,6 +1076,7 @@ const MemoizedOrderRow = React.memo(({
   onReorder,
   allExternalLogs,
   transferAdjustment = 0,
+  onOpenSampleCertificate,
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -1123,6 +1126,7 @@ const MemoizedOrderRow = React.memo(({
   onReorder: (row: OrderRow, reorderType?: 'طلب عميل' | 'استعواض') => Promise<void>;
   allExternalLogs?: any[];
   transferAdjustment?: number;
+  onOpenSampleCertificate?: (order: OrderRow, clientName: string) => void;
 }) => {
   // Viewer role is read-only
   const isReadOnly = userRole === 'viewer';
@@ -2386,6 +2390,33 @@ const MemoizedOrderRow = React.memo(({
                   </button>
               )}
               
+              {onOpenSampleCertificate && (() => {
+                const cert = (row as any).sampleCertificate;
+                const hasFinalized = cert?.isFinalized === true;
+                const hasDraft     = !!cert && !hasFinalized;
+                return (
+                  <button
+                    onClick={() => onOpenSampleCertificate(row, selectedCustomerName)}
+                    title={hasFinalized ? 'شهادة معتمدة ✓' : hasDraft ? 'شهادة (مسودة)' : 'شهادة ميلاد العينة'}
+                    className={`p-1.5 rounded-md transition-all flex-shrink-0 relative ${
+                      hasFinalized
+                        ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100'
+                        : hasDraft
+                          ? 'text-amber-500 bg-amber-50 hover:bg-amber-100'
+                          : 'text-slate-400 hover:text-teal-600 hover:bg-teal-50'
+                    }`}
+                  >
+                    <ClipboardList className="w-4 h-4" />
+                    {hasFinalized && (
+                      <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-500 border border-white" />
+                    )}
+                    {hasDraft && (
+                      <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400 border border-white" />
+                    )}
+                  </button>
+                );
+              })()}
+
               <button
                 onClick={() => {
                   // Extract active/planned machines for this row
@@ -2395,15 +2426,15 @@ const MemoizedOrderRow = React.memo(({
                   onOpenProductionOrder(row, internalActive, internalPlanned);
                 }}
                 className={`p-1.5 rounded-md transition-all flex-shrink-0 flex items-center gap-1 ${
-                  row.isPrinted 
-                    ? "text-green-600 bg-green-50 hover:bg-green-100 pr-2" 
-                    : "text-slate-400 hover:text-purple-600 hover:bg-purple-50"
+                  row.isPrinted
+                    ? "text-orange-600 bg-orange-50 hover:bg-orange-100 pr-2"
+                    : "text-slate-400 hover:text-orange-500 hover:bg-orange-50"
                 }`}
-                title={row.isPrinted 
-                  ? `Printed on ${row.lastPrintedAt || row.printedAt ? new Date(row.lastPrintedAt || row.printedAt || '').toLocaleDateString('en-GB') : 'Unknown Date'}` 
+                title={row.isPrinted
+                  ? `Printed on ${row.lastPrintedAt || row.printedAt ? new Date(row.lastPrintedAt || row.printedAt || '').toLocaleDateString('en-GB') : 'Unknown Date'}`
                   : "Print Production Order"}
               >
-                <FileText className="w-4 h-4" />
+                <Printer className="w-4 h-4" />
                 {row.isPrinted && (row.lastPrintedAt || row.printedAt) && (
                   <span className="text-[10px] font-medium">
                     {new Date(row.lastPrintedAt || row.printedAt || '').toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })}
@@ -5282,6 +5313,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const [sortByDyehouseStatus, setSortByDyehouseStatus] = useState(() => localStorage.getItem('sortByDyehouseStatus') === 'true');
   const [dyehousePlanningModal, setDyehousePlanningModal] = useState<{isOpen: boolean, order: OrderRow | null}>({isOpen: false, order: null});
   const [noMachineDataModal, setNoMachineDataModal] = useState<{isOpen: boolean; orderId: string; currentNote: string}>({isOpen: false, orderId: '', currentNote: ''});
+  const [sampleCertModal, setSampleCertModal] = useState<{ order: OrderRow; clientName: string } | null>(null);
 //   const [showDyehouseImport, setShowDyehouseImport] = useState(false);
   // const [showRemainingWork, setShowRemainingWork] = useState(false); // Removed
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
@@ -5473,6 +5505,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
   const [showBulkDateInput, setShowBulkDateInput] = useState(false);
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
   const [fabricSearchTerm, setFabricSearchTerm] = useState<string>('');
+  const [dyehouseFilter, setDyehouseFilter] = useState<string>('');
 
   // Plan Search Modal State
   const [planSearchModal, setPlanSearchModal] = useState<{
@@ -5826,7 +5859,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         });
     });
 
-    // 2. External Factories
+    // 2. External Factories (planned work)
     externalFactories.forEach(factory => {
         if (factory.plans && Array.isArray(factory.plans)) {
             factory.plans.forEach((plan: any) => {
@@ -5836,9 +5869,25 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             });
         }
     });
-    
+
+    // 3. Actual external production logs (externalProduction collection)
+    // These are always orderId-pinned, so match by orderId belonging to this customer
+    // OR by client name — either way the fabric had real production.
+    const customerOrderIds = new Set((client.orders || []).map((o: any) => o.id).filter(Boolean));
+    (rawExternalLogs || []).forEach((ext: any) => {
+        if (!ext || !ext.fabric) return;
+        const extSeasonOk = !ext.clientSeason
+          || !custSeasonId
+          || ext.clientSeason === custSeasonId
+          || ext.clientSeason === custSeasonName;
+        if (!extSeasonOk) return;
+        if ((ext.orderId && customerOrderIds.has(ext.orderId)) || custClientOk(ext.client)) {
+            fabrics.add(ext.fabric);
+        }
+    });
+
     setHistorySet(fabrics);
-  }, [selectedCustomerId, customers, machines, subLogsByMachineId, externalFactories]);
+  }, [selectedCustomerId, customers, machines, subLogsByMachineId, externalFactories, rawExternalLogs]);
 
   // Merge Customers & Orders
   useEffect(() => {
@@ -6247,6 +6296,19 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       });
     });
 
+    // External production logs — always orderId-pinned; give the order an entry
+    // so statusMatchType resolves to 'orderId' instead of 'legacy'.
+    (rawExternalLogs || []).forEach((ext: any) => {
+      if (!ext?.orderId || !orderIds.has(ext.orderId)) return;
+      const entry = intermediateMap.get(ext.orderId);
+      if (!entry) return;
+      if (ext.date) entry.logDates.push(ext.date);
+      const factoryName = ext.factory || 'External';
+      if ((Number(ext.receivedQty) || 0) > 0 && !entry.active.includes(factoryName)) {
+        entry.active.push(factoryName);
+      }
+    });
+
     const finalMap = new Map<string, any>();
     intermediateMap.forEach((data, orderId) => {
       // Only store entries that have actual log/plan data
@@ -6280,7 +6342,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     });
 
     return finalMap;
-  }, [selectedCustomer, machines, activeDay]);
+  }, [selectedCustomer, machines, activeDay, rawExternalLogs]);
 
   const allClientsStats = useMemo(() => {
     if (selectedCustomerId !== ALL_CLIENTS_ID) return [];
@@ -7517,9 +7579,25 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
       // Apply fabric search filter
       if (fabricSearchTerm.trim()) {
-          orders = orders.filter(row => 
+          orders = orders.filter(row =>
               row.material && row.material.toLowerCase().includes(fabricSearchTerm.toLowerCase())
           );
+      }
+
+      // Apply dyehouse filter — match any batch whose effective dyehouse contains the selected name
+      if (dyehouseFilter) {
+          const target = dyehouseFilter.toLowerCase();
+          orders = orders.filter(row => {
+              if (!row.dyeingPlan || row.dyeingPlan.length === 0) return false;
+              return row.dyeingPlan.some((b: any) => {
+                  const effective =
+                      b.dyehouse ||
+                      (b.colorApprovals && b.colorApprovals.length > 0 ? b.colorApprovals[0]?.dyehouseName : '') ||
+                      row.dyehouse ||
+                      '';
+                  return effective.toLowerCase().includes(target);
+              });
+          });
       }
 
       // --- Helper: Calculate Order Tier for Sorting ---
@@ -7639,7 +7717,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
           const createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
           return createdA - createdB;
       });
-  }, [selectedCustomer, machineFilter, machines, externalFactories, fabricSearchTerm, sortByDyehouseStatus]);
+  }, [selectedCustomer, machineFilter, machines, externalFactories, fabricSearchTerm, sortByDyehouseStatus, dyehouseFilter]);
 
   // Group rows so reorders render immediately beneath their parent order
   const groupedOrders = useMemo(() => {
@@ -9173,7 +9251,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                     </div>
                     <select 
                         value={selectedCustomerId || ''} 
-                        onChange={(e) => setSelectedCustomerId(e.target.value)}
+                        onChange={(e) => { setSelectedCustomerId(e.target.value); setDyehouseFilter(''); setFabricSearchTerm(''); }}
                         className="pl-10 pr-10 py-3 bg-white border border-slate-300 text-slate-700 text-base font-semibold rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm transition-all cursor-pointer appearance-none hover:border-indigo-300"
                     >
                         <option value={ALL_CLIENTS_ID} className="font-bold text-blue-600">All Clients Overview</option>
@@ -9279,6 +9357,32 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                         </button>
                     )}
                 </div>
+
+                {/* Dyehouse Filter */}
+                <select
+                    value={dyehouseFilter}
+                    onChange={e => setDyehouseFilter(e.target.value)}
+                    className={`px-2.5 py-1.5 border rounded-md text-xs bg-white shadow-sm outline-none transition-colors ${
+                        dyehouseFilter
+                            ? 'border-indigo-400 text-indigo-700 font-semibold'
+                            : 'border-slate-200 text-slate-500'
+                    }`}
+                    title="Filter orders by dyehouse"
+                >
+                    <option value="">All Dyehouses</option>
+                    {Array.from(new Set(
+                        (selectedCustomer?.orders || []).flatMap((row: any) =>
+                            (row.dyeingPlan || []).map((b: any) =>
+                                b.dyehouse ||
+                                (b.colorApprovals?.[0]?.dyehouseName) ||
+                                row.dyehouse ||
+                                ''
+                            )
+                        ).filter(Boolean)
+                    )).sort().map(dh => (
+                        <option key={dh as string} value={dh as string}>{dh as string}</option>
+                    ))}
+                </select>
 
                 <div className="h-4 w-px bg-slate-300 mx-1"></div>
 
@@ -9796,7 +9900,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                       });
                                     }}
                                     onOpenHistory={(order) => setSelectedOrderForHistory(order)}
-                                    hasHistory={row.reorderOfId ? false : historySet.has(row.material || '')}
+                                    hasHistory={row.reorderOfId ? false : (historySet.has(row.material || '') || orderIdStatsMap.has(row.id))}
                                     onFilterMachine={(cap) => setMachineFilter(cap)}
                                     onOpenReceiveModal={(orderId, batchIdx, batch) => {
                                       setReceiveModal({ isOpen: true, orderId, batchIdx, batch });
@@ -9823,6 +9927,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                       if (t.fromOrderId === row.id) return sum - (Number(t.quantity) || 0);
                                       return sum;
                                     }, 0)}
+                                    onOpenSampleCertificate={(order, clientName) => setSampleCertModal({ order, clientName })}
                                   />
                                 );
                               })
@@ -11439,6 +11544,16 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
             </div>,
             document.body
         )
+      )}
+
+      {/* Sample Certificate Full-Page Overlay */}
+      {sampleCertModal && (
+        <SampleCertificatePage
+          order={sampleCertModal.order}
+          clientName={sampleCertModal.clientName}
+          onClose={() => setSampleCertModal(null)}
+          machines={machines}
+        />
       )}
     </div>
   );

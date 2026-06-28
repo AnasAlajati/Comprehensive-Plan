@@ -32,6 +32,8 @@ import { ClientOrdersPage } from './components/ClientOrdersPage';
 import { CompareDaysPage } from './components/CompareDaysPage';
 import { ProductionHistoryPage } from './components/ProductionHistoryPage';
 import { FabricHistoryPage } from './components/FabricHistoryPage';
+import { FabricReportsPage } from './components/FabricReportsPage';
+import { SampleArchivePage } from './components/SampleArchivePage';
 import { YarnInventoryPage } from './components/YarnInventoryPage';
 import { DyehouseInventoryPage } from './components/DyehouseInventoryPage';
 import { DyehouseDirectoryPage } from './components/DyehouseDirectoryPage';
@@ -67,14 +69,16 @@ import {
   Menu,
   X,
   Beaker,
-  Printer
+  Printer,
+  BookOpen,
+  Archive
 } from 'lucide-react';
 import { MachineStatus } from './types';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [userName, setUserName] = useState<string>(''); // NEW: Store display name from Firestore
-  const [userRole, setUserRole] = useState<'admin' | 'schedule_editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | null>(null);
+  const [userRole, setUserRole] = useState<'admin' | 'schedule_editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | 'machine_technician' | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [loadProgress, setLoadProgress] = useState(0);
@@ -100,7 +104,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'real-maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'sample-tracking' | 'fabrics' | 'machines' | 'users'>('excel'); 
+  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'real-maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'fabric-reports' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'sample-tracking' | 'sample-archive' | 'fabrics' | 'machines' | 'users'>('excel'); 
   const [planningInitialViewMode, setPlanningInitialViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
   
   // Force dyehouse_manager and dyehouse_colors_manager to only see dyehouse-directory or orders
@@ -111,6 +115,9 @@ const App: React.FC = () => {
     }
     if (userRole === 'factory_manager' && viewMode !== 'real-maintenance' && viewMode !== 'sample-tracking' && viewMode !== 'recent-prints') {
       setViewMode('real-maintenance');
+    }
+    if (userRole === 'machine_technician' && viewMode !== 'fabric-reports' && viewMode !== 'recent-prints') {
+      setViewMode('recent-prints');
     }
   }, [userRole, viewMode]);
 
@@ -902,6 +909,31 @@ const App: React.FC = () => {
                       <span>Orders</span>
                     </button>
                   </>
+                ) : userRole === 'machine_technician' ? (
+                  <>
+                    <button
+                      onClick={() => { setViewMode('recent-prints'); setIsMenuOpen(false); }}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
+                        viewMode === 'recent-prints'
+                          ? 'bg-indigo-600 text-white shadow-indigo-200'
+                          : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                      }`}
+                    >
+                      <Printer size={18} className={viewMode === 'recent-prints' ? 'text-white' : 'text-indigo-600'} />
+                      <span>Recent Prints</span>
+                    </button>
+                    <button
+                      onClick={() => { setViewMode('fabric-reports'); setIsMenuOpen(false); }}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
+                        viewMode === 'fabric-reports'
+                          ? 'bg-emerald-600 text-white shadow-emerald-200'
+                          : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                      }`}
+                    >
+                      <Archive size={18} className={viewMode === 'fabric-reports' ? 'text-white' : 'text-emerald-600'} />
+                      <span>Fabric Archive</span>
+                    </button>
+                  </>
                 ) : userRole === 'factory_manager' ? (
                   <>
                     <button 
@@ -992,7 +1024,7 @@ const App: React.FC = () => {
              </div>
 
              {/* App Launcher - Hide for Dyehouse Manager, Dyehouse Colors Manager, and Factory Manager */}
-             {userRole !== 'dyehouse_manager' && userRole !== 'dyehouse_colors_manager' && userRole !== 'factory_manager' && (
+             {userRole !== 'dyehouse_manager' && userRole !== 'dyehouse_colors_manager' && userRole !== 'factory_manager' && userRole !== 'machine_technician' && (
              <div className="relative">
                <button 
                  onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -1049,12 +1081,19 @@ const App: React.FC = () => {
                             <div className="font-semibold text-sm">Production History</div>
                           </button>
                         )}
-                        <button 
+                        <button
                           onClick={() => { setViewMode('fabric-history'); setIsMenuOpen(false); }}
                           className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'fabric-history' ? 'bg-orange-50 text-orange-700 ring-1 ring-orange-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
                         >
                           <div className={`p-2 rounded-md ${viewMode === 'fabric-history' ? 'bg-orange-100 text-orange-600' : 'bg-slate-100 text-slate-500'}`}><Package size={20} /></div>
                           <div className="font-semibold text-sm">Fabric History</div>
+                        </button>
+                        <button
+                          onClick={() => { setViewMode('fabric-reports'); setIsMenuOpen(false); }}
+                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'fabric-reports' ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                        >
+                          <div className={`p-2 rounded-md ${viewMode === 'fabric-reports' ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-500'}`}><BookOpen size={20} /></div>
+                          <div className="font-semibold text-sm">Fabric Archive</div>
                         </button>
                         <button 
                           onClick={() => { setViewMode('recent-prints'); setIsMenuOpen(false); }}
@@ -1112,12 +1151,19 @@ const App: React.FC = () => {
                            <div className={`p-2 rounded-md ${viewMode === 'idle' ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'}`}><AlertCircle size={20} /></div>
                            <div className="font-semibold text-sm">Idle Monitor</div>
                         </button>
-                        <button 
+                        <button
                           onClick={() => { setViewMode('sample-tracking'); setIsMenuOpen(false); }}
                           className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'sample-tracking' ? 'bg-violet-50 text-violet-700 ring-1 ring-violet-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
                         >
                            <div className={`p-2 rounded-md ${viewMode === 'sample-tracking' ? 'bg-violet-100 text-violet-600' : 'bg-slate-100 text-slate-500'}`}><Beaker size={20} /></div>
                            <div className="font-semibold text-sm">Sample Tracking</div>
+                        </button>
+                        <button
+                          onClick={() => { setViewMode('sample-archive'); setIsMenuOpen(false); }}
+                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'sample-archive' ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
+                        >
+                           <div className={`p-2 rounded-md ${viewMode === 'sample-archive' ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}><Archive size={20} /></div>
+                           <div className="font-semibold text-sm">Sample Certificates · أرشيف الشهادات</div>
                         </button>
                         
                      </div>
@@ -1206,9 +1252,17 @@ const App: React.FC = () => {
             )}
 
             {viewMode === 'fabric-history' && (
-              <FabricHistoryPage 
+              <FabricHistoryPage
                 machines={machines}
               />
+            )}
+
+            {viewMode === 'fabric-reports' && (
+              <FabricReportsPage userRole={userRole} />
+            )}
+
+            {viewMode === 'sample-archive' && (
+              <SampleArchivePage userRole={userRole} />
             )}
 
             {viewMode === 'fabrics' && (
