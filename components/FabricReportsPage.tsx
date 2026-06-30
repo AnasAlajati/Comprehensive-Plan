@@ -354,6 +354,7 @@ export function ReportViewer({
       onClose={onClose}
       headerSlot={TabBar}
       activeSection={tab === 'knitting' ? 'knitting' : 'cert'}
+      userRole={userRole}
     />
   );
 }

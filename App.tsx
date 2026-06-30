@@ -113,7 +113,7 @@ const App: React.FC = () => {
     if ((userRole === 'dyehouse_manager' || userRole === 'dyehouse_colors_manager') && viewMode !== 'dyehouse-directory' && viewMode !== 'orders') {
       setViewMode('dyehouse-directory');
     }
-    if (userRole === 'factory_manager' && viewMode !== 'real-maintenance' && viewMode !== 'sample-tracking' && viewMode !== 'recent-prints') {
+    if (userRole === 'factory_manager' && viewMode !== 'real-maintenance' && viewMode !== 'sample-tracking' && viewMode !== 'recent-prints' && viewMode !== 'fabric-reports') {
       setViewMode('real-maintenance');
     }
     if (userRole === 'machine_technician' && viewMode !== 'fabric-reports' && viewMode !== 'recent-prints') {
@@ -958,16 +958,27 @@ const App: React.FC = () => {
                       <Beaker size={18} className={viewMode === 'sample-tracking' ? 'text-white' : 'text-violet-600'} />
                       <span>عينات</span>
                     </button>
-                    <button 
+                    <button
                       onClick={() => { setViewMode('recent-prints'); setIsMenuOpen(false); }}
                       className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
-                        viewMode === 'recent-prints' 
-                          ? 'bg-indigo-600 text-white shadow-indigo-200' 
+                        viewMode === 'recent-prints'
+                          ? 'bg-indigo-600 text-white shadow-indigo-200'
                           : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
                       }`}
                     >
                       <Printer size={18} className={viewMode === 'recent-prints' ? 'text-white' : 'text-indigo-600'} />
                       <span>Recent Prints</span>
+                    </button>
+                    <button
+                      onClick={() => { setViewMode('fabric-reports'); setIsMenuOpen(false); }}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm whitespace-nowrap ${
+                        viewMode === 'fabric-reports'
+                          ? 'bg-emerald-600 text-white shadow-emerald-200'
+                          : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                      }`}
+                    >
+                      <Archive size={18} className={viewMode === 'fabric-reports' ? 'text-white' : 'text-emerald-600'} />
+                      <span>Fabric Archive</span>
                     </button>
                   </>
                 ) : (

@@ -277,11 +277,12 @@ function TathbeetMeasFields({ prefix, label, tathbeet, onChange }: {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-export function SampleCertificatePage({ order, clientName, onClose, headerSlot, machines: machinesProp, activeSection = 'cert' }: {
+export function SampleCertificatePage({ order, clientName, onClose, headerSlot, machines: machinesProp, activeSection = 'cert', userRole }: {
   order: OrderRow; clientName: string; onClose: () => void;
   headerSlot?: React.ReactNode;
   machines?: any[];
   activeSection?: 'cert' | 'knitting';
+  userRole?: string;
 }) {
   const [data, setData]      = useState<SampleCertData>({ ...EMPTY_CERT });
   const [saveStatus, setSave] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -291,6 +292,9 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
   const saveTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const orderRef   = useRef<any>(null);
   const fabricRef  = useRef<any>(null);
+
+  const canEditCert     = ['admin', 'machine_technician'].includes(userRole ?? '');
+  const canEditKnitting = ['admin', 'factory_manager'].includes(userRole ?? '');
   const imgInput   = useRef<HTMLInputElement>(null);
 
   // ── Load Firestore data + auto-fill yarn ──
@@ -444,6 +448,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
 
   // ── Auto-save ──
   const scheduleSave = useCallback((next: SampleCertData) => {
+    if (!canEditCert && !canEditKnitting) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     setSave('saving');
     saveTimer.current = setTimeout(async () => {
@@ -656,12 +661,18 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-sm">
+          {!canEditCert && activeSection !== 'knitting' && (
+            <span className="px-2.5 py-1 bg-amber-50 text-amber-600 border border-amber-200 rounded-lg text-xs font-bold">View Only</span>
+          )}
+          {!canEditKnitting && activeSection === 'knitting' && (
+            <span className="px-2.5 py-1 bg-amber-50 text-amber-600 border border-amber-200 rounded-lg text-xs font-bold">View Only</span>
+          )}
+          {canEditCert && <span className="text-sm">
             {saveStatus === 'saving' && <span className="text-slate-400 flex items-center gap-1"><RefreshCw size={13} className="animate-spin" /> حفظ...</span>}
             {saveStatus === 'saved'  && <span className="text-emerald-600 flex items-center gap-1"><CheckCircle2 size={13} /> تم الحفظ</span>}
             {saveStatus === 'error'  && <span className="text-red-500 text-xs">خطأ في الحفظ</span>}
-          </span>
-          {!data.isFinalized && (
+          </span>}
+          {canEditCert && !data.isFinalized && (
             <button onClick={handleFinalize} disabled={finalizing}
               className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors">
               {finalizing ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
@@ -680,7 +691,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
       <div className="flex-1 overflow-y-auto">
         <div className={`${activeSection === 'knitting' ? 'w-full px-6' : 'max-w-4xl mx-auto px-4'} py-6 space-y-4`}>
 
-          {activeSection === 'cert' && <>
+          {activeSection === 'cert' && <div className={!canEditCert ? 'pointer-events-none select-none opacity-60' : ''}>
           {/* 1 · Header */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
             <div className="flex items-center gap-2 mb-4">
@@ -856,9 +867,10 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
               </button>
             </div>
           </Section>
-          </>}
+          </div>}
 
           {/* 5 · Needle Arrangement — Knitting Structure tab only */}
+          <div className={!canEditKnitting ? 'pointer-events-none select-none opacity-60' : ''}>
           {activeSection === 'knitting' && <Section id="needles" title="ترتيب الإبر" subtitle="النقطة = إبرة — اختر نوع الماكينة وعدد التراكات"
             icon={<Sparkles size={16} className="text-sky-600" />} accent="bg-sky-50">
             <div className="pt-4 space-y-4">
@@ -1085,8 +1097,9 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
 
             </div>
           </Section>}
+          </div>
 
-          {activeSection === 'cert' && <>
+          {activeSection === 'cert' && <div className={!canEditCert ? 'pointer-events-none select-none opacity-60' : ''}>
           {/* 7 · Dyehouse */}
           <Section id="dyehouse" title="بيانات المصبغة" subtitle="خطوات العينة في المصبغة"
             icon={<Droplets size={16} className="text-indigo-500" />} accent="bg-indigo-50">
@@ -1178,7 +1191,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
           </Section>
 
           <div className="h-8" />
-          </>}
+          </div>}
 
         </div>
       </div>
