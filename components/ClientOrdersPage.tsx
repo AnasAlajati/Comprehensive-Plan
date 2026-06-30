@@ -976,16 +976,27 @@ const SearchDropdown: React.FC<SearchDropdownProps> = ({
              }}>
           {filteredOptions.length > 0 ? (
             <>
-              {filteredOptions.map((opt, idx) => (
-                <div
-                  key={idx}
-                  onClick={() => handleSelect(opt)}
-                  className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm border-b border-slate-50 last:border-b-0 text-left"
-                >
-                  <div className="font-medium">{getLabel(opt)}</div>
-                  {opt.code && <div className="text-[10px] text-slate-400">{opt.code}</div>}
-                </div>
-              ))}
+              {filteredOptions.map((opt, idx) => {
+                const ncs = opt.needleCamStructure;
+                const hasKnitting = ncs && typeof ncs === 'object' && Object.keys(ncs).length > 0;
+                return (
+                  <div
+                    key={idx}
+                    onClick={() => handleSelect(opt)}
+                    className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm border-b border-slate-50 last:border-b-0 text-left"
+                  >
+                    <div className="font-medium flex items-center gap-1.5">
+                      {getLabel(opt)}
+                      {hasKnitting && (
+                        <span className="shrink-0 px-1.5 py-0.5 bg-teal-50 text-teal-600 text-[9px] font-bold rounded border border-teal-200">
+                          ✓ KS
+                        </span>
+                      )}
+                    </div>
+                    {opt.code && <div className="text-[10px] text-slate-400">{opt.code}</div>}
+                  </div>
+                );
+              })}
               {onCreateNew && searchTerm && !options.some(o => getLabel(o).toLowerCase() === searchTerm.toLowerCase()) && (
                 <div
                   onClick={() => {

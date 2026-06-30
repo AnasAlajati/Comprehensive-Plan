@@ -61,7 +61,7 @@ export function ReportViewer({
   onClose: () => void;
   userRole?: string;
 }) {
-  const canSeeKnitting = ['admin', 'machine_technician'].includes(userRole ?? '');
+  const canSeeKnitting = ['admin', 'factory_manager'].includes(userRole ?? '');
   const [tab, setTab]           = useState<'cert' | 'production' | 'knitting'>('cert');
   const [ticket, setTicket]     = useState<ProductionTicket | null>(null);
   const [ticketLoaded, setTicketLoaded] = useState(false);
