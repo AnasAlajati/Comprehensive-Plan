@@ -767,6 +767,19 @@ export const FabricsPage: React.FC<FabricsPageProps> = ({ userRole }) => {
                                   Short: {fabric.shortName}
                                 </span>
                               )}
+                              {(() => {
+                                const ncs = (fabric as any).needleCamStructure;
+                                const hasStructure = ncs && typeof ncs === 'object' && Object.keys(ncs).length > 0;
+                                return hasStructure ? (
+                                  <span className="px-1.5 py-0.5 bg-teal-50 text-teal-700 rounded border border-teal-200 flex items-center gap-1">
+                                    ✓ Knitting Structure
+                                  </span>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 bg-slate-50 text-slate-400 rounded border border-slate-200 italic">
+                                    No Knitting Structure
+                                  </span>
+                                );
+                              })()}
                             </div>
                           </td>
                           <td className="p-4 align-top">

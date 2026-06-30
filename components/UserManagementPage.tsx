@@ -586,8 +586,8 @@ export const UserManagementPage: React.FC = () => {
       </div>
 
       {/* Users List */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 shadow-md">
-        <table className="w-full text-left font-medium">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 shadow-md overflow-x-auto">
+        <table className="w-full text-left font-medium" style={{ minWidth: '900px' }}>
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
                 <th className="px-6 py-5 font-bold text-slate-700 whitespace-nowrap min-w-[220px]">User</th>

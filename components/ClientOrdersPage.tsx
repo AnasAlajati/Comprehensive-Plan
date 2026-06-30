@@ -2390,32 +2390,6 @@ const MemoizedOrderRow = React.memo(({
                   </button>
               )}
               
-              {onOpenSampleCertificate && (() => {
-                const cert = (row as any).sampleCertificate;
-                const hasFinalized = cert?.isFinalized === true;
-                const hasDraft     = !!cert && !hasFinalized;
-                return (
-                  <button
-                    onClick={() => onOpenSampleCertificate(row, selectedCustomerName)}
-                    title={hasFinalized ? 'شهادة معتمدة ✓' : hasDraft ? 'شهادة (مسودة)' : 'شهادة ميلاد العينة'}
-                    className={`p-1.5 rounded-md transition-all flex-shrink-0 relative ${
-                      hasFinalized
-                        ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100'
-                        : hasDraft
-                          ? 'text-amber-500 bg-amber-50 hover:bg-amber-100'
-                          : 'text-slate-400 hover:text-teal-600 hover:bg-teal-50'
-                    }`}
-                  >
-                    <ClipboardList className="w-4 h-4" />
-                    {hasFinalized && (
-                      <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-500 border border-white" />
-                    )}
-                    {hasDraft && (
-                      <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400 border border-white" />
-                    )}
-                  </button>
-                );
-              })()}
 
               <button
                 onClick={() => {
@@ -11546,15 +11520,6 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         )
       )}
 
-      {/* Sample Certificate Full-Page Overlay */}
-      {sampleCertModal && (
-        <SampleCertificatePage
-          order={sampleCertModal.order}
-          clientName={sampleCertModal.clientName}
-          onClose={() => setSampleCertModal(null)}
-          machines={machines}
-        />
-      )}
     </div>
   );
 };

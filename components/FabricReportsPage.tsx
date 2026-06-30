@@ -6,7 +6,7 @@ import { SampleCertificatePage } from './SampleCertificatePage';
 import {
   Search, CheckCircle2, FileEdit, Calendar,
   ExternalLink, RefreshCw, ArrowLeft, Package,
-  ChevronRight, User, Printer, ClipboardList, X
+  ChevronRight, User, Printer, ClipboardList, X, Layers
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -53,14 +53,16 @@ function splitMaterial(material: string): { code: string; label: string } {
 // ─── Report Viewer (tabbed: certificate + production order) ───────────────────
 
 export function ReportViewer({
-  order, clientName, cert, onClose,
+  order, clientName, cert, onClose, userRole,
 }: {
   order: OrderRow;
   clientName: string;
   cert: CertEntry;
   onClose: () => void;
+  userRole?: string;
 }) {
-  const [tab, setTab]           = useState<'cert' | 'production'>('cert');
+  const canSeeKnitting = ['admin', 'machine_technician'].includes(userRole ?? '');
+  const [tab, setTab]           = useState<'cert' | 'production' | 'knitting'>('cert');
   const [ticket, setTicket]     = useState<ProductionTicket | null>(null);
   const [ticketLoaded, setTicketLoaded] = useState(false);
   const [fullOrder, setFullOrder] = useState<any | null>(null);
@@ -99,14 +101,15 @@ export function ReportViewer({
   const TabBar = (
     <div style={{ background: '#f8fafc', borderBottom: '1px solid #e5e7eb', borderTop: '1px solid #e5e7eb', padding: '0 20px', display: 'flex', alignItems: 'center', gap: 0 }}>
       {([
-        { key: 'cert',       label: 'شهادة ميلاد عينة', icon: <ClipboardList size={13} /> },
-        { key: 'production', label: 'Production Order',  icon: <Printer size={13} /> },
-      ] as { key: 'cert'|'production'; label: string; icon: React.ReactNode }[]).map(t => {
+        { key: 'cert',       label: 'Sample Certificate', icon: <ClipboardList size={13} /> },
+        { key: 'production', label: 'Production Order',   icon: <Printer size={13} /> },
+        ...(canSeeKnitting ? [{ key: 'knitting' as const, label: 'Knitting Structure', icon: <Layers size={13} /> }] : []),
+      ] as { key: 'cert'|'production'|'knitting'; label: string; icon: React.ReactNode }[]).map(t => {
         const disabled = t.key === 'production' && !hasPrinted;
         const active   = tab === t.key;
         return (
           <button key={t.key}
-            onClick={() => !disabled && setTab(t.key as 'cert'|'production')}
+            onClick={() => !disabled && setTab(t.key as 'cert'|'production'|'knitting')}
             title={disabled ? 'No production order printed for this fabric yet' : undefined}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -343,13 +346,14 @@ export function ReportViewer({
     );
   }
 
-  // ── Certificate view — tab bar injected via headerSlot inside the fixed overlay ──
+  // ── Certificate / Knitting view — tab bar injected via headerSlot ──
   return (
     <SampleCertificatePage
       order={order}
       clientName={clientName}
       onClose={onClose}
       headerSlot={TabBar}
+      activeSection={tab === 'knitting' ? 'knitting' : 'cert'}
     />
   );
 }
@@ -470,6 +474,7 @@ export function FabricReportsPage({ userRole }: { userRole: string }) {
         clientName={opening.clientName}
         cert={opening.cert}
         onClose={() => setOpening(null)}
+        userRole={userRole}
       />
     );
   }

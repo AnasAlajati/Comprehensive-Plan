@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, query, orderBy, onSnapshot, limit, doc, getDoc } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, limit, doc, getDoc, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { ProductionTicket, MachineRow, OrderRow } from '../types';
 import { ReportViewer, CertEntry } from './FabricReportsPage';
@@ -22,14 +22,17 @@ interface RecentPrintsPageProps {
   machines?: MachineRow[];
   selectedDate?: string;
   onNavigateToOrder?: (order: any) => void;
+  userRole?: string;
 }
 
-export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [], selectedDate, onNavigateToOrder }) => {
+export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [], selectedDate, onNavigateToOrder, userRole }) => {
   const [tickets, setTickets] = useState<ProductionTicket[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [dayFilter, setDayFilter] = useState<string>('all'); // 'all', 'today', '3days', '7days', 'custom'
   const [activeDay, setActiveDay] = useState<string>('');
+  // fabric name/code → has knitting structure
+  const [knittingFabrics, setKnittingFabrics] = useState<Set<string>>(new Set());
   const [openReport, setOpenReport] = useState<{ order: OrderRow; clientName: string; cert: CertEntry } | null>(null);
 
   // Fetch active day on mount
@@ -48,6 +51,22 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
       }
     };
     fetchActiveDay();
+  }, []);
+
+  // Fetch FabricSS to build knitting structure lookup
+  useEffect(() => {
+    getDocs(collection(db, 'FabricSS')).then(snap => {
+      const names = new Set<string>();
+      snap.docs.forEach(d => {
+        const data = d.data() as any;
+        const ncs = data.needleCamStructure;
+        if (ncs && typeof ncs === 'object' && Object.keys(ncs).length > 0) {
+          if (data.name)  names.add(data.name);
+          if (data.code)  names.add(data.code);
+        }
+      });
+      setKnittingFabrics(names);
+    }).catch(() => {});
   }, []);
 
   // Fetch Recent Tickets
@@ -143,6 +162,7 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
         clientName={openReport.clientName}
         cert={openReport.cert}
         onClose={() => setOpenReport(null)}
+        userRole={userRole}
       />
     );
   }
@@ -241,6 +261,11 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
                       machines={machines}
                       activeDay={activeDay}
                       onOpenReport={(order, clientName, cert) => setOpenReport({ order, clientName, cert })}
+                      hasKnitting={knittingFabrics.has(ticket.fabricName) || (() => {
+                        const m = ticket.fabricName?.match(/\[([^\]]+)\]/);
+                        return m ? knittingFabrics.has(m[1].trim()) : false;
+                      })()}
+                      userRole={userRole}
                     />
                   ))}
                 </div>
@@ -258,7 +283,9 @@ const ReportCard: React.FC<{
   machines: MachineRow[];
   activeDay: string;
   onOpenReport: (order: OrderRow, clientName: string, cert: CertEntry) => void;
-}> = ({ ticket, machines, activeDay, onOpenReport }) => {
+  hasKnitting?: boolean;
+  userRole?: string;
+}> = ({ ticket, machines, activeDay, onOpenReport, hasKnitting, userRole }) => {
   const printTime = new Date(ticket.printedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const printDate = new Date(ticket.printedAt).toLocaleDateString('en-GB');
   const isNew = (Date.now() - new Date(ticket.printedAt).getTime()) < 1000 * 60 * 60; // < 1 hour
@@ -347,7 +374,19 @@ const ReportCard: React.FC<{
               )}
             </h3>
             <p className="text-base font-extrabold text-slate-800 leading-tight line-clamp-2">{ticket.fabricName}</p>
-            
+
+            {(['admin', 'factory_manager'] as string[]).includes(userRole ?? '') && (
+              hasKnitting ? (
+                <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 bg-teal-50 text-teal-700 text-[10px] font-bold rounded border border-teal-200">
+                  ✓ Knitting Structure
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 bg-slate-100 text-slate-400 text-[10px] font-semibold rounded border border-slate-200 italic">
+                  No Knitting Structure
+                </span>
+              )
+            )}
+
             {/* Planned Machines - More subtle */}
             {ticket.snapshot?.plannedMachines && ticket.snapshot.plannedMachines.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mt-2.5">

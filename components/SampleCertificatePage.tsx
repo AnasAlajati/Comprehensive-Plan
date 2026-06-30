@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { collectionGroup, collection, query, getDocs, updateDoc, setDoc, doc, where } from 'firebase/firestore';
+import { collectionGroup, collection, query, getDocs, updateDoc, setDoc, doc, where, getDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getAuth } from 'firebase/auth';
 import { db, storage } from '../services/firebase';
@@ -248,18 +248,49 @@ function Input({ unit, className = '', ...props }: React.InputHTMLAttributes<HTM
   );
 }
 
+// ─── Tathbeet measurement fields — must be module-level so React doesn't
+//     unmount/remount on every parent re-render (which kills input focus)
+function TathbeetMeasFields({ prefix, label, tathbeet, onChange }: {
+  prefix: 'before' | 'after';
+  label: string;
+  tathbeet: TathbeetData;
+  onChange: (patch: Partial<TathbeetData>) => void;
+}) {
+  return (
+    <div className="bg-white rounded-xl border border-teal-100 p-4 space-y-3">
+      <p className="text-xs font-bold text-teal-700 uppercase tracking-wide">{label}</p>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="العرض" sublabel="cm">
+          <Input type="number" unit="cm" placeholder="0"
+            value={(tathbeet as any)[`${prefix}Width`]}
+            onChange={e => onChange({ [`${prefix}Width`]: e.target.value } as any)} />
+        </Field>
+        <Field label="الجرام" sublabel="g/m²">
+          <Input type="number" unit="g" placeholder="0"
+            value={(tathbeet as any)[`${prefix}Gsm`]}
+            onChange={e => onChange({ [`${prefix}Gsm`]: e.target.value } as any)} />
+        </Field>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-export function SampleCertificatePage({ order, clientName, onClose, headerSlot, machines: machinesProp }: {
+export function SampleCertificatePage({ order, clientName, onClose, headerSlot, machines: machinesProp, activeSection = 'cert' }: {
   order: OrderRow; clientName: string; onClose: () => void;
   headerSlot?: React.ReactNode;
   machines?: any[];
+  activeSection?: 'cert' | 'knitting';
 }) {
   const [data, setData]      = useState<SampleCertData>({ ...EMPTY_CERT });
   const [saveStatus, setSave] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [uploading, setUploading] = useState(false);
+  const [orderedGsm,   setOrderedGsm]   = useState<number | null>(null);
+  const [orderedWidth, setOrderedWidth] = useState<number | null>(null);
   const saveTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const orderRef   = useRef<any>(null);
+  const fabricRef  = useRef<any>(null);
   const imgInput   = useRef<HTMLInputElement>(null);
 
   // ── Load Firestore data + auto-fill yarn ──
@@ -283,6 +314,8 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
 
       // Read full order data from Firestore — fills in fields missing from the stub (e.g. from archive)
       const fullOrderData = docSnap.data() as any;
+      if (fullOrderData.requiredGsm   != null) setOrderedGsm(fullOrderData.requiredGsm);
+      if (fullOrderData.requiredWidth != null) setOrderedWidth(fullOrderData.requiredWidth);
       const machineName = order.machine || fullOrderData.machine || '';
       const yarnAllocations = order.yarnAllocations ?? fullOrderData.yarnAllocations ?? {};
 
@@ -305,6 +338,18 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
           needleCount:  m.needles != null ? String(m.needles) : '',
           feederCount:  m.feeders != null ? String(m.feeders) : '',
         };
+      }
+
+      // Cache fabric doc reference — try exact name match first, then fall back to code in brackets
+      const fabricSnapName = await getDocs(query(collection(db, 'FabricSS'), where('name', '==', order.material)));
+      if (!fabricSnapName.empty) {
+        fabricRef.current = fabricSnapName.docs[0].ref;
+      } else {
+        const codeMatch = order.material?.match(/\[([^\]]+)\]/);
+        if (codeMatch) {
+          const fabricSnapCode = await getDocs(query(collection(db, 'FabricSS'), where('code', '==', codeMatch[1].trim())));
+          if (!fabricSnapCode.empty) fabricRef.current = fabricSnapCode.docs[0].ref;
+        }
       }
 
       const saved = fullOrderData.sampleCertificate as Partial<SampleCertData> | undefined;
@@ -370,13 +415,28 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
           finalizedBy:      saved.finalizedBy      ?? '',
         });
       } else {
-        // New cert — seed all available machine specs
+        // New cert — seed machine specs + needle/cam structure from fabric if available
+        const fabricData = fabricRef.current ? (await getDoc(fabricRef.current)).data() as any : null;
+        const bedTypeKey = (machineDefaults.machineType || '').toLowerCase().includes('double') ? 'double' : 'single';
+        const savedStructure = fabricData?.needleCamStructure?.[bedTypeKey];
         setData(prev => ({
           ...prev,
           ...machineDefaults,
           yarns,
           storedClientName: clientName,
           storedMaterial:   order.material,
+          ...(savedStructure ? {
+            needleBedType:    savedStructure.needleBedType    ?? prev.needleBedType,
+            needleColumns:    savedStructure.needleColumns    ?? prev.needleColumns,
+            needleDialTracks: savedStructure.needleDialTracks ?? prev.needleDialTracks,
+            needleCylTracks:  savedStructure.needleCylTracks  ?? prev.needleCylTracks,
+            needleTracks:     { ...makeNeedleTracks(savedStructure.needleColumns ?? DEFAULT_NEEDLE_COLS), ...(savedStructure.needleTracks || {}) },
+            camBedType:       savedStructure.camBedType       ?? prev.camBedType,
+            camColumns:       savedStructure.camColumns       ?? prev.camColumns,
+            camDialTracks:    savedStructure.camDialTracks    ?? prev.camDialTracks,
+            camCylTracks:     savedStructure.camCylTracks     ?? prev.camCylTracks,
+            camTracks:        { ...makeCamTracks(savedStructure.camColumns ?? DEFAULT_CAM_COLS), ...(savedStructure.camTracks || {}) },
+          } : {}),
         }));
       }
     })();
@@ -395,6 +455,26 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
         }
         if (orderRef.current) {
           await updateDoc(orderRef.current, { sampleCertificate: next });
+          // Write needle/cam structure back to fabric doc so future reports start pre-filled
+          if (fabricRef.current) {
+            const bedTypeKey = next.needleBedType || 'single';
+            await setDoc(fabricRef.current, {
+              needleCamStructure: {
+                [bedTypeKey]: {
+                  needleBedType:    next.needleBedType,
+                  needleColumns:    next.needleColumns,
+                  needleDialTracks: next.needleDialTracks,
+                  needleCylTracks:  next.needleCylTracks,
+                  needleTracks:     next.needleTracks,
+                  camBedType:       next.camBedType,
+                  camColumns:       next.camColumns,
+                  camDialTracks:    next.camDialTracks,
+                  camCylTracks:     next.camCylTracks,
+                  camTracks:        next.camTracks,
+                },
+              },
+            }, { merge: true });
+          }
           // Keep the dedicated index in sync (fast reads for archive)
           await setDoc(doc(db, 'sample_certificates', order.id), {
             orderId:        order.id,
@@ -556,7 +636,9 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <Sparkles size={16} className={data.isFinalized ? 'text-emerald-500' : 'text-indigo-500'} />
-              <span className="font-bold text-slate-800 text-base">شهادة ميلاد عينة</span>
+              <span className="font-bold text-slate-800 text-base">
+                {activeSection === 'knitting' ? 'Knitting Structure' : 'Sample Certificate'}
+              </span>
               <span className="text-slate-300">•</span>
               <span className="text-sm text-slate-600">{order.material}</span>
               {data.isFinalized && (
@@ -596,8 +678,9 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-4xl mx-auto px-4 py-6 space-y-4">
+        <div className={`${activeSection === 'knitting' ? 'w-full px-6' : 'max-w-4xl mx-auto px-4'} py-6 space-y-4`}>
 
+          {activeSection === 'cert' && <>
           {/* 1 · Header */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
             <div className="flex items-center gap-2 mb-4">
@@ -627,6 +710,29 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
           <Section id="measurements" title="المقاسات" subtitle="خام · زيرو · جاهز"
             icon={<Ruler size={16} className="text-amber-600" />} accent="bg-amber-50">
             <div className="pt-4 space-y-4">
+
+              {/* Ordered spec reference — fetched from order */}
+              {(orderedGsm != null || orderedWidth != null) && (
+                <div className="flex items-center gap-4 bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-2.5">
+                  <span className="text-xs font-bold text-indigo-600 uppercase tracking-wide shrink-0">مواصفة العميل المطلوبة</span>
+                  <div className="flex items-center gap-4 mr-2">
+                    {orderedGsm != null && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-indigo-500">الوزن:</span>
+                        <span className="text-sm font-bold text-indigo-800 font-mono">{orderedGsm} <span className="text-xs font-normal">g/m²</span></span>
+                      </div>
+                    )}
+                    {orderedGsm != null && orderedWidth != null && <span className="w-px h-4 bg-indigo-200" />}
+                    {orderedWidth != null && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-indigo-500">العرض:</span>
+                        <span className="text-sm font-bold text-indigo-800 font-mono">{orderedWidth} <span className="text-xs font-normal">cm</span></span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-3 gap-3">
                 {([
                   { key: 'raw',      label: 'خام',  sub: 'Raw',      cls: 'border-slate-200  bg-slate-50   text-slate-700'  },
@@ -750,9 +856,10 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
               </button>
             </div>
           </Section>
+          </>}
 
-          {/* 5 · Needle Arrangement */}
-          <Section id="needles" title="ترتيب الإبر" subtitle="النقطة = إبرة — اختر نوع الماكينة وعدد التراكات"
+          {/* 5 · Needle Arrangement — Knitting Structure tab only */}
+          {activeSection === 'knitting' && <Section id="needles" title="ترتيب الإبر" subtitle="النقطة = إبرة — اختر نوع الماكينة وعدد التراكات"
             icon={<Sparkles size={16} className="text-sky-600" />} accent="bg-sky-50">
             <div className="pt-4 space-y-4">
 
@@ -790,9 +897,9 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                 const ColNums = () => (
                   <div className="flex items-center gap-3">
                     <span className="w-20 shrink-0" />
-                    <div className="flex gap-1 flex-wrap">
+                    <div className="flex gap-1">
                       {Array.from({ length: data.needleColumns }).map((_, i) => (
-                        <div key={i} className="w-7 text-center text-[10px] font-mono text-slate-400 leading-none">{i + 1}</div>
+                        <div key={i} className="w-7 shrink-0 text-center text-[10px] font-mono text-slate-400 leading-none">{i + 1}</div>
                       ))}
                     </div>
                   </div>
@@ -804,8 +911,8 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
 
                 const TrackRow = ({ track }: { track: string }) => (
                   <div className="flex items-center gap-3">
-                    <span className="text-xs font-semibold text-slate-500 w-20 text-right shrink-0">{NEEDLE_TRACK_LABELS[track]}</span>
-                    <div className="flex gap-1 flex-wrap">
+                    <span className="text-xs font-semibold text-slate-500 w-20 shrink-0 text-right">{NEEDLE_TRACK_LABELS[track]}</span>
+                    <div className="flex gap-1">
                       {Array.from({ length: data.needleColumns }).map((_, i) => (
                         <NeedleCell key={i}
                           active={(data.needleTracks[track] || [])[i] === true}
@@ -837,8 +944,12 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                             onInc={() => update('needleDialTracks', Math.min(4, data.needleDialTracks + 1))}
                             onDec={() => update('needleDialTracks', Math.max(2, data.needleDialTracks - 1))} />
                         </div>
-                        <ColNums />
-                        {dialKeys.map(t => <TrackRow key={t} track={t} />)}
+                        <div className="overflow-x-auto pb-1">
+                          <div className="space-y-1.5" style={{ minWidth: 'max-content' }}>
+                            <ColNums />
+                            {dialKeys.map(t => <TrackRow key={t} track={t} />)}
+                          </div>
+                        </div>
                       </div>
                     )}
 
@@ -850,8 +961,12 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                           onInc={() => update('needleCylTracks', Math.min(4, data.needleCylTracks + 1))}
                           onDec={() => update('needleCylTracks', Math.max(2, data.needleCylTracks - 1))} />
                       </div>
-                      <ColNums />
-                      {cylKeys.map(t => <TrackRow key={t} track={t} />)}
+                      <div className="overflow-x-auto pb-1">
+                        <div className="space-y-1.5" style={{ minWidth: 'max-content' }}>
+                          <ColNums />
+                          {cylKeys.map(t => <TrackRow key={t} track={t} />)}
+                        </div>
+                      </div>
                     </div>
                   </>
                 );
@@ -861,10 +976,10 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                 💡 انقر على الخلية لتفعيل أو إلغاء الإبرة
               </p>
             </div>
-          </Section>
+          </Section>}
 
-          {/* 6 · Cam Arrangement */}
-          <Section id="cams" title="ترتيب الكامات" subtitle="انقر لتغيير الغرزة — اختر نوع الماكينة وعدد التراكات"
+          {/* 6 · Cam Arrangement — Knitting Structure tab only */}
+          {activeSection === 'knitting' && <Section id="cams" title="ترتيب الكامات" subtitle="انقر لتغيير الغرزة — اختر نوع الماكينة وعدد التراكات"
             icon={<Cpu size={16} className="text-orange-500" />} accent="bg-orange-50">
             <div className="pt-4 space-y-4">
 
@@ -899,9 +1014,9 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                 const CamColNums = () => (
                   <div className="flex items-center gap-3">
                     <span className="w-20 shrink-0" />
-                    <div className="flex gap-1 flex-wrap">
+                    <div className="flex gap-1">
                       {Array.from({ length: data.camColumns }).map((_, i) => (
-                        <div key={i} className="w-7 text-center text-[10px] font-mono text-slate-400 leading-none">{i + 1}</div>
+                        <div key={i} className="w-7 shrink-0 text-center text-[10px] font-mono text-slate-400 leading-none">{i + 1}</div>
                       ))}
                     </div>
                   </div>
@@ -909,8 +1024,8 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
 
                 const CamRow = ({ track }: { track: string }) => (
                   <div className="flex items-center gap-3">
-                    <span className="text-xs font-semibold text-slate-500 w-20 text-right shrink-0">{NEEDLE_TRACK_LABELS[track]}</span>
-                    <div className="flex gap-1 flex-wrap">
+                    <span className="text-xs font-semibold text-slate-500 w-20 shrink-0 text-right">{NEEDLE_TRACK_LABELS[track]}</span>
+                    <div className="flex gap-1">
                       {Array.from({ length: data.camColumns }).map((_, i) => (
                         <CamCell key={i}
                           value={(data.camTracks[track]?.[i] as CamStitch) || 'knit'}
@@ -941,8 +1056,12 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                             onInc={() => update('camDialTracks', Math.min(4, data.camDialTracks + 1))}
                             onDec={() => update('camDialTracks', Math.max(2, data.camDialTracks - 1))} />
                         </div>
-                        <CamColNums />
-                        {dialKeys.map(t => <CamRow key={t} track={t} />)}
+                        <div className="overflow-x-auto pb-1">
+                          <div className="space-y-1.5" style={{ minWidth: 'max-content' }}>
+                            <CamColNums />
+                            {dialKeys.map(t => <CamRow key={t} track={t} />)}
+                          </div>
+                        </div>
                       </div>
                     )}
 
@@ -953,16 +1072,21 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                           onInc={() => update('camCylTracks', Math.min(4, data.camCylTracks + 1))}
                           onDec={() => update('camCylTracks', Math.max(2, data.camCylTracks - 1))} />
                       </div>
-                      <CamColNums />
-                      {cylKeys.map(t => <CamRow key={t} track={t} />)}
+                      <div className="overflow-x-auto pb-1">
+                        <div className="space-y-1.5" style={{ minWidth: 'max-content' }}>
+                          <CamColNums />
+                          {cylKeys.map(t => <CamRow key={t} track={t} />)}
+                        </div>
+                      </div>
                     </div>
                   </>
                 );
               })()}
 
             </div>
-          </Section>
+          </Section>}
 
+          {activeSection === 'cert' && <>
           {/* 7 · Dyehouse */}
           <Section id="dyehouse" title="بيانات المصبغة" subtitle="خطوات العينة في المصبغة"
             icon={<Droplets size={16} className="text-indigo-500" />} accent="bg-indigo-50">
@@ -993,24 +1117,6 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                 const setT = (patch: Partial<TathbeetData>) =>
                   update('tathbeet', { ...t, ...patch });
 
-                const MeasFields = ({ prefix, label }: { prefix: 'before' | 'after'; label: string }) => (
-                  <div className="bg-white rounded-xl border border-teal-100 p-4 space-y-3">
-                    <p className="text-xs font-bold text-teal-700 uppercase tracking-wide">{label}</p>
-                    <div className="grid grid-cols-2 gap-3">
-                      <Field label="العرض" sublabel="cm">
-                        <Input type="number" unit="cm" placeholder="0"
-                          value={(t as any)[`${prefix}Width`]}
-                          onChange={e => setT({ [`${prefix}Width`]: e.target.value } as any)} />
-                      </Field>
-                      <Field label="الجرام" sublabel="g/m²">
-                        <Input type="number" unit="g" placeholder="0"
-                          value={(t as any)[`${prefix}Gsm`]}
-                          onChange={e => setT({ [`${prefix}Gsm`]: e.target.value } as any)} />
-                      </Field>
-                    </div>
-                  </div>
-                );
-
                 return (
                   <div className="bg-teal-50 border border-teal-200 rounded-xl p-4 space-y-4">
                     <div className="flex items-center gap-2 mb-1">
@@ -1040,10 +1146,10 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                     {/* Measurement fields — conditional on timing */}
                     <div className="space-y-3">
                       {(t.timing === 'before' || t.timing === 'both') && (
-                        <MeasFields prefix="before" label="قبل الصباغة" />
+                        <TathbeetMeasFields prefix="before" label="قبل الصباغة" tathbeet={t} onChange={setT} />
                       )}
                       {(t.timing === 'after' || t.timing === 'both') && (
-                        <MeasFields prefix="after" label="بعد الصباغة" />
+                        <TathbeetMeasFields prefix="after" label="بعد الصباغة" tathbeet={t} onChange={setT} />
                       )}
                     </div>
                   </div>
@@ -1072,6 +1178,8 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
           </Section>
 
           <div className="h-8" />
+          </>}
+
         </div>
       </div>
     </div>

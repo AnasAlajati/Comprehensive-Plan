@@ -1158,13 +1158,6 @@ const App: React.FC = () => {
                            <div className={`p-2 rounded-md ${viewMode === 'sample-tracking' ? 'bg-violet-100 text-violet-600' : 'bg-slate-100 text-slate-500'}`}><Beaker size={20} /></div>
                            <div className="font-semibold text-sm">Sample Tracking</div>
                         </button>
-                        <button
-                          onClick={() => { setViewMode('sample-archive'); setIsMenuOpen(false); }}
-                          className={`flex items-center gap-3 p-3 rounded-lg text-left transition-all ${viewMode === 'sample-archive' ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' : 'hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-transparent hover:border-slate-100'}`}
-                        >
-                           <div className={`p-2 rounded-md ${viewMode === 'sample-archive' ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}><Archive size={20} /></div>
-                           <div className="font-semibold text-sm">Sample Certificates · أرشيف الشهادات</div>
-                        </button>
                         
                      </div>
                    </div>
@@ -1261,9 +1254,6 @@ const App: React.FC = () => {
               <FabricReportsPage userRole={userRole} />
             )}
 
-            {viewMode === 'sample-archive' && (
-              <SampleArchivePage userRole={userRole} />
-            )}
 
             {viewMode === 'fabrics' && (
               <FabricsPage userRole={userRole} />
@@ -1278,10 +1268,11 @@ const App: React.FC = () => {
             )}
 
             {viewMode === 'recent-prints' && (
-              <RecentPrintsPage 
+              <RecentPrintsPage
                 machines={machines}
                 selectedDate={selectedDate}
-                onNavigateToOrder={handleNavigateToOrder} 
+                onNavigateToOrder={handleNavigateToOrder}
+                userRole={userRole}
               />
             )}
 
@@ -1295,7 +1286,9 @@ const App: React.FC = () => {
         />
       )}
 
-      <GlobalFabricButton machines={machines} />
+      {(['admin', 'schedule_editor', 'daily_planner'] as string[]).includes(userRole) && (
+        <GlobalFabricButton machines={machines} />
+      )}
     </div>
   );
 };
