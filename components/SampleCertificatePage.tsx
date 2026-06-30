@@ -294,7 +294,8 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
   const fabricRef  = useRef<any>(null);
 
   const canEditCert     = ['admin', 'machine_technician'].includes(userRole ?? '');
-  const canEditKnitting = ['admin', 'factory_manager'].includes(userRole ?? '');
+  const canViewKnitting = ['admin', 'factory_manager'].includes(userRole ?? '');
+  const canEditKnitting = canViewKnitting;
   const imgInput   = useRef<HTMLInputElement>(null);
 
   // ── Load Firestore data + auto-fill yarn ──
@@ -869,8 +870,8 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
           </Section>
           </div>}
 
-          {/* 5 · Needle Arrangement — Knitting Structure tab only */}
-          <div className={!canEditKnitting ? 'pointer-events-none select-none opacity-60' : ''}>
+          {/* 5 & 6 · Needle + Cam — Knitting Structure tab only, hidden from non-knitting roles */}
+          {canViewKnitting && <div className={!canEditKnitting ? 'pointer-events-none select-none opacity-60' : ''}>
           {activeSection === 'knitting' && <Section id="needles" title="ترتيب الإبر" subtitle="النقطة = إبرة — اختر نوع الماكينة وعدد التراكات"
             icon={<Sparkles size={16} className="text-sky-600" />} accent="bg-sky-50">
             <div className="pt-4 space-y-4">
@@ -1097,7 +1098,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
 
             </div>
           </Section>}
-          </div>
+          </div>}
 
           {activeSection === 'cert' && <div className={!canEditCert ? 'pointer-events-none select-none opacity-60' : ''}>
           {/* 7 · Dyehouse */}
