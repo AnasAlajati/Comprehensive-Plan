@@ -27,6 +27,7 @@ import { FabricDetailsModal } from './FabricDetailsModal';
 import { FabricDyehouseModal } from './FabricDyehouseModal';
 import { ColorApprovalModal } from './ColorApprovalModal';
 import { DyehouseTrackingModal } from './DyehouseTrackingModal';
+import { DyehouseFabricImportModal } from './DyehouseFabricImportModal';
 import { CustomerDeliveryModal } from './CustomerDeliveryModal';
 import { StandaloneFabricEditor } from './FabricEditor';
 import { CreatePlanModal } from './CreatePlanModal';
@@ -1148,6 +1149,7 @@ const MemoizedOrderRow = React.memo(({
   const [isGroupingMode, setIsGroupingMode] = React.useState(false);
   const [selectedForGroup, setSelectedForGroup] = React.useState<number[]>([]);
   const [newGroupNote, setNewGroupNote] = React.useState('');
+  const [showDyehouseImport, setShowDyehouseImport] = React.useState(false);
   const [editingGroupId, setEditingGroupId] = React.useState<string | null>(null);
   const [editGroupNote, setEditGroupNote] = React.useState('');
   const [showMachineDetails, setShowMachineDetails] = useState<{ capacity: number; batches: any[] } | null>(null);
@@ -4463,7 +4465,7 @@ const MemoizedOrderRow = React.memo(({
                         );
                       } else {
                         accessories.forEach((acc, accIdx) => {
-                          const remaining = (Number(acc.sent) || 0) - (Number(acc.received) || 0);
+                          const remaining = Math.round(((Number(acc.sent) || 0) - (Number(acc.received) || 0)) * 100) / 100;
                           
                           // Helper to update accessory data
                           const updateAcc = (updates: Partial<typeof acc>) => {
@@ -4652,7 +4654,7 @@ const MemoizedOrderRow = React.memo(({
                               {visibleColumns['remaining'] !== false && (
                                 <td className="p-0 border-r border-slate-100 text-center">
                                     <span className={`font-mono text-[10px] ${remaining > 0 ? 'text-amber-500 font-bold' : 'text-slate-300'}`}>
-                                        {remaining > 0 ? remaining : '-'}
+                                        {remaining > 0 ? remaining.toFixed(2) : '-'}
                                     </span>
                                 </td>
                               )}
@@ -4737,7 +4739,19 @@ const MemoizedOrderRow = React.memo(({
                           <Plus className="w-3 h-3" />
                           اضافة لون
                         </button>
-                        
+
+                        {/* Import from Excel - only for orders with no colors yet */}
+                        {canEditColors && (row.dyeingPlan || []).length === 0 && (
+                          <button
+                            onClick={() => setShowDyehouseImport(true)}
+                            className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 px-2 py-1 rounded hover:bg-emerald-50 transition-colors border border-emerald-200"
+                            title="استيراد ألوان المصبغة من ملف Excel"
+                          >
+                            <FileSpreadsheet className="w-3 h-3" />
+                            استيراد من اكسل
+                          </button>
+                        )}
+
                         {/* Add Group Button */}
                         {(row.dyeingPlan || []).length >= 2 && canEditColors && (
                           !isGroupingMode ? (
@@ -5027,6 +5041,16 @@ const MemoizedOrderRow = React.memo(({
         </div>
       </div>,
       document.body
+    )}
+
+    {showDyehouseImport && (
+      <DyehouseFabricImportModal
+        isOpen={showDyehouseImport}
+        onClose={() => setShowDyehouseImport(false)}
+        order={row}
+        dyehouses={dyehouses as Dyehouse[]}
+        onImport={(batches) => handleUpdateOrder(row.id, { dyeingPlan: [...(row.dyeingPlan || []), ...batches] })}
+      />
     )}
     </>
   );

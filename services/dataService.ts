@@ -94,6 +94,25 @@ export const DataService = {
     return docRef.id;
   },
 
+  // Dyehouse name aliases: maps a raw name found in imported Excel files
+  // (e.g. "اتش دي") to a system dyehouse id/name. Learned once, reused forever.
+  async getDyehouseAliases(): Promise<{ id: string; rawName: string; dyehouseId: string; dyehouseName: string }[]> {
+    const snapshot = await getDocs(collection(db, 'dyehouseAliases'));
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as { id: string; rawName: string; dyehouseId: string; dyehouseName: string }));
+  },
+
+  async saveDyehouseAlias(rawName: string, dyehouseId: string, dyehouseName: string): Promise<void> {
+    const key = rawName.trim();
+    if (!key) return;
+    // Upsert keyed off the raw name so re-importing the same string just updates the mapping
+    const existing = await getDocs(query(collection(db, 'dyehouseAliases'), where('rawName', '==', key)));
+    if (!existing.empty) {
+      await setDoc(existing.docs[0].ref, { rawName: key, dyehouseId, dyehouseName, updatedAt: Timestamp.now() }, { merge: true });
+    } else {
+      await addDoc(collection(db, 'dyehouseAliases'), { rawName: key, dyehouseId, dyehouseName, createdAt: Timestamp.now() });
+    }
+  },
+
   /**
    * CENTRALIZED Fabric upsert function - use this everywhere!
    * Handles both create and update with consistent logic
