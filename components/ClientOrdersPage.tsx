@@ -1,4 +1,5 @@
 ﻿import React, { useState, useEffect, useRef, useMemo } from 'react';
+import ReactDOM from 'react-dom';
 import * as XLSX from 'xlsx-js-style';
 import { createPortal } from 'react-dom';
 import { toJpeg } from 'html-to-image';
@@ -1036,6 +1037,107 @@ const formatDateShort = (dateStr: string) => {
   return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 };
 
+// --- Color name dropdown with palette lookup ---
+const ColorNameDropdown: React.FC<{
+  value: string;
+  colorHex: string;
+  isLocked: boolean;
+  colorPalette: { id: string; name: string; hex: string }[];
+  onChange: (name: string, hex?: string) => void;
+  onSaveColor: (name: string, hex: string) => void;
+}> = ({ value, colorHex, isLocked, colorPalette, onChange, onSaveColor }) => {
+  const [open, setOpen] = React.useState(false);
+  const [search, setSearch] = React.useState('');
+  const ref = React.useRef<HTMLDivElement>(null);
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node) &&
+          dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const filtered = colorPalette.filter(c =>
+    !search || c.name.toLowerCase().includes(search.toLowerCase())
+  );
+  const paletteMatch = colorPalette.find(c => c.name.toLowerCase() === value?.toLowerCase());
+  const hexChanged = paletteMatch && colorHex && paletteMatch.hex.toLowerCase() !== colorHex.toLowerCase();
+  const isNew = value?.trim() && !paletteMatch && colorHex && colorHex !== '#ffffff';
+
+  const [dropPos, setDropPos] = React.useState<{ top: number; left: number }>({ top: 0, left: 0 });
+
+  const openDropdown = () => {
+    if (isLocked) return;
+    if (ref.current) {
+      const r = ref.current.getBoundingClientRect();
+      setDropPos({ top: r.bottom + window.scrollY, left: r.left + window.scrollX });
+    }
+    setSearch(value || '');
+    setOpen(true);
+  };
+
+  return (
+    <div ref={ref} className="relative flex-1 min-w-0">
+      <input
+        type="text"
+        dir="rtl"
+        className={`w-full px-3 py-2 bg-transparent outline-none text-right ${isLocked ? 'cursor-not-allowed text-slate-500' : 'focus:bg-blue-50'}`}
+        value={open ? search : (value || '')}
+        readOnly={isLocked}
+        placeholder="اللون..."
+        onFocus={openDropdown}
+        onChange={(e) => {
+          if (isLocked) return;
+          setSearch(e.target.value);
+          onChange(e.target.value);
+        }}
+      />
+      {/* Save / update palette button */}
+      {!isLocked && (isNew || hexChanged) && (
+        <button
+          onMouseDown={(e) => { e.preventDefault(); onSaveColor(value || '', colorHex); }}
+          className="absolute left-1 top-1/2 -translate-y-1/2 text-[9px] font-bold px-1.5 py-0.5 rounded bg-teal-50 text-teal-600 border border-teal-200 hover:bg-teal-100 transition-colors whitespace-nowrap"
+          title={isNew ? 'حفظ اللون في القائمة' : 'تحديث اللون في القائمة'}
+        >
+          {isNew ? '+ حفظ' : '↑ تحديث'}
+        </button>
+      )}
+      {/* Portal dropdown */}
+      {open && !isLocked && typeof document !== 'undefined' && ReactDOM.createPortal(
+        <div
+          ref={dropdownRef}
+          className="absolute z-[9999] min-w-[180px] bg-white border border-slate-200 shadow-xl rounded-md max-h-52 overflow-y-auto"
+          style={{ top: dropPos.top, left: dropPos.left }}
+        >
+          {filtered.length > 0 ? filtered.map(c => (
+            <div key={c.id}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onChange(c.name, c.hex);
+                setOpen(false);
+              }}
+              className="flex items-center gap-2 px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm border-b border-slate-50 last:border-b-0"
+            >
+              <span className="w-4 h-4 rounded-full shrink-0 border border-slate-200" style={{ background: c.hex }} />
+              <span className="text-right flex-1">{c.name}</span>
+            </div>
+          )) : (
+            <div className="px-3 py-2 text-xs text-slate-400 text-right">
+              {value ? `"${value}" — لون جديد` : 'لا توجد ألوان محفوظة'}
+            </div>
+          )}
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+};
+
 // --- Optimized Row Component ---
 // (StatusLegend Removed)
 
@@ -1089,6 +1191,8 @@ const MemoizedOrderRow = React.memo(({
   allExternalLogs,
   transferAdjustment = 0,
   onOpenSampleCertificate,
+  colorPalette = [],
+  onSaveColorToPalette,
 }: {
   row: OrderRow;
   statusInfo: any;
@@ -1139,6 +1243,8 @@ const MemoizedOrderRow = React.memo(({
   allExternalLogs?: any[];
   transferAdjustment?: number;
   onOpenSampleCertificate?: (order: OrderRow, clientName: string) => void;
+  colorPalette?: { id: string; name: string; hex: string }[];
+  onSaveColorToPalette?: (name: string, hex: string) => Promise<void>;
 }) => {
   // Viewer role is read-only
   const isReadOnly = userRole === 'viewer';
@@ -3716,9 +3822,10 @@ const MemoizedOrderRow = React.memo(({
                                     )}
                                 </div>
                             )}
+                            {/* Hex picker — auto-updates from palette on name select */}
                             <div className="relative overflow-hidden w-5 h-5 ml-2 rounded-full border border-slate-200 shadow-sm cursor-pointer shrink-0 hover:scale-110 transition-transform">
-                                <input 
-                                    type="color" 
+                                <input
+                                    type="color"
                                     value={batch.colorHex || '#ffffff'}
                                     onChange={(e) => {
                                         if (isLocked) return;
@@ -3731,18 +3838,18 @@ const MemoizedOrderRow = React.memo(({
                                     title={isLocked ? 'مقفل - لا يمكن التعديل' : 'Select Color'}
                                 />
                             </div>
-                            <input
-                            type="text"
-                            className={`w-full px-3 py-2 bg-transparent outline-none text-right ${isLocked ? 'cursor-not-allowed text-slate-500' : 'focus:bg-blue-50'}`}
-                            value={batch.color}
-                            readOnly={isLocked}
-                            onChange={(e) => {
-                                if (isLocked) return;
+                            {/* Smart color name input with palette dropdown */}
+                            <ColorNameDropdown
+                              value={batch.color || ''}
+                              colorHex={batch.colorHex || ''}
+                              isLocked={isLocked}
+                              colorPalette={colorPalette}
+                              onChange={(name, hex) => {
                                 const newPlan = [...(row.dyeingPlan || [])];
-                                newPlan[idx] = { ...batch, color: e.target.value };
+                                newPlan[idx] = { ...batch, color: name, ...(hex ? { colorHex: hex } : {}) };
                                 handleUpdateOrder(row.id, { dyeingPlan: newPlan });
-                            }}
-                            placeholder="اللون..."
+                              }}
+                              onSaveColor={(name, hex) => onSaveColorToPalette?.(name, hex)}
                             />
                         </div>
                       </td>
@@ -5326,6 +5433,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 //   const [showDyehouseImport, setShowDyehouseImport] = useState(false);
   // const [showRemainingWork, setShowRemainingWork] = useState(false); // Removed
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
+  const [colorPalette, setColorPalette] = useState<{ id: string; name: string; hex: string }[]>([]);
   const [externalFactories, setExternalFactories] = useState<any[]>([]);
   const [externalScrapMap, setExternalScrapMap] = useState<Record<string, number>>({});
   const [rawExternalLogs, setRawExternalLogs] = useState<any[]>([]);
@@ -5645,6 +5753,11 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       setDyehouses(data as unknown as Dyehouse[]);
       setLoadingState(prev => ({ ...prev, dyehouses: true }));
     });
+
+    // Color Palette
+    getDocs(collection(db, 'colorPalette')).then(snap => {
+      setColorPalette(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+    }).catch(() => {});
 
     // Inventory
     const unsubInventory = onSnapshot(collection(db, 'yarn_inventory'), (snapshot) => {
@@ -7391,6 +7504,18 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       setDyehouses(await DataService.getDyehouses());
     } catch (err) {
       console.error("Failed to create dyehouse", err);
+    }
+  };
+
+  const handleSaveColorToPalette = async (name: string, hex: string) => {
+    if (!name.trim() || !hex) return;
+    const existing = colorPalette.find(c => c.name.trim().toLowerCase() === name.trim().toLowerCase());
+    if (existing) {
+      await updateDoc(doc(db, 'colorPalette', existing.id), { hex });
+      setColorPalette(prev => prev.map(c => c.id === existing.id ? { ...c, hex } : c));
+    } else {
+      const ref = await addDoc(collection(db, 'colorPalette'), { name: name.trim(), hex });
+      setColorPalette(prev => [...prev, { id: ref.id, name: name.trim(), hex }]);
     }
   };
 
@@ -9937,6 +10062,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                       return sum;
                                     }, 0)}
                                     onOpenSampleCertificate={(order, clientName) => setSampleCertModal({ order, clientName })}
+                                    colorPalette={colorPalette}
+                                    onSaveColorToPalette={handleSaveColorToPalette}
                                   />
                                 );
                               })
