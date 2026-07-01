@@ -1037,46 +1037,6 @@ const formatDateShort = (dateStr: string) => {
   return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 };
 
-// --- Compact date cell: shows "13 Jun", opens native date picker on click ---
-const CompactDateInput: React.FC<{
-  value: string;       // ISO yyyy-mm-dd
-  disabled?: boolean;
-  onChange: (iso: string) => void;
-}> = ({ value, disabled, onChange }) => {
-  const inputRef = React.useRef<HTMLInputElement>(null);
-
-  const label = React.useMemo(() => {
-    if (!value) return '—';
-    const d = new Date(value + 'T00:00:00');
-    if (isNaN(d.getTime())) return value;
-    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-  }, [value]);
-
-  return (
-    <div className="relative w-full h-full flex items-center justify-center">
-      {/* Invisible native date input — fills the cell so clicking anywhere opens picker */}
-      <input
-        ref={inputRef}
-        type="date"
-        disabled={disabled}
-        value={value || ''}
-        onChange={(e) => onChange(e.target.value)}
-        className="absolute inset-0 opacity-0 w-full h-full cursor-pointer disabled:cursor-not-allowed"
-        tabIndex={-1}
-      />
-      {/* Visible compact label */}
-      <span
-        onClick={() => !disabled && inputRef.current?.showPicker?.()}
-        className={`text-[11px] font-medium select-none z-10 pointer-events-none ${
-          value ? 'text-slate-700' : 'text-slate-300'
-        } ${disabled ? 'opacity-50' : ''}`}
-      >
-        {label}
-      </span>
-    </div>
-  );
-};
-
 // --- Color name dropdown with palette lookup ---
 const ColorNameDropdown: React.FC<{
   value: string;
@@ -3602,9 +3562,9 @@ const MemoizedOrderRow = React.memo(({
                     </th>
                     {visibleColumns['colorApproval'] !== false && <th className="px-3 py-2 text-right w-24">موافقة اللون</th>}
                     {visibleColumns['dispatchNumber'] !== false && <th className="px-3 py-2 text-right w-24">رقم الازن</th>}
-                    {visibleColumns['formationDate'] !== false && <th className="px-2 py-2 text-center w-20">تاريخ التشكيل</th>}
-                    {visibleColumns['daysAfterFormation'] !== false && <th className="px-2 py-2 text-center w-14 text-[9px] text-slate-400">ايام بعد التشكيل</th>}
-                    {visibleColumns['dateSent'] !== false && <th className="px-2 py-2 text-center w-20">تاريخ الارسال</th>}
+                    {visibleColumns['formationDate'] !== false && <th className="px-3 py-2 text-right w-32">تاريخ التشكيل</th>}
+                    {visibleColumns['daysAfterFormation'] !== false && <th className="px-3 py-2 text-center w-20 text-[9px] text-slate-400">ايام بعد التشكيل</th>}
+                    {visibleColumns['dateSent'] !== false && <th className="px-3 py-2 text-right w-32">تاريخ الارسال</th>}
                     {visibleColumns['daysAfterSent'] !== false && <th className="px-3 py-2 text-center w-20 text-[9px] text-slate-400">ايام بعد الارسال</th>}
                     {visibleColumns['dyehouse'] !== false && <th className="px-3 py-2 text-right w-32">المصبغة</th>}
                     {visibleColumns['quantity'] !== false && <th className="px-3 py-2 text-center w-20" title="Customer Demand">مطلوب</th>}
@@ -3940,14 +3900,19 @@ const MemoizedOrderRow = React.memo(({
                       )}
                       {visibleColumns['formationDate'] !== false && (
                       <td className="p-0 relative group/date">
-                        <CompactDateInput
-                          value={batch.formationDate || ''}
-                          disabled={!canEditColors}
-                          onChange={(iso) => {
-                            const newPlan = [...(row.dyeingPlan || [])];
-                            newPlan[idx] = { ...batch, formationDate: iso };
-                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
-                          }}
+                        <input
+                            type="date"
+                            disabled={!canEditColors}
+                            className={`w-full h-full px-2 py-2 bg-transparent outline-none text-center text-[10px] font-mono text-slate-700 ${
+                              canEditColors ? 'focus:bg-blue-50 cursor-pointer' : 'cursor-not-allowed opacity-60'
+                            }`}
+                            value={batch.formationDate || ''}
+                            onChange={(e) => {
+                                if (!canEditColors) return;
+                                const newPlan = [...(row.dyeingPlan || [])];
+                                newPlan[idx] = { ...batch, formationDate: e.target.value };
+                                handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                            }}
                         />
                       </td>
                       )}
@@ -3976,14 +3941,19 @@ const MemoizedOrderRow = React.memo(({
                       )}
                       {visibleColumns['dateSent'] !== false && (
                       <td className="p-0 relative group/date">
-                        <CompactDateInput
-                          value={batch.dateSent || ''}
-                          disabled={!canEditColors}
-                          onChange={(iso) => {
-                            const newPlan = [...(row.dyeingPlan || [])];
-                            newPlan[idx] = { ...batch, dateSent: iso };
-                            handleUpdateOrder(row.id, { dyeingPlan: newPlan });
-                          }}
+                        <input
+                            type="date"
+                            disabled={!canEditColors}
+                            className={`w-full h-full px-2 py-2 bg-transparent outline-none text-center text-[10px] font-mono text-slate-700 ${
+                              canEditColors ? 'focus:bg-blue-50 cursor-pointer' : 'cursor-not-allowed opacity-60'
+                            }`}
+                            value={batch.dateSent || ''}
+                            onChange={(e) => {
+                                if (!canEditColors) return;
+                                const newPlan = [...(row.dyeingPlan || [])];
+                                newPlan[idx] = { ...batch, dateSent: e.target.value };
+                                handleUpdateOrder(row.id, { dyeingPlan: newPlan });
+                            }}
                         />
                       </td>
                       )}
