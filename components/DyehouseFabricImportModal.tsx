@@ -170,12 +170,12 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
           dateSent: c.dateSent || undefined,
           formationDate: c.formationDate || undefined,
           quantitySentRaw: hasSent ? c.quantitySent : undefined,
-          quantitySentAccessory: hasSent && accessorySent > 0 ? accessorySent : undefined,
+          quantitySentAccessory: undefined,
           sentEvents: hasSent ? [{
             id: crypto.randomUUID(),
             date: sentDate,
             quantity: c.quantitySent || 0,
-            accessorySent: accessorySent || 0,
+            accessorySent: 0,
             notes: c.notes || '',
           }] : [],
           receiveEvents: hasReceived ? [{
