@@ -3631,27 +3631,27 @@ const MemoizedOrderRow = React.memo(({
                         
                         elements.push(
                           <tr key={`group-header-${currentGroupId}`}>
-                            <td colSpan={20} className="p-0 pt-3">
-                                <div className="flex items-center justify-between px-3 py-2 bg-slate-50 border-t border-b border-slate-200">
+                            <td colSpan={20} className="p-0 pt-4">
+                                <div className="flex items-center justify-between px-4 py-2.5 bg-indigo-600 border-l-0">
                                     <div className="flex items-center gap-3 flex-1">
-                                      <div className="flex items-center gap-2 w-full">
-                                        <div className="w-5 h-5 rounded-full bg-indigo-600 flex items-center justify-center text-[11px] font-bold text-white shrink-0">
+                                      <div className="flex items-center gap-2.5 w-full">
+                                        <div className="w-6 h-6 rounded-full bg-white/20 border border-white/40 flex items-center justify-center text-[11px] font-bold text-white shrink-0">
                                             {groupIndex}
                                         </div>
                                         
                                         {/* Editable Group Title */}
                                         {editingGroupId === currentGroupId ? (
                                            <div className="flex items-center gap-2 flex-1 max-w-md animate-in fade-in duration-200">
-                                               <input 
+                                               <input
                                                    type="text"
                                                    value={editGroupNote}
                                                    onChange={(e) => setEditGroupNote(e.target.value)}
-                                                   className="flex-1 w-full text-xs px-2 py-1 rounded border border-indigo-300 focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm"
+                                                   className="flex-1 w-full text-xs px-2 py-1 rounded border border-white/50 bg-white/20 text-white placeholder-white/60 focus:ring-2 focus:ring-white/50 outline-none"
                                                    placeholder="اسم المجموعة..."
                                                    autoFocus
                                                    onKeyDown={(e) => {
                                                        if (e.key === 'Enter') {
-                                                            const updatedGroups = colorGroups.map(g => 
+                                                            const updatedGroups = colorGroups.map(g =>
                                                               g.id === currentGroupId ? { ...g, note: editGroupNote, name: editGroupNote || g.name } : g
                                                             );
                                                             handleUpdateOrder(row.id, { colorGroups: updatedGroups });
@@ -3661,32 +3661,34 @@ const MemoizedOrderRow = React.memo(({
                                                        }
                                                    }}
                                                />
-                                               <button 
+                                               <button
                                                    onClick={() => {
-                                                        const updatedGroups = colorGroups.map(g => 
+                                                        const updatedGroups = colorGroups.map(g =>
                                                           g.id === currentGroupId ? { ...g, note: editGroupNote, name: editGroupNote || g.name } : g
                                                         );
                                                         handleUpdateOrder(row.id, { colorGroups: updatedGroups });
                                                         setEditingGroupId(null);
                                                    }}
-                                                   className="p-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 shadow-sm"
+                                                   className="p-1 bg-white/20 border border-white/40 text-white rounded hover:bg-white/30"
                                                >
                                                    <Check size={12} />
                                                </button>
-                                               <button 
+                                               <button
                                                    onClick={() => setEditingGroupId(null)}
-                                                   className="p-1 bg-white text-slate-500 border border-slate-200 rounded hover:bg-slate-50"
+                                                   className="p-1 bg-white/10 border border-white/30 text-white/80 rounded hover:bg-white/20"
                                                >
                                                    <X size={12} />
                                                </button>
                                            </div>
                                         ) : (
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-sm font-semibold text-slate-700">
-                                                    {group?.name || `Group ${groupIndex}`}
-                                                    {group?.note && group.note !== group?.name && <span className="text-xs font-normal text-slate-400 mx-1">· {group.note}</span>}
+                                            <div className="flex items-center gap-2.5">
+                                                <span className="text-sm font-bold text-white tracking-wide">
+                                                    {group?.name || `المجموعة ${groupIndex}`}
                                                 </span>
-                                                <span className="text-[10px] font-medium text-indigo-600 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded-full">{groupBatches.length} ألوان</span>
+                                                {group?.note && group.note !== group?.name && (
+                                                  <span className="text-xs font-normal text-white/70">· {group.note}</span>
+                                                )}
+                                                <span className="text-[10px] font-semibold text-indigo-700 bg-white px-2 py-0.5 rounded-full border border-white/50">{groupBatches.length} ألوان</span>
                                             </div>
                                         )}
                                       </div>
@@ -3694,7 +3696,6 @@ const MemoizedOrderRow = React.memo(({
                                     <div className="flex items-center gap-1">
                                       {editingGroupId !== currentGroupId && canEditColors && (
                                       <>
-                                        {/* Add color directly to this group */}
                                         <button
                                           onClick={() => {
                                             const newBatch = {
@@ -3711,7 +3712,7 @@ const MemoizedOrderRow = React.memo(({
                                               dyeingPlan: [...(row.dyeingPlan || []), newBatch]
                                             });
                                           }}
-                                          className="flex items-center gap-1 text-[11px] font-medium text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 px-2 py-1 rounded border border-emerald-200 transition-colors"
+                                          className="flex items-center gap-1 text-[11px] font-semibold text-white bg-white/20 hover:bg-white/30 border border-white/30 px-2.5 py-1 rounded transition-colors"
                                           title="اضافة لون للمجموعة"
                                         >
                                           <Plus size={11} />
@@ -3722,10 +3723,10 @@ const MemoizedOrderRow = React.memo(({
                                             setEditingGroupId(currentGroupId);
                                             setEditGroupNote(group?.note || group?.name || '');
                                           }}
-                                          className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-white rounded transition-colors"
+                                          className="p-1.5 text-white/80 hover:text-white hover:bg-white/20 rounded transition-colors"
                                           title="تعديل اسم المجموعة"
                                         >
-                                          <Edit2 size={12} />
+                                          <Edit2 size={13} />
                                         </button>
                                       </>
                                       )}
@@ -3733,17 +3734,17 @@ const MemoizedOrderRow = React.memo(({
                                       <button
                                         onClick={() => {
                                           if (confirm('هل تريد فك تجميع هذه الألوان؟')) {
-                                            const updatedPlan = (row.dyeingPlan || []).map(b => 
+                                            const updatedPlan = (row.dyeingPlan || []).map(b =>
                                               b.colorGroupId === currentGroupId ? { ...b, colorGroupId: undefined } : b
                                             );
                                             const updatedGroups = colorGroups.filter(g => g.id !== currentGroupId);
                                             handleUpdateOrder(row.id, { dyeingPlan: updatedPlan, colorGroups: updatedGroups });
                                           }
                                         }}
-                                        className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                                        className="p-1.5 text-white/60 hover:text-red-300 hover:bg-red-500/20 rounded transition-colors"
                                         title="فك التجميع"
                                       >
-                                        <Unlink size={12} />
+                                        <Unlink size={13} />
                                       </button>
                                       )}
                                     </div>
@@ -3753,13 +3754,6 @@ const MemoizedOrderRow = React.memo(({
                         );
                       }
                       
-                      // Check if this is the last item in a group (need to add separator after)
-                      const isLastInGroup = currentGroupId && (() => {
-                        const currentIdx = sortedBatches.findIndex(b => b.idx === originalIdx);
-                        const nextBatch = sortedBatches[currentIdx + 1];
-                        return !nextBatch || nextBatch.batch.colorGroupId !== currentGroupId;
-                      })();
-                      
                       lastGroupId = currentGroupId;
                       
                       const idx = originalIdx;
@@ -3768,17 +3762,22 @@ const MemoizedOrderRow = React.memo(({
                       // Lock color editing if user doesn't have permission
                       const isLocked = !canEditColors; 
                       
-                      // Using hover:shadow-md and hover:bg-slate-50 for clearer row focus
                       let rowBgClass = 'hover:bg-slate-50 hover:shadow-md hover:z-10 relative transition-all duration-200';
-                      let rowStyle = {};
-                      
+                      let rowStyle: React.CSSProperties = {};
+
                       if (currentGroupId) {
-                          rowBgClass = 'bg-slate-50/50 hover:bg-indigo-50/30 hover:shadow-md hover:z-10 relative transition-all duration-200';
+                          const isLastInGroupRow = (() => {
+                            const currentPos = sortedBatches.findIndex(b => b.idx === originalIdx);
+                            const next = sortedBatches[currentPos + 1];
+                            return !next || next.batch.colorGroupId !== currentGroupId;
+                          })();
+                          rowBgClass = 'bg-indigo-50/60 hover:bg-indigo-100/50 hover:z-10 relative transition-all duration-200';
                           rowStyle = {
-                              borderLeft: '4px solid #6366f1', // Indigo-500
+                              borderLeft: '4px solid #6366f1',
+                              borderBottom: isLastInGroupRow ? '2px solid #a5b4fc' : undefined,
                           };
                       }
-                    
+
                       elements.push(
                     <tr key={batch.id || idx} className={`group/batch ${rowBgClass}`} style={rowStyle}>
                       {/* Planned Info Tooltip for locked batches */}
@@ -4798,16 +4797,6 @@ const MemoizedOrderRow = React.memo(({
                         });
                       }
                       
-                      // Add clean separator line after the last item in a group
-                      if (isLastInGroup) {
-                        elements.push(
-                          <tr key={`group-separator-${currentGroupId}`}>
-                            <td colSpan={20} className="p-0 pb-2">
-                              <div className="h-px bg-slate-200 mx-3"></div>
-                            </td>
-                          </tr>
-                        );
-                      }
                     });
                     
                     return elements;
