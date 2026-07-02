@@ -169,7 +169,9 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
           dispatchNumber: c.dispatchNumber || undefined,
           dateSent: c.dateSent || undefined,
           formationDate: c.formationDate || undefined,
-          quantitySentRaw: hasSent ? c.quantitySent : undefined,
+          // Raw & accessory sent are recorded once, via sentEvents / the accessories
+          // array. Leaving these legacy fields set would double-count in the live row.
+          quantitySentRaw: undefined,
           quantitySentAccessory: undefined,
           sentEvents: hasSent ? [{
             id: crypto.randomUUID(),
