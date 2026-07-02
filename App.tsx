@@ -1216,7 +1216,7 @@ const App: React.FC = () => {
             )}
 
             {viewMode === 'dyehouse-directory' && (
-              <DyehouseDirectoryPage userRole={userRole} />
+              <DyehouseDirectoryPage userRole={userRole} userName={userName} />
             )}
 
             {viewMode === 'sample-tracking' && (
@@ -1262,7 +1262,7 @@ const App: React.FC = () => {
             )}
 
             {viewMode === 'fabric-reports' && (
-              <FabricReportsPage userRole={userRole} />
+              <FabricReportsPage userRole={userRole} userName={userName} />
             )}
 
 
@@ -1284,6 +1284,7 @@ const App: React.FC = () => {
                 selectedDate={selectedDate}
                 onNavigateToOrder={handleNavigateToOrder}
                 userRole={userRole}
+                userName={userName}
               />
             )}
 

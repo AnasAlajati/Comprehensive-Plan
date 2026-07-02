@@ -23,9 +23,10 @@ interface RecentPrintsPageProps {
   selectedDate?: string;
   onNavigateToOrder?: (order: any) => void;
   userRole?: string;
+  userName?: string;
 }
 
-export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [], selectedDate, onNavigateToOrder, userRole }) => {
+export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [], selectedDate, onNavigateToOrder, userRole, userName }) => {
   const [tickets, setTickets] = useState<ProductionTicket[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -163,6 +164,7 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
         cert={openReport.cert}
         onClose={() => setOpenReport(null)}
         userRole={userRole}
+        userName={userName}
       />
     );
   }

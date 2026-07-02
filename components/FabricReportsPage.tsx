@@ -53,13 +53,14 @@ function splitMaterial(material: string): { code: string; label: string } {
 // ─── Report Viewer (tabbed: certificate + production order) ───────────────────
 
 export function ReportViewer({
-  order, clientName, cert, onClose, userRole,
+  order, clientName, cert, onClose, userRole, userName,
 }: {
   order: OrderRow;
   clientName: string;
   cert: CertEntry;
   onClose: () => void;
   userRole?: string;
+  userName?: string;
 }) {
   const canSeeKnitting = ['admin', 'factory_manager'].includes(userRole ?? '');
   const [tab, setTab]           = useState<'cert' | 'production' | 'knitting'>('cert');
@@ -355,13 +356,14 @@ export function ReportViewer({
       headerSlot={TabBar}
       activeSection={tab === 'knitting' ? 'knitting' : 'cert'}
       userRole={userRole}
+      userName={userName}
     />
   );
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export function FabricReportsPage({ userRole }: { userRole: string }) {
+export function FabricReportsPage({ userRole, userName }: { userRole: string; userName?: string }) {
   const [groups,   setGroups]   = useState<FabricGroup[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [search,   setSearch]   = useState('');
@@ -476,6 +478,7 @@ export function FabricReportsPage({ userRole }: { userRole: string }) {
         cert={opening.cert}
         onClose={() => setOpening(null)}
         userRole={userRole}
+        userName={userName}
       />
     );
   }

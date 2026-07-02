@@ -38,9 +38,10 @@ import {
 
 interface DyehouseDirectoryPageProps {
   userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
+  userName?: string;
 }
 
-export const DyehouseDirectoryPage: React.FC<DyehouseDirectoryPageProps> = ({ userRole }) => {
+export const DyehouseDirectoryPage: React.FC<DyehouseDirectoryPageProps> = ({ userRole, userName }) => {
   // Allowed roles to edit: admin, dyehouse_colors_manager
   const canEdit = userRole && ['admin', 'dyehouse_colors_manager'].includes(userRole);
   
@@ -383,7 +384,7 @@ export const DyehouseDirectoryPage: React.FC<DyehouseDirectoryPageProps> = ({ us
         ) : viewMode === 'balance' ? (
           <DyehouseBalanceReport userRole={userRole} />
         ) : viewMode === 'active-work' ? (
-          <DyehouseActiveWorkPage userRole={userRole} />
+          <DyehouseActiveWorkPage userRole={userRole} userName={userName} />
         ) : viewMode === 'late-work' ? (
           <DyehouseLateWorkPage />
         ) : viewMode === 'daily-movement' ? (

@@ -3,6 +3,7 @@ import { collection, getDocs, collectionGroup, query, doc, updateDoc, onSnapshot
 import { db, auth } from '../services/firebase';
 import { parseFabricName } from '../services/data';
 import { OrderRow, FabricDefinition, DyeingBatch } from '../types';
+import { ReportViewer, CertEntry } from './FabricReportsPage';
 import { 
   Search, 
   RefreshCw,
@@ -33,6 +34,7 @@ import {
 
 interface DyehouseActiveWorkPageProps {
   userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
+  userName?: string;
 }
 
 // Status Configuration - Clean professional colors
@@ -90,6 +92,7 @@ interface ActiveWorkItem {
   accessoryType?: string;
   batch: DyeingBatch;
   partials?: PartialItem[];
+  certStatus?: 'none' | 'draft' | 'approved';   // sample-certificate state for this order
 }
 
 interface FabricGroup {
@@ -106,11 +109,30 @@ interface FabricGroup {
   plannedCapacity?: number;
 }
 
-export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ userRole }) => {
+export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ userRole, userName }) => {
   // Allowed roles to edit: admin, dyehouse_manager, dyehouse_colors_manager
   const canEdit = userRole && ['admin', 'dyehouse_manager', 'dyehouse_colors_manager'].includes(userRole);
-  
+
   const [items, setItems] = useState<ActiveWorkItem[]>([]);
+  const [upcomingItems, setUpcomingItems] = useState<ActiveWorkItem[]>([]);
+  // Report viewer target (opened from a card's "التقارير" button)
+  const [reportTarget, setReportTarget] = useState<{ order: OrderRow; clientName: string; cert: CertEntry } | null>(null);
+  const openReport = (item: ActiveWorkItem) => {
+    const stubOrder = { id: item.orderId, material: item.fabric, customerId: item.clientId } as OrderRow;
+    const cert: CertEntry = {
+      orderId: item.orderId, clientName: item.clientName, material: item.fabric,
+      sampleNumber: '', date: '', status: 'draft', lastSavedAt: '', finalizedAt: '', finalizedBy: '',
+      rawWeight: '', rawWidth: '', finishedWeight: '', finishedWidth: '',
+    };
+    setReportTarget({ order: stubOrder, clientName: item.clientName, cert });
+  };
+  // Report-existence badge (mirrors the Sample Archive: approved / draft / none)
+  const certBadge = (s?: 'none' | 'draft' | 'approved') =>
+    s === 'approved'
+      ? <span className="text-[10px] bg-emerald-50 text-emerald-600 border border-emerald-200 px-2 py-0.5 rounded font-semibold">تقرير معتمد</span>
+      : s === 'draft'
+        ? <span className="text-[10px] bg-amber-50 text-amber-600 border border-amber-200 px-2 py-0.5 rounded font-semibold">مسودة تقرير</span>
+        : <span className="text-[10px] bg-slate-100 text-slate-400 border border-slate-200 px-2 py-0.5 rounded font-semibold">لا يوجد تقرير</span>;
   const [allDyehouses, setAllDyehouses] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -171,16 +193,22 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
       });
 
       const allItems: ActiveWorkItem[] = [];
+      const upcoming: ActiveWorkItem[] = [];
 
       snapshot.docs.forEach(docSnap => {
         const order = { id: docSnap.id, ...docSnap.data() } as OrderRow;
         const clientId = order.customerId || 'unknown';
         const clientName = clientMap[clientId] || 'Unknown Client';
+        const cert = (order as any).sampleCertificate;
+        const certStatus: 'none' | 'draft' | 'approved' = !cert ? 'none' : (cert.isFinalized ? 'approved' : 'draft');
 
         if (order.dyeingPlan && Array.isArray(order.dyeingPlan)) {
           order.dyeingPlan.forEach((batch, idx) => {
-            if (batch.status !== 'sent') return;
-            
+            const isSent = batch.status === 'sent';
+            // Upcoming = routed to a dyehouse but not yet sent (and not already received)
+            const isUpcoming = !isSent && batch.status !== 'received' && !!batch.dyehouse;
+            if (!isSent && !isUpcoming) return;
+
             // Calculate sent quantities (same logic as ClientOrdersPage)
             const sentEvents = batch.sentEvents || [];
             const sentRaw = sentEvents.reduce((s, e) => s + (Number(e.quantity) || 0), 0) + (Number(batch.quantitySentRaw) || Number(batch.quantitySent) || 0);
@@ -196,7 +224,7 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
             const dyehouseName = batch.dyehouse || order.dyehouse || 'Unassigned';
             const machineName = batch.plannedCapacity ? `${batch.plannedCapacity}kg` : (batch.machine || order.dyehouseMachine || '');
             
-            allItems.push({
+            const workItem: ActiveWorkItem = {
               id: `${order.id}-${idx}`,
               orderId: order.id,
               batchIdx: idx,
@@ -234,13 +262,16 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
               notes: batch.notes,
               accessoryType: batch.accessoryType,
               batch: batch,
-              partials: batch.partials || []
-            });
+              partials: batch.partials || [],
+              certStatus,
+            };
+            if (isSent) allItems.push(workItem); else upcoming.push(workItem);
           });
         }
       });
 
       setItems(allItems);
+      setUpcomingItems(upcoming);
       setLoading(false);
     });
 
@@ -339,6 +370,28 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
       return true;
     });
   }, [items, selectedDyehouse, selectedClient, filterStatus, searchTerm]);
+
+  // Upcoming (routed to this dyehouse but not yet sent) — same client/dyehouse/search filter,
+  // but ignore the status filter since these have no dyehouse status yet.
+  const [showUpcoming, setShowUpcoming] = useState(true);
+  const filteredUpcoming = useMemo(() => {
+    return upcomingItems.filter(item => {
+      if (selectedClient) { if (item.clientId !== selectedClient) return false; }
+      else { if (!selectedDyehouse || item.dyehouse !== selectedDyehouse) return false; }
+      if (searchTerm) {
+        const s = searchTerm.toLowerCase();
+        if (!(item.clientName.toLowerCase().includes(s) || item.fabric.toLowerCase().includes(s) ||
+              item.color.toLowerCase().includes(s) || (item.orderReference || '').toLowerCase().includes(s))) return false;
+      }
+      return true;
+    });
+  }, [upcomingItems, selectedDyehouse, selectedClient, searchTerm]);
+  // One card per fabric order (colors grouped together)
+  const upcomingGroups = useMemo(() => {
+    const map = new Map<string, ActiveWorkItem[]>();
+    filteredUpcoming.forEach(it => { const a = map.get(it.orderId) || []; a.push(it); map.set(it.orderId, a); });
+    return Array.from(map.values());
+  }, [filteredUpcoming]);
 
   // Group items by fabric for multi-color display
   const fabricGroups = useMemo(() => {
@@ -1154,6 +1207,21 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
     );
   }
 
+  // Full-screen report viewer (opened from a card) — dyehouse roles only see
+  // Sample Certificate + Production Order (ReportViewer hides Knitting Structure).
+  if (reportTarget) {
+    return (
+      <ReportViewer
+        order={reportTarget.order}
+        clientName={reportTarget.clientName}
+        cert={reportTarget.cert}
+        onClose={() => setReportTarget(null)}
+        userRole={userRole ?? undefined}
+        userName={userName}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col h-full bg-slate-100 -m-6 min-h-[calc(100vh-200px)]">
       {/* Header */}
@@ -1316,6 +1384,61 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
 
           {/* Cards Grid */}
           <div className="flex-1 overflow-y-auto p-4">
+            {/* Upcoming — routed to this dyehouse but not yet sent */}
+            {upcomingGroups.length > 0 && (
+              <div className="mb-4 bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden">
+                <button onClick={() => setShowUpcoming(v => !v)}
+                  className="w-full flex items-center justify-between px-4 py-3 bg-amber-50/60 hover:bg-amber-50 transition-colors">
+                  <div className="flex items-center gap-2">
+                    <Clock size={15} className="text-amber-600" />
+                    <span className="font-bold text-amber-800 text-sm">قادم للمصبغة</span>
+                    <span className="text-[11px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold">{upcomingGroups.length}</span>
+                  </div>
+                  {showUpcoming ? <ChevronUp size={16} className="text-amber-500" /> : <ChevronDown size={16} className="text-amber-500" />}
+                </button>
+                {showUpcoming && (
+                  <div className="p-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                    {upcomingGroups.map(colors => {
+                      const head = colors[0];
+                      return (
+                        <div key={head.orderId} className="border border-slate-200 rounded-lg p-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="text-sm font-bold text-slate-800 flex items-center gap-1"><Layers size={13} className="text-indigo-500" />{head.fabricShortName || head.fabric}</div>
+                              <div className="text-xs text-slate-500 flex items-center gap-1 mt-0.5"><User size={11} />{head.clientName}</div>
+                            </div>
+                            {(() => {
+                              const has = (head.certStatus ?? 'none') !== 'none';
+                              return (
+                                <button onClick={() => openReport(head)}
+                                  className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors shrink-0 ${
+                                    has ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
+                                  }`}
+                                  title={has ? 'عرض شهادة العينة وأمر التشغيل' : 'لا يوجد تقرير لهذه الطلبية بعد'}>
+                                  <FlaskConical size={12} /> التقارير
+                                </button>
+                              );
+                            })()}
+                          </div>
+                          <div className="flex flex-wrap gap-1.5 mt-2">
+                            {colors.map(c => (
+                              <span key={c.id} className="inline-flex items-center gap-1 text-[11px] bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5">
+                                <span className="w-2.5 h-2.5 rounded-full border border-slate-300" style={{ background: c.colorHex || '#fff' }} />
+                                {c.color}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="mt-2 flex items-center gap-2">
+                            {certBadge(head.certStatus)}
+                            <span className="text-[10px] text-slate-400">{head.dyehouse}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
             {fabricGroups.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-slate-400">
                 <Package size={48} strokeWidth={1} />
@@ -1378,11 +1501,30 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
                             </div>
                           </div>
                           
-                          {group.orderReference && (
-                            <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">
-                              {group.orderReference}
-                            </span>
-                          )}
+                          <div className="flex items-center gap-2">
+                            {group.orderReference && (
+                              <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">
+                                {group.orderReference}
+                              </span>
+                            )}
+                            {/* Report-existence badge */}
+                            {certBadge(group.items[0]?.certStatus)}
+                            {/* Reports button — muted when no report exists yet */}
+                            {group.items[0] && (() => {
+                              const has = (group.items[0].certStatus ?? 'none') !== 'none';
+                              return (
+                                <button
+                                  onClick={() => openReport(group.items[0])}
+                                  className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors shadow-sm ${
+                                    has ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
+                                  }`}
+                                  title={has ? 'عرض شهادة العينة وأمر التشغيل' : 'لا يوجد تقرير لهذه الطلبية بعد'}
+                                >
+                                  <FlaskConical size={12} /> التقارير
+                                </button>
+                              );
+                            })()}
+                          </div>
                         </div>
 
                         {/* Totals Row */}
