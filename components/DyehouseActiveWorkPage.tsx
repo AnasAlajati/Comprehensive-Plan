@@ -373,7 +373,7 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
 
   // Upcoming (routed to this dyehouse but not yet sent) — same client/dyehouse/search filter,
   // but ignore the status filter since these have no dyehouse status yet.
-  const [showUpcoming, setShowUpcoming] = useState(true);
+  const [showUpcoming, setShowUpcoming] = useState(false);
   const filteredUpcoming = useMemo(() => {
     return upcomingItems.filter(item => {
       if (selectedClient) { if (item.clientId !== selectedClient) return false; }
@@ -804,6 +804,24 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
   const TimelineStatus = ({ item }: { item: ActiveWorkItem }) => {
     const activeIndex = getStatusIndex(item.dyehouseStatus);
     const historyMap = new Map((item.dyehouseHistory || []).map(h => [h.status, h]));
+    const [sheetOpen, setSheetOpen] = useState(false);
+    // Drives the enter transition: sheet mounts translated off-screen, then flips
+    // to its resting position a frame later so the browser actually animates it
+    // (this project's Tailwind v4 setup has no animate-in/slide-in plugin — those
+    // classes are inert here, so the transition has to be a real transform toggle).
+    const [sheetShown, setSheetShown] = useState(false);
+    useEffect(() => {
+      if (sheetOpen) {
+        const id = requestAnimationFrame(() => setSheetShown(true));
+        return () => cancelAnimationFrame(id);
+      }
+      setSheetShown(false);
+    }, [sheetOpen]);
+    const closeSheet = () => {
+      setSheetShown(false);
+      setTimeout(() => setSheetOpen(false), 200); // let the exit transition finish before unmounting
+    };
+    const currentStep = activeIndex >= 0 ? DYEHOUSE_STEPS[activeIndex] : null;
     
     // Get the most recent history entry for "last modified by" info
     const lastHistoryEntry = (item.dyehouseHistory || [])
@@ -819,8 +837,8 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
     
     return (
       <div className="py-4 px-3">
-        {/* Progress Line Background */}
-        <div className="relative">
+        {/* Desktop / tablet — full horizontal stepper */}
+        <div className="hidden sm:block relative">
           <div className="absolute top-6 left-8 right-8 h-0.5 bg-slate-200 rounded-full" />
           
           {/* Progress Line Active */}
@@ -900,7 +918,88 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
             })}
           </div>
         </div>
-        
+
+        {/* Phone — compact tappable status pill that opens a bottom-sheet picker.
+            Avoids 6 cramped 48px circles in ~340px and the hover-only "no permission"
+            feedback, which never fires on touch. */}
+        <div className="sm:hidden">
+          <button
+            onClick={() => canEdit && setSheetOpen(true)}
+            disabled={!canEdit}
+            className={`w-full flex items-center justify-between gap-2 px-3 py-3 rounded-xl border-2 transition-colors ${
+              !canEdit ? 'bg-slate-50 border-slate-200 opacity-60' : 'bg-white border-indigo-200 active:bg-indigo-50'
+            }`}
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div
+                className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-white"
+                style={{ background: currentStep?.color || '#94a3b8' }}
+              >
+                {currentStep ? <currentStep.icon size={18} strokeWidth={1.5} /> : <Box size={18} strokeWidth={1.5} />}
+              </div>
+              <div className="text-right min-w-0">
+                <div className="text-[10px] text-slate-400 font-semibold">حالة المصبغة</div>
+                <div className="text-sm font-bold text-slate-800 truncate">{currentStep?.label || 'لم يبدأ'}</div>
+              </div>
+            </div>
+            {canEdit && <ChevronDown size={18} className="text-slate-400 shrink-0" />}
+          </button>
+
+          {sheetOpen && (
+            <>
+              <div
+                className={`fixed inset-0 bg-black/40 z-[60] transition-opacity duration-200 ${sheetShown ? 'opacity-100' : 'opacity-0'}`}
+                onClick={closeSheet}
+              />
+              <div
+                className={`fixed bottom-0 left-0 right-0 z-[61] bg-white rounded-t-2xl shadow-2xl max-h-[75vh] overflow-y-auto transition-transform duration-200 ease-out ${
+                  sheetShown ? 'translate-y-0' : 'translate-y-full'
+                }`}
+              >
+                <div className="sticky top-0 bg-white flex items-center justify-between px-4 py-3 border-b border-slate-100">
+                  <span className="font-bold text-slate-800 text-sm">تغيير حالة المصبغة</span>
+                  <button onClick={closeSheet} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
+                    <X size={18} />
+                  </button>
+                </div>
+                <div className="p-2">
+                  {DYEHOUSE_STEPS.map(step => {
+                    const isActive = item.dyehouseStatus === step.id;
+                    const entry = historyMap.get(step.id);
+                    const Icon = step.icon;
+                    return (
+                      <button
+                        key={step.id}
+                        onClick={() => { openStatusDatePicker(item, step.id); closeSheet(); }}
+                        className={`w-full flex items-center gap-3 px-3 py-3.5 rounded-xl transition-colors ${
+                          isActive ? 'bg-indigo-50' : 'active:bg-slate-50'
+                        }`}
+                      >
+                        <div
+                          className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-white"
+                          style={{ background: step.color }}
+                        >
+                          <Icon size={18} strokeWidth={1.5} />
+                        </div>
+                        <div className="flex-1 text-right min-w-0">
+                          <div className={`text-sm font-bold ${isActive ? 'text-indigo-700' : 'text-slate-700'}`}>{step.label}</div>
+                          {entry && <div className="text-[10px] text-slate-400 font-mono mt-0.5">{formatDate(entry.date)}</div>}
+                        </div>
+                        {isActive && (
+                          <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center shrink-0">
+                            <Check size={14} strokeWidth={3} className="text-white" />
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="h-[env(safe-area-inset-bottom)]" />
+              </div>
+            </>
+          )}
+        </div>
+
         {/* Last Modified By Info */}
         {lastModifiedBy && (
           <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-center gap-2 text-[9px] text-slate-400">
