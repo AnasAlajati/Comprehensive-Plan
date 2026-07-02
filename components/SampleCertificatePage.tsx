@@ -24,6 +24,27 @@ interface TathbeetData {
 
 const EMPTY_TATHBEET: TathbeetData = { timing: 'after', beforeWidth: '', beforeGsm: '', afterWidth: '', afterGsm: '' };
 
+// The dyehouse's OWN version of بيانات المصبغة — a mirror of production's fields,
+// authored & editable by dyehouse roles, visible (read-only) to everyone else.
+interface DyehouseVersionData {
+  dyehouseSteps: Record<string, boolean>;
+  tathbeet: TathbeetData;
+  notes: string;
+  updatedBy: string;      // display name of the dyehouse user who last edited
+  updatedByRole: string;  // their role
+  updatedAt: string;      // ISO timestamp
+}
+const DYEHOUSE_VERSION_STEPS = {
+  'تثبيت': false, 'صباغة': false, 'انزيم': false, 'كسر بياض': false,
+  'عصارة': false, 'مجفف': false, 'رام': false, 'كسترة': false,
+  'كربون': false, 'كومبكتور': false, 'قص براسل وتصميغ': false,
+};
+const EMPTY_DYEHOUSE_VERSION: DyehouseVersionData = {
+  dyehouseSteps: { ...DYEHOUSE_VERSION_STEPS },
+  tathbeet: { ...EMPTY_TATHBEET },
+  notes: '', updatedBy: '', updatedByRole: '', updatedAt: '',
+};
+
 interface YarnRow {
   id: string;
   type: string;
@@ -47,6 +68,7 @@ interface SampleCertData {
   needleCount: string; feederCount: string; centralGauge: string;
   dialHeight: string; tensionerGauge: string; tara: string;
   cylinderGauge: string; dialGauge: string; stitchLength: string; visco: string;
+  viscoRows: ViscoRow[];
   yarns: YarnRow[];
   // Needle arrangement
   needleBedType: 'single' | 'double'; // single = cylinder only; double = dial + cylinder
@@ -63,6 +85,7 @@ interface SampleCertData {
   dyehouseSteps: Record<string, boolean>;
   tathbeet: TathbeetData;
   dyehouseNotes: string;
+  dyehouseVersion: DyehouseVersionData;
   // Archive / finalization
   storedClientName: string;
   storedMaterial: string;
@@ -70,6 +93,22 @@ interface SampleCertData {
   finalizedAt: string;
   finalizedBy: string;
 }
+
+// ويسكو readings — a small 2-column table (header + free value), 2–8 rows.
+interface ViscoRow { header: string; value: string; }
+const VISCO_HEADER_PRESETS = ['سيليندر', 'دايل', 'وش', 'ضهر'];
+const VISCO_MIN_ROWS = 2;
+const VISCO_MAX_ROWS = 8;
+const emptyViscoRow = (): ViscoRow => ({ header: '', value: '' });
+// Ensure loaded certs always have a valid rows array (migrating the old single `visco` string).
+const normalizeViscoRows = (rows?: ViscoRow[], legacy?: string): ViscoRow[] => {
+  let r = Array.isArray(rows)
+    ? rows.filter(x => x && typeof x === 'object').map(x => ({ header: String(x.header ?? ''), value: String(x.value ?? '') }))
+    : [];
+  if (r.length === 0) r = legacy ? [{ header: '', value: legacy }, emptyViscoRow()] : [emptyViscoRow(), emptyViscoRow()];
+  while (r.length < VISCO_MIN_ROWS) r.push(emptyViscoRow());
+  return r.slice(0, VISCO_MAX_ROWS);
+};
 
 const DEFAULT_NEEDLE_COLS = 12;
 const DEFAULT_CAM_COLS    = 8;
@@ -96,6 +135,7 @@ const EMPTY_CERT: SampleCertData = {
   machineName: '', machineType: '', gauge: '', gog: '', needleCount: '',
   feederCount: '', centralGauge: '', dialHeight: '', tensionerGauge: '', tara: '',
   cylinderGauge: '', dialGauge: '', stitchLength: '', visco: '',
+  viscoRows: [emptyViscoRow(), emptyViscoRow()],
   yarns: [],
   needleBedType:    'single',
   needleColumns:    DEFAULT_NEEDLE_COLS,
@@ -114,6 +154,7 @@ const EMPTY_CERT: SampleCertData = {
   },
   tathbeet:         { ...EMPTY_TATHBEET },
   dyehouseNotes:    '',
+  dyehouseVersion:  { ...EMPTY_DYEHOUSE_VERSION, dyehouseSteps: { ...DYEHOUSE_VERSION_STEPS }, tathbeet: { ...EMPTY_TATHBEET } },
   storedClientName: '',
   storedMaterial:   '',
   isFinalized:      false,
@@ -248,6 +289,56 @@ function Input({ unit, className = '', ...props }: React.InputHTMLAttributes<HTM
   );
 }
 
+// ─── ويسكو header select — CSS combobox (pick a preset OR type a new one).
+//     Module-level so it keeps focus across parent re-renders.
+function ViscoHeaderInput({ value, options, onChange }: {
+  value: string; options: string[]; onChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [term, setTerm] = useState('');
+  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+  const measure = () => { const r = ref.current?.getBoundingClientRect(); if (r) setRect({ top: r.bottom + 4, left: r.left, width: r.width }); };
+  const openNow = () => { measure(); setOpen(true); setTerm(''); };
+  const filtered = options.filter(o => o.toLowerCase().includes(term.trim().toLowerCase()));
+  const showCreate = !!term.trim() && !options.some(o => o.toLowerCase() === term.trim().toLowerCase());
+  const pick = (v: string) => { onChange(v); setTerm(''); setOpen(false); };
+  return (
+    <div className="relative" ref={ref}>
+      <input dir="rtl" value={open ? term : value} placeholder="اختر أو اكتب..." autoComplete="off"
+        onFocus={openNow}
+        onChange={e => { setTerm(e.target.value); if (!open) openNow(); }}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { e.preventDefault(); if (filtered.length) pick(filtered[0]); else if (term.trim()) pick(term.trim()); }
+          else if (e.key === 'Escape') setOpen(false);
+        }}
+        className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none text-sm text-slate-800 transition-all" />
+      {open && rect && (filtered.length > 0 || showCreate) && (
+        <div style={{ position: 'fixed', top: rect.top, left: rect.left, width: rect.width, zIndex: 9999 }}
+          className="bg-white border border-slate-200 shadow-xl rounded-lg max-h-52 overflow-y-auto">
+          {filtered.map(o => (
+            <div key={o} onMouseDown={e => { e.preventDefault(); pick(o); }}
+              className="px-3 py-2 hover:bg-indigo-50 cursor-pointer text-sm text-right border-b border-slate-50 last:border-b-0 text-slate-700">
+              {o}
+            </div>
+          ))}
+          {showCreate && (
+            <div onMouseDown={e => { e.preventDefault(); pick(term.trim()); }}
+              className="px-3 py-2 hover:bg-emerald-50 cursor-pointer text-sm text-emerald-600 font-medium text-right border-t border-slate-100">
+              + إضافة "{term.trim()}"
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Tathbeet measurement fields — must be module-level so React doesn't
 //     unmount/remount on every parent re-render (which kills input focus)
 function TathbeetMeasFields({ prefix, label, tathbeet, onChange }: {
@@ -277,12 +368,13 @@ function TathbeetMeasFields({ prefix, label, tathbeet, onChange }: {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-export function SampleCertificatePage({ order, clientName, onClose, headerSlot, machines: machinesProp, activeSection = 'cert', userRole }: {
+export function SampleCertificatePage({ order, clientName, onClose, headerSlot, machines: machinesProp, activeSection = 'cert', userRole, userName }: {
   order: OrderRow; clientName: string; onClose: () => void;
   headerSlot?: React.ReactNode;
   machines?: any[];
   activeSection?: 'cert' | 'knitting';
   userRole?: string;
+  userName?: string;
 }) {
   const [data, setData]      = useState<SampleCertData>({ ...EMPTY_CERT });
   const [saveStatus, setSave] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -295,6 +387,8 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
 
   const canEditCert     = ['admin', 'machine_technician'].includes(userRole ?? '');
   const canViewKnitting = ['admin', 'factory_manager'].includes(userRole ?? '');
+  // Dyehouse roles own the dyehouse VERSION block (everyone else sees it read-only)
+  const canEditDyehouseVersion = ['admin', 'dyehouse_manager', 'dyehouse_colors_manager'].includes(userRole ?? '');
   const canEditKnitting = canViewKnitting;
   const imgInput   = useRef<HTMLInputElement>(null);
 
@@ -403,8 +497,15 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
           // always keep identity fields current
           storedClientName: clientName,
           storedMaterial:   order.material,
+          viscoRows:        normalizeViscoRows(saved.viscoRows, saved.visco),
           dyehouseSteps:    { ...EMPTY_CERT.dyehouseSteps, ...(saved.dyehouseSteps || {}) },
           tathbeet:         { ...EMPTY_TATHBEET, ...(saved.tathbeet || {}) },
+          dyehouseVersion:  {
+            ...EMPTY_DYEHOUSE_VERSION,
+            ...(saved.dyehouseVersion || {}),
+            dyehouseSteps: { ...DYEHOUSE_VERSION_STEPS, ...(saved.dyehouseVersion?.dyehouseSteps || {}) },
+            tathbeet:      { ...EMPTY_TATHBEET, ...(saved.dyehouseVersion?.tathbeet || {}) },
+          },
           needleTracks:     { ...makeNeedleTracks(saved.needleColumns ?? DEFAULT_NEEDLE_COLS), ...(saved.needleTracks || {}) },
           camTracks:        { ...makeCamTracks(saved.camColumns ?? DEFAULT_CAM_COLS),          ...(saved.camTracks    || {}) },
           needleColumns:    saved.needleColumns    ?? DEFAULT_NEEDLE_COLS,
@@ -627,6 +728,30 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
     update('yarns', data.yarns.filter(y => y.id !== id));
   };
 
+  // ويسكو table rows (2–8)
+  const updateViscoRow = (idx: number, field: keyof ViscoRow, val: string) =>
+    update('viscoRows', data.viscoRows.map((r, i) => i === idx ? { ...r, [field]: val } : r));
+  const addViscoRow = () => {
+    if (data.viscoRows.length >= VISCO_MAX_ROWS) return;
+    update('viscoRows', [...data.viscoRows, emptyViscoRow()]);
+  };
+  const removeViscoRow = (idx: number) => {
+    if (data.viscoRows.length <= VISCO_MIN_ROWS) return;
+    update('viscoRows', data.viscoRows.filter((_, i) => i !== idx));
+  };
+  // Datalist options = presets ∪ any custom headers already typed in the table
+  const viscoHeaderOptions = Array.from(new Set([...VISCO_HEADER_PRESETS, ...data.viscoRows.map(r => r.header).filter(Boolean)]));
+
+  // Dyehouse VERSION updater — stamps who/when on every edit for attribution
+  const updateDyehouseVersion = (patch: Partial<DyehouseVersionData>) =>
+    update('dyehouseVersion', {
+      ...data.dyehouseVersion,
+      ...patch,
+      updatedBy:     userName || data.dyehouseVersion.updatedBy || '',
+      updatedByRole: userRole || data.dyehouseVersion.updatedByRole || '',
+      updatedAt:     new Date().toISOString(),
+    });
+
   const autoShrinkLen   = data.rawWeight && data.finishedWeight ? (((+data.rawWeight - +data.finishedWeight) / +data.rawWeight) * 100).toFixed(1) + '%' : '';
   const autoShrinkWidth = data.rawWidth  && data.finishedWidth  ? (((+data.rawWidth  - +data.finishedWidth)  / +data.rawWidth)  * 100).toFixed(1) + '%' : '';
 
@@ -807,11 +932,38 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
               </Field>
               <div className="pt-3 border-t border-slate-100">
                 <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">قراءات الماكينة</p>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                   <Field label="عيار سلندر"><Input value={data.cylinderGauge} onChange={e => update('cylinderGauge', e.target.value)} /></Field>
                   <Field label="عيار دايل"><Input value={data.dialGauge} onChange={e => update('dialGauge', e.target.value)} /></Field>
                   <Field label="طول غرزة"><Input value={data.stitchLength} onChange={e => update('stitchLength', e.target.value)} /></Field>
-                  <Field label="ويسكو"><Input value={data.visco} onChange={e => update('visco', e.target.value)} /></Field>
+                </div>
+
+                {/* ويسكو — small 2-column table (header + value), 2–8 rows */}
+                <div className="mt-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-semibold text-slate-600">ويسكو</label>
+                    <button type="button" onClick={addViscoRow} disabled={data.viscoRows.length >= VISCO_MAX_ROWS}
+                      className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg text-indigo-600 hover:bg-indigo-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                      <Plus size={13} /> إضافة صف
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-[1fr_1fr_32px] gap-2 px-1 text-[11px] font-semibold text-slate-400">
+                      <span>العنوان</span><span>القيمة</span><span></span>
+                    </div>
+                    {data.viscoRows.map((r, idx) => (
+                      <div key={idx} className="grid grid-cols-[1fr_1fr_32px] gap-2 items-center">
+                        <ViscoHeaderInput value={r.header} options={viscoHeaderOptions}
+                          onChange={v => updateViscoRow(idx, 'header', v)} />
+                        <Input value={r.value} onChange={e => updateViscoRow(idx, 'value', e.target.value)} />
+                        <button type="button" onClick={() => removeViscoRow(idx)} disabled={data.viscoRows.length <= VISCO_MIN_ROWS}
+                          title="حذف الصف"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -1193,6 +1345,96 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
 
           <div className="h-8" />
           </div>}
+
+          {/* 7b · Dyehouse VERSION — the dyehouse's own copy of بيانات المصبغة.
+                 Editable by dyehouse roles + admin; read-only (but visible) to everyone else. */}
+          {activeSection === 'cert' && (
+          <div className="mt-4">
+          <Section id="dyehouse-version" title="بيانات المصبغة — نسخة المصبغة" subtitle="يعبّئها فريق المصبغة"
+            icon={<Droplets size={16} className="text-purple-500" />} accent="bg-purple-50">
+            <div className="pt-4 space-y-4">
+              {/* Owner badge + hover attribution */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-100 text-purple-700 border border-purple-200">المصبغة</span>
+                {data.dyehouseVersion.updatedBy ? (
+                  <span className="text-[11px] text-slate-400 cursor-help border-b border-dotted border-slate-300"
+                    title={`أدخلها: ${data.dyehouseVersion.updatedBy}${data.dyehouseVersion.updatedAt ? ' · ' + new Date(data.dyehouseVersion.updatedAt).toLocaleString('ar-EG') : ''}`}>
+                    آخر تعديل بواسطة المصبغة
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-slate-300">لم تُعبّأ بعد</span>
+                )}
+                {!canEditDyehouseVersion && <span className="text-[11px] text-slate-400">(عرض فقط)</span>}
+              </div>
+
+              <div className={canEditDyehouseVersion ? 'space-y-4' : 'pointer-events-none space-y-4'}>
+                {/* Step toggle pills */}
+                <div className="flex flex-wrap gap-2">
+                  {Object.keys(data.dyehouseVersion.dyehouseSteps).map(step => {
+                    const on = data.dyehouseVersion.dyehouseSteps[step];
+                    return (
+                      <button key={step}
+                        onClick={() => updateDyehouseVersion({ dyehouseSteps: { ...data.dyehouseVersion.dyehouseSteps, [step]: !on } })}
+                        className={`px-4 py-2 rounded-full text-sm font-medium border-2 transition-all ${on
+                          ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
+                          : 'bg-white text-slate-500 border-slate-200 hover:border-purple-300 hover:text-purple-600'}`}>
+                        {on && '✓ '}{step}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* تثبيت detail panel */}
+                {data.dyehouseVersion.dyehouseSteps['تثبيت'] && (() => {
+                  const t = data.dyehouseVersion.tathbeet;
+                  const setT = (patch: Partial<TathbeetData>) => updateDyehouseVersion({ tathbeet: { ...t, ...patch } });
+                  return (
+                    <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 space-y-4">
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className="w-2 h-2 rounded-full bg-purple-500" />
+                        <p className="text-sm font-bold text-purple-800">تفاصيل التثبيت</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold text-purple-700 mb-2">توقيت التثبيت:</p>
+                        <div className="flex gap-2">
+                          {([
+                            { v: 'before', label: 'قبل الصباغة' },
+                            { v: 'after',  label: 'بعد الصباغة'  },
+                            { v: 'both',   label: 'قبل وبعد'     },
+                          ] as { v: TathbeetData['timing']; label: string }[]).map(opt => (
+                            <button key={opt.v} onClick={() => setT({ timing: opt.v })}
+                              className={`flex-1 py-2 rounded-lg text-xs font-bold border-2 transition-all ${t.timing === opt.v
+                                ? 'bg-purple-600 text-white border-purple-600'
+                                : 'bg-white text-slate-500 border-slate-200 hover:border-purple-300 hover:text-purple-700'}`}>
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="space-y-3">
+                        {(t.timing === 'before' || t.timing === 'both') && (
+                          <TathbeetMeasFields prefix="before" label="قبل الصباغة" tathbeet={t} onChange={setT} />
+                        )}
+                        {(t.timing === 'after' || t.timing === 'both') && (
+                          <TathbeetMeasFields prefix="after" label="بعد الصباغة" tathbeet={t} onChange={setT} />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Notes */}
+                <div className="pt-2 border-t border-slate-100">
+                  <p className="text-xs font-semibold text-slate-600 mb-2">ملاحظات المصبغة</p>
+                  <textarea rows={3} dir="rtl" placeholder="كيف سيتم الصباغة والتجهيز..."
+                    value={data.dyehouseVersion.notes} onChange={e => updateDyehouseVersion({ notes: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none text-sm text-slate-800 resize-none transition-all" />
+                </div>
+              </div>
+            </div>
+          </Section>
+          </div>
+          )}
 
         </div>
       </div>
