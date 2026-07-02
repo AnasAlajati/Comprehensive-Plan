@@ -1637,7 +1637,7 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
                             <div className="text-[10px] text-emerald-500 uppercase tracking-wide">مستلم</div>
                           </div>
                           <div className="flex-1 text-center">
-                            <div className="text-lg font-bold text-amber-600">{group.totalRemaining}</div>
+                            <div className="text-lg font-bold text-amber-600">{group.totalRemaining.toFixed(2)}</div>
                             <div className="text-[10px] text-amber-500 uppercase tracking-wide">متبقي</div>
                           </div>
                         </div>
@@ -1648,7 +1648,7 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
                         {group.items.map((item, colorIdx) => {
                           const daysSent = calculateDays(item.dateSent);
                           const daysFormation = calculateDays(item.formationDate);
-                          const remaining = item.quantitySent - item.totalReceived;
+                          const remaining = Math.round((item.quantitySent - item.totalReceived) * 100) / 100;
                           const delayAlert = getDelayAlert(item);
                           
                           return (
@@ -1696,7 +1696,7 @@ export const DyehouseActiveWorkPage: React.FC<DyehouseActiveWorkPageProps> = ({ 
                                   <span className="text-slate-600 font-medium">{item.quantitySent}</span>
                                   <span className="text-emerald-600 font-medium">{item.totalReceived}</span>
                                   <span className={`font-bold ${remaining > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                                    {remaining > 0 ? `-${remaining}` : '✓'}
+                                    {remaining > 0 ? `-${remaining.toFixed(2)}` : '✓'}
                                   </span>
                                 </div>
                               </div>
