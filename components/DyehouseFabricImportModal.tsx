@@ -1,11 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   X, Upload, FileSpreadsheet, AlertTriangle, Check, Loader2,
-  ChevronUp, ChevronDown, Trash2, Link2
+  ChevronUp, ChevronDown, Trash2, Link2, ClipboardPaste
 } from 'lucide-react';
 import { OrderRow, DyeingBatch, Dyehouse } from '../types';
 import { DataService } from '../services/dataService';
-import { parseDyehouseWorkbook, ParsedColor, ParsedAccessory } from '../utils/dyehouseExcelParser';
+import { parseDyehouseWorkbook, parseDyehousePaste, parseDyehouseRows, MAPPABLE_FIELDS, ParsedColor, ParsedAccessory, ParseResult } from '../utils/dyehouseExcelParser';
 
 interface Props {
   isOpen: boolean;
@@ -29,6 +29,17 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
   const [mapping, setMapping] = useState<Record<string, string>>({}); // rawName -> dyehouseId
   const [remember, setRemember] = useState<Record<string, boolean>>({}); // rawName -> save alias?
   const [parseError, setParseError] = useState('');
+  // Retained for manual column mapping (re-parse without re-reading the source)
+  const [rows, setRows] = useState<any[][] | null>(null);
+  const [colorGrid, setColorGrid] = useState<string[][] | undefined>(undefined);
+  const [overrides, setOverrides] = useState<Record<string, number>>({});
+  const [headerMap, setHeaderMap] = useState<Record<string, number>>({});
+  const [headerRow, setHeaderRow] = useState<string[]>([]);
+  // Fields that had no auto-detected column, captured once at the initial parse
+  // (like distinctDyehouses) so resolving one doesn't make it vanish from the
+  // list — it just turns green, same as the dyehouse-alias linking above it.
+  const [neededFields, setNeededFields] = useState<string[]>([]);
+  const aliasesRef = useRef<{ rawName: string; dyehouseId: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -41,44 +52,96 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
       setMapping({});
       setRemember({});
       setParseError('');
+      setRows(null);
+      setColorGrid(undefined);
+      setOverrides({});
+      setHeaderMap({});
+      setHeaderRow([]);
+      setNeededFields([]);
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
   const dyehouseById = (id: string) => dyehouses.find(d => d.id === id);
+  const fieldLabel = (f: string) => MAPPABLE_FIELDS.find(x => x.field === f)?.label || f;
+
+  // Resolve dyehouse aliases for the raw names in a parse result, using the
+  // already-fetched alias list (aliasesRef) so re-parsing stays synchronous.
+  const resolveDyehouseMapping = (distinct: string[]) => {
+    const aliasMap: Record<string, string> = {};
+    const rememberMap: Record<string, boolean> = {};
+    distinct.forEach(raw => {
+      const a = aliasesRef.current.find(x => x.rawName.trim() === raw.trim());
+      if (a) aliasMap[raw] = a.dyehouseId;
+      else { const d = dyehouses.find(d => d.name.trim() === raw.trim()); if (d) aliasMap[raw] = d.id; }
+      rememberMap[raw] = true;
+    });
+    setMapping(aliasMap);
+    setRemember(rememberMap);
+  };
+
+  // Push a parse result into the review state (colors, columns, dyehouse mapping).
+  // Does NOT touch neededFields — that list is frozen at the initial parse (see applyResult)
+  // so a field stays visible (just turns green) once the user links it, instead of disappearing.
+  const commitResult = (result: ParseResult) => {
+    setColors(result.colors);
+    setWarnings(result.warnings);
+    setDistinctDyehouses(result.distinctDyehouses);
+    setHeaderMap(result.headerMap);
+    setHeaderRow(result.headerRow);
+    resolveDyehouseMapping(result.distinctDyehouses);
+  };
+
+  // Shared: take a ParseResult (from file OR paste), resolve dyehouse aliases,
+  // and move to the review step. Both entry points funnel through here.
+  const applyResult = async (result: ParseResult, emptyMsg: string): Promise<boolean> => {
+    if (result.colors.length === 0) {
+      setParseError(result.warnings[0] || emptyMsg);
+      return false;
+    }
+    aliasesRef.current = await DataService.getDyehouseAliases().catch(() => []);
+    setRows(result.rows || null);
+    setColorGrid(result.colorGrid);
+    setOverrides({});
+    setNeededFields(MAPPABLE_FIELDS.filter(f => !(f.field in result.headerMap)).map(f => f.field));
+    commitResult(result);
+    setStep('review');
+    return true;
+  };
+
+  // Manually map an unrecognized column to a field (or clear a mapping) → re-parse.
+  const setColumnMapping = (field: string, colIndex: number) => {
+    if (!rows) return;
+    const next = { ...overrides };
+    if (colIndex < 0) delete next[field]; else next[field] = colIndex;
+    setOverrides(next);
+    commitResult(parseDyehouseRows(rows, colorGrid, next));
+  };
 
   const handleFile = async (file: File) => {
     setParseError('');
     try {
       const buf = await file.arrayBuffer();
-      const result = parseDyehouseWorkbook(buf);
-      if (result.colors.length === 0) {
-        setParseError(result.warnings[0] || 'لم يتم العثور على أي ألوان في الملف.');
-        return;
-      }
-      // Pre-resolve dyehouse aliases
-      const aliases = await DataService.getDyehouseAliases().catch(() => []);
-      const aliasMap: Record<string, string> = {};
-      result.distinctDyehouses.forEach(raw => {
-        const a = aliases.find(x => x.rawName.trim() === raw.trim());
-        if (a) { aliasMap[raw] = a.dyehouseId; return; }
-        // try a direct name match against system dyehouses
-        const direct = dyehouses.find(d => d.name.trim() === raw.trim());
-        if (direct) aliasMap[raw] = direct.id;
-      });
-      const rememberMap: Record<string, boolean> = {};
-      result.distinctDyehouses.forEach(raw => { rememberMap[raw] = true; });
-
-      setColors(result.colors);
-      setWarnings(result.warnings);
-      setDistinctDyehouses(result.distinctDyehouses);
-      setMapping(aliasMap);
-      setRemember(rememberMap);
-      setStep('review');
+      await applyResult(parseDyehouseWorkbook(buf), 'لم يتم العثور على أي ألوان في الملف.');
     } catch (err: any) {
       console.error('Parse error', err);
       setParseError('تعذّر قراءة الملف. تأكد أنه ملف Excel صالح (.xlsx).');
+    }
+  };
+
+  // Paste-from-Excel: read the clipboard's HTML (structure + colours) and text.
+  const handlePaste = async (e: React.ClipboardEvent) => {
+    setParseError('');
+    const html = e.clipboardData.getData('text/html');
+    const text = e.clipboardData.getData('text/plain');
+    if (!html && !text) return;
+    e.preventDefault();
+    try {
+      await applyResult(parseDyehousePaste(html, text), 'لم يتم العثور على أي ألوان في الخلايا الملصقة.');
+    } catch (err) {
+      console.error('Paste parse error', err);
+      setParseError('تعذّر قراءة الخلايا الملصقة. تأكد من نسخها من إكسل مع صف العناوين.');
     }
   };
 
@@ -135,6 +198,9 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
 
   // ---- validation ----
   const unmappedDyehouses = distinctDyehouses.filter(raw => !mapping[raw]);
+  const unresolvedFields = neededFields.filter(f => !(f in headerMap));
+  // Missing dates/notes/etc. don't block import (unlike the dyehouse, which is
+  // required to route the batch) — they're just informational until linked.
   const canImport = unmappedDyehouses.length === 0 && colors.length > 0;
 
   const handleImport = async () => {
@@ -221,7 +287,7 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
             <div className="p-2 bg-emerald-100 text-emerald-700 rounded-lg"><FileSpreadsheet size={22} /></div>
             <div>
               <h2 className="text-lg font-bold text-slate-800">استيراد بيانات المصبغة من إكسل</h2>
-              <p className="text-xs text-slate-500">{order.material || 'طلبية'} — سيتم إضافة الألوان لهذه الطلبية</p>
+              <p className="text-xs text-slate-500">{order.material || 'طلبية'} — رفع ملف أو لصق الخلايا مباشرة</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500"><X size={20} /></button>
@@ -231,23 +297,48 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
         <div className="flex-1 overflow-auto p-4">
           {step === 'upload' && (
             <div className="h-full flex flex-col items-center justify-center">
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) handleFile(f); }}
-                className="w-full max-w-lg border-2 border-dashed border-slate-300 rounded-xl p-10 text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50/40 transition-colors"
-              >
-                <Upload className="w-10 h-10 mx-auto text-slate-400 mb-3" />
-                <p className="font-semibold text-slate-700">اسحب ملف Excel هنا أو اضغط للاختيار</p>
-                <p className="text-xs text-slate-500 mt-1">صيغة .xlsx — صف الألوان يتبعه صف الاكسسوار (مثل "15% ريبس شتوي")</p>
-              </div>
-              <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
-              {parseError && (
-                <div className="mt-4 flex items-center gap-2 text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">
-                  <AlertTriangle size={16} /> {parseError}
+              <div className="w-full max-w-lg space-y-4">
+                {/* Option 1 — upload a file */}
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) handleFile(f); }}
+                  className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50/40 transition-colors"
+                >
+                  <Upload className="w-9 h-9 mx-auto text-slate-400 mb-2" />
+                  <p className="font-semibold text-slate-700">اسحب ملف Excel هنا أو اضغط للاختيار</p>
+                  <p className="text-xs text-slate-500 mt-1">صيغة .xlsx — صف الألوان يتبعه صف الاكسسوار (مثل "15% ريبس شتوي")</p>
                 </div>
-              )}
+                <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+
+                {/* Divider */}
+                <div className="flex items-center gap-3 text-xs text-slate-400">
+                  <div className="h-px bg-slate-200 flex-1" /> أو <div className="h-px bg-slate-200 flex-1" />
+                </div>
+
+                {/* Option 2 — paste cells */}
+                <div className="border-2 border-dashed border-indigo-200 rounded-xl p-4 bg-indigo-50/30">
+                  <div className="flex items-center gap-2 mb-2 text-indigo-700">
+                    <ClipboardPaste size={18} />
+                    <p className="font-semibold text-sm">الصق الخلايا مباشرة من إكسل</p>
+                  </div>
+                  <textarea
+                    onPaste={handlePaste}
+                    value=""
+                    onChange={() => {}}
+                    placeholder="انقر هنا ثم الصق (Ctrl + V) الخلايا المنسوخة — انسخ صف العناوين مع البيانات، وتُلتقط ألوان الخلايا تلقائياً."
+                    className="w-full h-20 rounded-lg border border-indigo-200 bg-white p-3 text-sm text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 resize-none placeholder:text-slate-400"
+                    dir="rtl"
+                  />
+                </div>
+
+                {parseError && (
+                  <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">
+                    <AlertTriangle size={16} /> {parseError}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -262,37 +353,81 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
                     <AlertTriangle size={12} /> {unmappedDyehouses.length} مصبغة بحاجة لربط
                   </span>
                 )}
+                {unresolvedFields.length > 0 && (
+                  <span className="px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-700 font-medium flex items-center gap-1">
+                    <Link2 size={12} /> {unresolvedFields.length} عمود بحاجة لربط
+                  </span>
+                )}
               </div>
 
-              {/* Dyehouse alias mapping */}
-              {distinctDyehouses.length > 0 && (
-                <div className="border border-slate-200 rounded-lg p-3 bg-slate-50/60">
-                  <div className="flex items-center gap-2 mb-2 text-sm font-semibold text-slate-700">
-                    <Link2 size={15} /> ربط أسماء المصابغ
-                  </div>
-                  <div className="space-y-2">
-                    {distinctDyehouses.map(raw => (
-                      <div key={raw} className="flex flex-wrap items-center gap-2 text-sm">
-                        <span className={`px-2 py-1 rounded font-medium ${mapping[raw] ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                          {raw}
-                        </span>
-                        <span className="text-slate-400">←</span>
-                        <select
-                          value={mapping[raw] || ''}
-                          onChange={(e) => setMapping(m => ({ ...m, [raw]: e.target.value }))}
-                          className="border border-slate-300 rounded px-2 py-1 text-sm bg-white min-w-[160px]"
-                        >
-                          <option value="">— اختر المصبغة —</option>
-                          {dyehouses.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                        </select>
-                        <label className="flex items-center gap-1 text-xs text-slate-500 cursor-pointer">
-                          <input type="checkbox" checked={remember[raw] ?? true}
-                            onChange={(e) => setRemember(r => ({ ...r, [raw]: e.target.checked }))} />
-                          تذكّر هذا الربط
-                        </label>
+              {/* Matching & linking — dyehouse names and any field the parser couldn't
+                  auto-place, side by side so both are handled together up front. */}
+              {(distinctDyehouses.length > 0 || neededFields.length > 0) && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                  {/* Dyehouse alias mapping */}
+                  {distinctDyehouses.length > 0 && (
+                    <div className="border border-slate-200 rounded-lg p-3 bg-slate-50/60">
+                      <div className="flex items-center gap-2 mb-2 text-sm font-semibold text-slate-700">
+                        <Link2 size={15} /> ربط أسماء المصابغ
                       </div>
-                    ))}
-                  </div>
+                      <div className="space-y-2">
+                        {distinctDyehouses.map(raw => (
+                          <div key={raw} className="flex flex-wrap items-center gap-2 text-sm">
+                            <span className={`px-2 py-1 rounded font-medium ${mapping[raw] ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                              {raw}
+                            </span>
+                            <span className="text-slate-400">←</span>
+                            <select
+                              value={mapping[raw] || ''}
+                              onChange={(e) => setMapping(m => ({ ...m, [raw]: e.target.value }))}
+                              className="border border-slate-300 rounded px-2 py-1 text-sm bg-white min-w-[160px]"
+                            >
+                              <option value="">— اختر المصبغة —</option>
+                              {dyehouses.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                            </select>
+                            <label className="flex items-center gap-1 text-xs text-slate-500 cursor-pointer">
+                              <input type="checkbox" checked={remember[raw] ?? true}
+                                onChange={(e) => setRemember(r => ({ ...r, [raw]: e.target.checked }))} />
+                              تذكّر هذا الربط
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Column linking — fields the parser found no matching header for.
+                      Point each one at the correct pasted/uploaded column so its data isn't lost. */}
+                  {neededFields.length > 0 && (
+                    <div className="border border-indigo-200 rounded-lg p-3 bg-indigo-50/40">
+                      <div className="flex items-center gap-2 mb-2 text-sm font-semibold text-indigo-700">
+                        <Link2 size={15} /> ربط الأعمدة غير المتطابقة
+                      </div>
+                      <p className="text-xs text-slate-500 mb-2">لم يتم العثور على هذه البيانات تلقائياً — حدّد العمود الصحيح من الخلايا التي أدخلتها:</p>
+                      <div className="space-y-2">
+                        {neededFields.map(field => {
+                          const resolvedIdx = headerMap[field];
+                          const isResolved = resolvedIdx !== undefined;
+                          return (
+                            <div key={field} className="flex flex-wrap items-center gap-2 text-sm">
+                              <span className={`px-2 py-1 rounded font-medium ${isResolved ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                                {fieldLabel(field)}
+                              </span>
+                              <span className="text-slate-400">←</span>
+                              <select
+                                value={resolvedIdx ?? ''}
+                                onChange={(e) => setColumnMapping(field, e.target.value === '' ? -1 : Number(e.target.value))}
+                                className="border border-slate-300 rounded px-2 py-1 text-sm bg-white min-w-[180px]"
+                              >
+                                <option value="">— اختر العمود —</option>
+                                {headerRow.map((text, idx) => text.trim() ? <option key={idx} value={idx}>{text}</option> : null)}
+                              </select>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

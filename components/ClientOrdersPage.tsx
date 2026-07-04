@@ -3537,7 +3537,7 @@ const MemoizedOrderRow = React.memo(({
                 </colgroup>
                 <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                   <tr>
-                    <th className="px-3 py-2 text-right min-w-[120px] relative">
+                    <th className="px-3 py-2 text-right min-w-[120px] relative sticky right-0 z-20 bg-slate-50 sm:static sm:z-auto">
                       <div className="flex items-center gap-2">
                         <span>اللون</span>
                         {/* Column Visibility Toggle */}
@@ -3851,7 +3851,9 @@ const MemoizedOrderRow = React.memo(({
                       elements.push(
                     <tr key={batch.id || idx} className={`group/batch ${rowBgClass}`} style={rowStyle}>
                       {/* Planned Info Tooltip for locked batches */}
-                      <td className="p-0 relative">
+                      {/* Sticky on phone so the color stays visible while scrolling horizontally
+                          through the rest of the columns (mirrors the Fabric-name column). */}
+                      <td className={`p-0 relative sticky right-0 z-10 sm:static sm:z-auto ${currentGroupId ? 'bg-indigo-50' : 'bg-white'}`}>
                         <div className="flex items-center h-full pl-2">
                             {/* Checkbox for grouping */}
                             {isGroupingMode && canEditColors && (

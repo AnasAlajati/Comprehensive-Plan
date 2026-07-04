@@ -44,10 +44,32 @@ export interface ParsedColor {
 export interface ParseResult {
   colors: ParsedColor[];
   sheetName: string;
-  headerMap: Record<string, number>; // field -> column index (for debugging)
-  distinctDyehouses: string[];        // distinct raw dyehouse strings found
+  headerMap: Record<string, number>;               // field -> column index (auto + manual)
+  headerRow: string[];                              // raw header cells as text
+  unmatchedColumns: { index: number; text: string }[]; // header columns not mapped to any field
+  distinctDyehouses: string[];                      // distinct raw dyehouse strings found
   warnings: string[];
+  // Retained so the modal can re-parse when the user manually maps a column,
+  // without re-reading the file / clipboard.
+  rows?: any[][];
+  colorGrid?: string[][];
 }
+
+// Fields the user is allowed to map manually (with friendly Arabic labels).
+// 'remaining' is derived and 'color' is essential (already required to parse),
+// so they're intentionally omitted from the manual-mapping picker.
+export const MAPPABLE_FIELDS: { field: string; label: string }[] = [
+  { field: 'quantity',          label: 'الكمية المطلوبة' },
+  { field: 'colorApproval',     label: 'موافقة اللون' },
+  { field: 'dyehouseColorName', label: 'اسم اللون بالمصبغة' },
+  { field: 'rawDyehouse',       label: 'المصبغة' },
+  { field: 'dispatchNumber',    label: 'رقم الاذن' },
+  { field: 'dateSent',          label: 'تاريخ الإرسال' },
+  { field: 'quantitySent',      label: 'الكمية المرسلة (مرسل)' },
+  { field: 'formationDate',     label: 'تاريخ التشكيل' },
+  { field: 'received',          label: 'المستلم (اجمالي الجاهز)' },
+  { field: 'notes',             label: 'ملاحظات' },
+];
 
 // Field detection order matters: more specific headers are claimed first so a
 // generic alias (e.g. "اللون") doesn't steal a specific column ("موافقة اللون").
@@ -168,18 +190,34 @@ function findHeaderRow(rows: any[][]): number {
   return best;
 }
 
-export function parseDyehouseWorkbook(data: ArrayBuffer | Uint8Array | string): ParseResult {
-  const workbook = XLSX.read(data, { type: typeof data === 'string' ? 'binary' : 'array', cellStyles: true });
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' }) as any[][];
-
+/**
+ * The shared parsing core. Works on a plain 2D array of cell values, so it is
+ * completely agnostic to the source (xlsx file OR pasted clipboard cells).
+ * `colorGrid[r][c]` optionally supplies each cell's background fill (#RRGGBB).
+ * `overrides` are manual field->column assignments (from the "link columns" UI)
+ * that win over auto-detection, so no column is ever silently dropped.
+ */
+export function parseDyehouseRows(
+  rows: any[][],
+  colorGrid?: string[][],
+  overrides?: Record<string, number>,
+  sheetName = 'مُلصق',
+): ParseResult {
   const warnings: string[] = [];
   const headerIdx = findHeaderRow(rows);
   if (headerIdx === -1) {
-    return { colors: [], sheetName, headerMap: {}, distinctDyehouses: [], warnings: ['لم يتم العثور على صف العناوين في الملف.'] };
+    return { colors: [], sheetName, headerMap: {}, headerRow: [], unmatchedColumns: [], distinctDyehouses: [], warnings: ['لم يتم العثور على صف العناوين (تأكد من نسخ صف العناوين: اللون، الكميه، ...).'] };
   }
   const headerMap = buildHeaderMap(rows[headerIdx]);
+  // Apply manual overrides: a chosen column is freed from any auto-match, then
+  // assigned to the requested field (or removed when index < 0).
+  if (overrides) {
+    for (const [field, idx] of Object.entries(overrides)) {
+      if (idx === undefined || idx === null || idx < 0) { delete headerMap[field]; continue; }
+      for (const f of Object.keys(headerMap)) if (headerMap[f] === idx) delete headerMap[f];
+      headerMap[field] = idx;
+    }
+  }
   const col = (f: string) => (headerMap[f] !== undefined ? headerMap[f] : -1);
   const cell = (row: any[], f: string) => { const i = col(f); return i === -1 ? '' : row[i]; };
 
@@ -217,10 +255,11 @@ export function parseDyehouseWorkbook(data: ArrayBuffer | Uint8Array | string): 
 
     // New color row
     const notes = cleanStr(cell(row, 'notes'));
+    const colorCol = col('color');
     current = {
       id: crypto.randomUUID(),
       color: nameRaw,
-      colorHex: cellFillHex(sheet, r, col('color')),
+      colorHex: (colorGrid && colorCol !== -1) ? (colorGrid[r]?.[colorCol] || '') : '',
       quantity: ordered,
       colorApproval: cleanStr(cell(row, 'colorApproval')),
       dyehouseColorName: cleanStr(cell(row, 'dyehouseColorName')),
@@ -242,5 +281,117 @@ export function parseDyehouseWorkbook(data: ArrayBuffer | Uint8Array | string): 
     new Set(colors.map(c => c.rawDyehouse).filter(Boolean))
   );
 
-  return { colors, sheetName, headerMap, distinctDyehouses, warnings };
+  // Header columns that carry text but weren't mapped to any field — these are
+  // the candidates the user can hand-assign so their data isn't dropped.
+  const headerRow = (rows[headerIdx] || []).map(x => String(x ?? '').trim());
+  const usedCols = new Set(Object.values(headerMap));
+  const unmatchedColumns = headerRow
+    .map((text, index) => ({ index, text }))
+    .filter(c => c.text !== '' && !usedCols.has(c.index));
+
+  return { colors, sheetName, headerMap, headerRow, unmatchedColumns, distinctDyehouses, warnings };
+}
+
+/** Build a full [row][col] grid of cell fill colours for an xlsx sheet. */
+function buildSheetColorGrid(sheet: XLSX.WorkSheet, rows: any[][]): string[][] {
+  const maxCols = rows.reduce((m, r) => Math.max(m, r?.length || 0), 0);
+  return rows.map((_row, ri) => {
+    const arr: string[] = [];
+    for (let c = 0; c < maxCols; c++) arr.push(cellFillHex(sheet, ri, c));
+    return arr;
+  });
+}
+
+/** Parse an uploaded .xlsx file (reads bytes -> rows + colour grid, then the core). */
+export function parseDyehouseWorkbook(data: ArrayBuffer | Uint8Array | string): ParseResult {
+  const workbook = XLSX.read(data, { type: typeof data === 'string' ? 'binary' : 'array', cellStyles: true });
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' }) as any[][];
+  const colorGrid = buildSheetColorGrid(sheet, rows);
+  const res = parseDyehouseRows(rows, colorGrid, undefined, sheetName);
+  if (res.colors.length === 0 && res.warnings.length && res.warnings[0].includes('صف العناوين')) {
+    res.warnings = ['لم يتم العثور على صف العناوين في الملف.'];
+  }
+  res.rows = rows;
+  res.colorGrid = colorGrid;
+  return res;
+}
+
+// ─── Clipboard (paste-from-Excel) support ───────────────────────────────────
+
+/** Normalise a CSS colour value to #RRGGBB, or '' if not a usable solid colour. */
+function cssColorToHex(val: string): string {
+  if (!val) return '';
+  const v = val.trim().toLowerCase();
+  let hex = '';
+  const hexM = v.match(/#([0-9a-f]{6})\b/);
+  if (hexM) hex = hexM[1];
+  else {
+    const rgbM = v.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+    if (rgbM) hex = [rgbM[1], rgbM[2], rgbM[3]].map(n => Number(n).toString(16).padStart(2, '0')).join('');
+  }
+  if (!/^[0-9a-f]{6}$/.test(hex)) return '';
+  const up = hex.toUpperCase();
+  if (up === 'FFFFFF' || up === '000000') return ''; // treat plain white/black as "no fill"
+  return '#' + up;
+}
+
+/** Excel pastes colours as `.className { background: #.. }` in a <style> block. */
+function parseStyleClassColors(styleText: string): Record<string, string> {
+  const map: Record<string, string> = {};
+  const ruleRe = /\.([\w-]+)\s*\{([^}]*)\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = ruleRe.exec(styleText))) {
+    const bgM = m[2].match(/background(?:-color)?\s*:\s*([^;]+)/i);
+    if (bgM) { const hex = cssColorToHex(bgM[1]); if (hex) map[m[1]] = hex; }
+  }
+  return map;
+}
+
+/**
+ * Parse cells copied from Excel/Sheets. Prefers the clipboard's HTML (keeps the
+ * table structure AND the cells' rendered background colours); falls back to the
+ * tab-separated plain text. Feeds the exact same parsing core as the file import.
+ */
+export function parseDyehousePaste(html: string, text: string): ParseResult {
+  if (html && /<table/i.test(html)) {
+    try {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const table = doc.querySelector('table');
+      if (table) {
+        const classColors = parseStyleClassColors(doc.querySelector('style')?.textContent || '');
+        const rows: string[][] = [];
+        const colorGrid: string[][] = [];
+        table.querySelectorAll('tr').forEach(tr => {
+          const cells: string[] = [];
+          const cols: string[] = [];
+          tr.querySelectorAll('td,th').forEach(td => {
+            const el = td as HTMLElement;
+            cells.push((el.textContent || '').replace(/ /g, ' ').trim());
+            let hex = cssColorToHex(el.style?.background || el.style?.backgroundColor || '');
+            if (!hex) for (const cls of Array.from(el.classList)) { if (classColors[cls]) { hex = classColors[cls]; break; } }
+            if (!hex) hex = cssColorToHex(el.getAttribute('bgcolor') || '');
+            cols.push(hex);
+          });
+          if (cells.length) { rows.push(cells); colorGrid.push(cols); }
+        });
+        if (rows.length) {
+          const res = parseDyehouseRows(rows, colorGrid, undefined, 'مُلصق');
+          res.rows = rows;
+          res.colorGrid = colorGrid;
+          return res;
+        }
+      }
+    } catch { /* fall through to plain-text */ }
+  }
+  // Plain-text TSV fallback (no colours)
+  const rows = (text || '').replace(/\r/g, '').split('\n').map(line => line.split('\t'));
+  const trimmed = rows.filter(r => r.some(c => (c ?? '').trim() !== ''));
+  if (!trimmed.length) {
+    return { colors: [], sheetName: 'مُلصق', headerMap: {}, headerRow: [], unmatchedColumns: [], distinctDyehouses: [], warnings: ['لم يتم لصق أي بيانات. انسخ الخلايا من إكسل ثم ألصقها.'] };
+  }
+  const res = parseDyehouseRows(trimmed, undefined, undefined, 'مُلصق');
+  res.rows = trimmed;
+  return res;
 }
