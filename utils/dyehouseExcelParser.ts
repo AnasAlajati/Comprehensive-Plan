@@ -107,6 +107,36 @@ function normalizeAr(input: any): string {
   return s.replace(/\s+/g, ' ').trim();
 }
 
+const MONTH_NAMES: Record<string, number> = {
+  jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3,
+  may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7,
+  sep: 8, sept: 8, september: 8, oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11,
+};
+
+/**
+ * Recognise day/month text with no year (e.g. "25-Jun", "Jun 3", "18/Jun") —
+ * the format Excel *displays* dates as, which is all a clipboard paste carries
+ * (unlike a file upload, which gets the real underlying date serial number).
+ * The year is unknowable from the text alone, so it's assumed to be the
+ * current year.
+ */
+function parseTextDate(raw: string): string {
+  const s = raw.trim().replace(/\.$/, '');
+  const year = new Date().getFullYear();
+  const tryBuild = (mon: number, day: number): string => {
+    if (mon === undefined || !day || day < 1 || day > 31) return '';
+    const d = new Date(Date.UTC(year, mon, day));
+    // Reject impossible dates (e.g. day 31 in a 30-day month) instead of silently rolling over
+    if (d.getUTCMonth() !== mon || d.getUTCDate() !== day) return '';
+    return d.toISOString().split('T')[0];
+  };
+  let m = s.match(/^(\d{1,2})[\s\-\/]+([A-Za-z]{3,9})$/); // "25-Jun", "25/Jun", "3 June"
+  if (m) return tryBuild(MONTH_NAMES[m[2].toLowerCase()], parseInt(m[1], 10));
+  m = s.match(/^([A-Za-z]{3,9})[\s\-\/]+(\d{1,2})$/); // "Jun-25", "Jun 3"
+  if (m) return tryBuild(MONTH_NAMES[m[1].toLowerCase()], parseInt(m[2], 10));
+  return '';
+}
+
 /** Convert an Excel cell value to an ISO date string when possible. */
 function parseDate(val: any): string {
   if (val === null || val === undefined || val === '') return '';
@@ -115,7 +145,10 @@ function parseDate(val: any): string {
     if (!isNaN(date.getTime())) return date.toISOString().split('T')[0];
   }
   const s = String(val).trim();
-  return s.startsWith('#') ? '' : s; // ignore formula errors
+  if (s.startsWith('#')) return ''; // ignore formula errors
+  const textDate = parseTextDate(s);
+  if (textDate) return textDate;
+  return s; // unrecognised format — left as-is, still editable manually in review
 }
 
 /** Numeric value from a cell (rounded to 2 decimals), errors / blanks as 0. */

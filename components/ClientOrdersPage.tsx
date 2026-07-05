@@ -5211,14 +5211,15 @@ const MemoizedOrderRow = React.memo(({
       document.body
     )}
 
-    {showDyehouseImport && (
+    {showDyehouseImport && createPortal(
       <DyehouseFabricImportModal
         isOpen={showDyehouseImport}
         onClose={() => setShowDyehouseImport(false)}
         order={row}
         dyehouses={dyehouses as Dyehouse[]}
         onImport={(batches) => handleUpdateOrder(row.id, { dyeingPlan: [...(row.dyeingPlan || []), ...batches] })}
-      />
+      />,
+      document.body
     )}
     </>
   );
