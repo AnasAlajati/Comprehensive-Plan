@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { DyeingBatch, DyeingAccessory } from '../types';
 
 /**
  * Parser for fabric-level dyehouse Excel sheets (e.g. "TA_ماجنتا.xlsx").
@@ -427,4 +428,167 @@ export function parseDyehousePaste(html: string, text: string): ParseResult {
   const res = parseDyehouseRows(trimmed, undefined, undefined, 'مُلصق');
   res.rows = trimmed;
   return res;
+}
+
+// ─── Reconciliation — matching a re-pasted sheet against colors that already
+//     exist on the order, so paste can both ADD new colors and UPDATE
+//     existing ones (safe whether the whole sheet or just a few rows are
+//     pasted; nothing already recorded is ever removed or silently clobbered).
+// ─────────────────────────────────────────────────────────────────────────
+
+export type MatchState = 'new' | 'update' | 'unchanged' | 'conflict';
+
+export interface AccessoryDiff {
+  name: string;
+  existingId?: string;   // set if matched to an existing accessory (SET, not delta)
+  sent: number;          // new total to apply
+  received: number;      // new total to apply
+  sentChanged: boolean;
+  receivedChanged: boolean;
+  isNew: boolean;
+}
+
+export interface ReconcileDiff {
+  sentDelta: number;       // amount to add as a new SentEvent (raw); negative only when accepted as a correction
+  receivedDelta: number;   // amount to add as a new ReceiveEvent (raw); negative only when accepted as a correction
+  accessoryDiffs: AccessoryDiff[];
+  fillsDispatch: boolean;  // existing batch has no dispatch number; this paste supplies one
+  fillsDate: boolean;      // existing batch has no dateSent; this paste supplies one
+  fillsFormationDate: boolean;
+  fillsApproval: boolean;
+  fillsNotes: boolean;
+  hasDecrease: boolean;    // sentDelta/receivedDelta/any accessory delta is negative
+}
+
+export interface ReconciledRow {
+  parsed: ParsedColor;
+  state: MatchState;
+  matchedBatchId?: string;         // set for 'update' / 'unchanged'
+  candidates?: DyeingBatch[];      // set when state === 'conflict' && conflictReason === 'ambiguous'
+  conflictReason?: 'ambiguous' | 'decrease';
+  diff?: ReconcileDiff;
+}
+
+const closeEnough = (a: number, b: number) => Math.abs((a || 0) - (b || 0)) < 0.01;
+
+function existingSentRaw(b: DyeingBatch): number {
+  const events = (b.sentEvents || []).reduce((s, e) => s + (Number(e.quantity) || 0), 0);
+  return events + (Number(b.quantitySentRaw) || Number(b.quantitySent) || 0);
+}
+function existingReceivedRaw(b: DyeingBatch): number {
+  const events = (b.receiveEvents || []).reduce((s, e) => s + (Number(e.quantityRaw) || 0), 0);
+  return events + (Number(b.receivedQuantity) || 0);
+}
+
+function diffAccessories(parsedAccs: ParsedAccessory[], existingAccs: DyeingAccessory[]): AccessoryDiff[] {
+  return parsedAccs.map(pa => {
+    const paName = normalizeAr(pa.name);
+    const existing = existingAccs.find(ea => normalizeAr(ea.name) === paName);
+    if (!existing) {
+      return { name: pa.name, sent: pa.sent || 0, received: pa.received || 0, sentChanged: (pa.sent || 0) > 0, receivedChanged: (pa.received || 0) > 0, isNew: true };
+    }
+    return {
+      name: pa.name,
+      existingId: existing.id,
+      sent: pa.sent || 0,
+      received: pa.received || 0,
+      sentChanged: !closeEnough(pa.sent || 0, existing.sent || 0),
+      receivedChanged: !closeEnough(pa.received || 0, existing.received || 0),
+      isNew: false,
+    };
+  });
+}
+
+// Exported so the modal can (re)compute a diff against a specific batch —
+// needed when the user manually resolves an ambiguous match, since that
+// candidate's diff wasn't precomputed by reconcileParsedColors.
+export function computeReconcileDiff(p: ParsedColor, batch: DyeingBatch): ReconcileDiff {
+  const sentDelta = Math.round(((p.quantitySent || 0) - existingSentRaw(batch)) * 100) / 100;
+  const receivedDelta = Math.round(((p.received || 0) - existingReceivedRaw(batch)) * 100) / 100;
+  const accessoryDiffs = diffAccessories(p.accessories, batch.accessories || []);
+  // An accessory "decrease" means its new total is lower than what's on record.
+  const accHasDecrease = accessoryDiffs.some(a => {
+    if (a.isNew) return false;
+    const existing = (batch.accessories || []).find(ea => ea.id === a.existingId);
+    if (!existing) return false;
+    return (a.sentChanged && a.sent < (existing.sent || 0)) || (a.receivedChanged && a.received < (existing.received || 0));
+  });
+  return {
+    sentDelta,
+    receivedDelta,
+    accessoryDiffs,
+    fillsDispatch: !((batch.dispatchNumber || '').trim()) && !!(p.dispatchNumber || '').trim(),
+    fillsDate: !((batch.dateSent || '').trim()) && !!(p.dateSent || '').trim(),
+    fillsFormationDate: !((batch.formationDate || '').trim()) && !!(p.formationDate || '').trim(),
+    fillsApproval: !((batch.colorApproval || '').trim()) && !!(p.colorApproval || '').trim(),
+    fillsNotes: !((batch.notes || '').trim()) && !!(p.notes || '').trim(),
+    hasDecrease: sentDelta < -0.01 || receivedDelta < -0.01 || accHasDecrease,
+  };
+}
+
+function diffIsNoop(diff: ReconcileDiff): boolean {
+  return closeEnough(diff.sentDelta, 0) && closeEnough(diff.receivedDelta, 0)
+    && !diff.fillsDispatch && !diff.fillsDate && !diff.fillsFormationDate && !diff.fillsApproval && !diff.fillsNotes
+    && diff.accessoryDiffs.every(a => !a.isNew && !a.sentChanged && !a.receivedChanged);
+}
+
+/**
+ * Match freshly-parsed rows against an order's existing dyeing batches.
+ *
+ *  1. Exact  — same color + same non-empty dispatch number  -> update that batch.
+ *  2. Placeholder — pasted row has a dispatch number that matches nothing, but
+ *     exactly one existing batch of that color is still un-dispatched (blank
+ *     dispatchNumber) -> that "planned" row is now being dispatched; fill it in
+ *     rather than creating a duplicate.
+ *  3. Blank dedup — pasted row also has no dispatch number yet; matches an
+ *     existing blank-dispatch batch of the same color the same way (handles
+ *     re-pasting the same still-pending row without duplicating it).
+ *  4. No candidate -> new color.
+ *  5. More than one candidate in (2)/(3) -> ambiguous, left for the user to
+ *     resolve rather than guessed at.
+ *
+ * A batch can only be claimed by one pasted row per pass, so two different
+ * pasted rows can never silently collide on the same existing batch.
+ */
+export function reconcileParsedColors(parsedColors: ParsedColor[], existingBatches: DyeingBatch[]): ReconciledRow[] {
+  const claimed = new Set<string>();
+  const results: ReconciledRow[] = [];
+
+  for (const p of parsedColors) {
+    const pColorNorm = normalizeAr(p.color);
+    const pDispatch = (p.dispatchNumber || '').trim();
+
+    let matched: DyeingBatch | undefined = pDispatch
+      ? existingBatches.find(b => !claimed.has(b.id) && normalizeAr(b.color) === pColorNorm && (b.dispatchNumber || '').trim() === pDispatch)
+      : undefined;
+
+    if (!matched) {
+      const candidates = existingBatches.filter(b =>
+        !claimed.has(b.id) && normalizeAr(b.color) === pColorNorm && !(b.dispatchNumber || '').trim()
+      );
+      if (candidates.length === 1) {
+        matched = candidates[0];
+      } else if (candidates.length > 1) {
+        results.push({ parsed: p, state: 'conflict', conflictReason: 'ambiguous', candidates });
+        continue;
+      }
+    }
+
+    if (!matched) {
+      results.push({ parsed: p, state: 'new' });
+      continue;
+    }
+
+    claimed.add(matched.id);
+    const diff = computeReconcileDiff(p, matched);
+    if (diff.hasDecrease) {
+      results.push({ parsed: p, state: 'conflict', conflictReason: 'decrease', matchedBatchId: matched.id, diff });
+    } else if (diffIsNoop(diff)) {
+      results.push({ parsed: p, state: 'unchanged', matchedBatchId: matched.id, diff });
+    } else {
+      results.push({ parsed: p, state: 'update', matchedBatchId: matched.id, diff });
+    }
+  }
+
+  return results;
 }

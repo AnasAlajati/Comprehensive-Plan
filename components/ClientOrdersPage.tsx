@@ -4922,15 +4922,18 @@ const MemoizedOrderRow = React.memo(({
                           اضافة لون
                         </button>
 
-                        {/* Import from Excel - only for orders with no colors yet */}
-                        {canEditColors && (row.dyeingPlan || []).length === 0 && (
+                        {/* Import/reconcile from Excel — always available: adds new colors and
+                            updates existing ones (matched by color + dispatch number) from the
+                            same pasted sheet, so re-pasting a sheet after it's shipped/received
+                            reconciles sent/received instead of duplicating colors. */}
+                        {canEditColors && (
                           <button
                             onClick={() => setShowDyehouseImport(true)}
                             className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 px-2 py-1 rounded hover:bg-emerald-50 transition-colors border border-emerald-200"
-                            title="استيراد ألوان المصبغة من ملف Excel"
+                            title="استيراد أو تحديث ألوان المصبغة من ملف Excel أو باللصق"
                           >
                             <FileSpreadsheet className="w-3 h-3" />
-                            استيراد من اكسل
+                            استيراد / تحديث من اكسل
                           </button>
                         )}
 
@@ -5231,7 +5234,7 @@ const MemoizedOrderRow = React.memo(({
         onClose={() => setShowDyehouseImport(false)}
         order={row}
         dyehouses={dyehouses as Dyehouse[]}
-        onImport={(batches) => handleUpdateOrder(row.id, { dyeingPlan: [...(row.dyeingPlan || []), ...batches] })}
+        onImport={(nextDyeingPlan) => handleUpdateOrder(row.id, { dyeingPlan: nextDyeingPlan })}
       />,
       document.body
     )}

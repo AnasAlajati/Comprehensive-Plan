@@ -1,20 +1,30 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   X, Upload, FileSpreadsheet, AlertTriangle, Check, Loader2,
-  ChevronUp, ChevronDown, Trash2, Link2, ClipboardPaste
+  ChevronUp, ChevronDown, Trash2, Link2, ClipboardPaste, RefreshCw
 } from 'lucide-react';
 import { OrderRow, DyeingBatch, Dyehouse } from '../types';
 import { DataService } from '../services/dataService';
-import { parseDyehouseWorkbook, parseDyehousePaste, parseDyehouseRows, MAPPABLE_FIELDS, ParsedColor, ParsedAccessory, ParseResult } from '../utils/dyehouseExcelParser';
+import {
+  parseDyehouseWorkbook, parseDyehousePaste, parseDyehouseRows, reconcileParsedColors, computeReconcileDiff,
+  MAPPABLE_FIELDS, ParsedColor, ParsedAccessory, ParseResult, ReconciledRow, ReconcileDiff,
+} from '../utils/dyehouseExcelParser';
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   order: OrderRow;
   dyehouses: Dyehouse[];
-  /** Persist the freshly-built batches onto the order's dyeingPlan. */
-  onImport: (batches: DyeingBatch[]) => Promise<void> | void;
+  /** Persist the fully-reconciled dyeing plan (new colors added, existing ones updated). */
+  onImport: (nextDyeingPlan: DyeingBatch[]) => Promise<void> | void;
 }
+
+// How the user resolved a flagged conflict row before import can proceed.
+type ConflictResolution =
+  | { action: 'ignore' }                    // decrease conflict: skip this row, no changes applied
+  | { action: 'correct' }                   // decrease conflict: apply the negative delta as a correction
+  | { action: 'linkTo'; batchId: string }    // ambiguous conflict: link to a specific existing batch
+  | { action: 'treatAsNew' };               // ambiguous conflict: create as a new color instead
 
 type Step = 'upload' | 'review' | 'importing';
 
@@ -39,6 +49,13 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
   // (like distinctDyehouses) so resolving one doesn't make it vanish from the
   // list — it just turns green, same as the dyehouse-alias linking above it.
   const [neededFields, setNeededFields] = useState<string[]>([]);
+  // Reconciliation against this order's EXISTING colors — keyed by parsed color id.
+  // Computed once per parse (not live-recomputed on manual edits), same convention
+  // as neededFields above. A parsed color absent from this map (e.g. one created
+  // via promote/demote after parsing) is implicitly treated as 'new'.
+  const [reconcileMap, setReconcileMap] = useState<Record<string, ReconciledRow>>({});
+  const [conflictResolutions, setConflictResolutions] = useState<Record<string, ConflictResolution>>({});
+  const [mismatchAcknowledged, setMismatchAcknowledged] = useState(false);
   const aliasesRef = useRef<{ rawName: string; dyehouseId: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -58,6 +75,9 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
       setHeaderMap({});
       setHeaderRow([]);
       setNeededFields([]);
+      setReconcileMap({});
+      setConflictResolutions({});
+      setMismatchAcknowledged(false);
     }
   }, [isOpen]);
 
@@ -91,6 +111,16 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
     setHeaderMap(result.headerMap);
     setHeaderRow(result.headerRow);
     resolveDyehouseMapping(result.distinctDyehouses);
+
+    // Match pasted/uploaded rows against this order's existing colors so the
+    // same sheet can be re-imported later to reconcile sent/received updates
+    // instead of only ever adding brand-new colors.
+    const reconciled = reconcileParsedColors(result.colors, order.dyeingPlan || []);
+    const map: Record<string, ReconciledRow> = {};
+    reconciled.forEach(r => { map[r.parsed.id] = r; });
+    setReconcileMap(map);
+    setConflictResolutions({});
+    setMismatchAcknowledged(false);
   };
 
   // Shared: take a ParseResult (from file OR paste), resolve dyehouse aliases,
@@ -196,12 +226,126 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
       return next;
     });
 
+  // A parsed color absent from reconcileMap (e.g. one just created via promote/demote) is 'new'.
+  const rowState = (c: ParsedColor): ReconciledRow => reconcileMap[c.id] || { parsed: c, state: 'new' };
+
+  // Build a brand-new DyeingBatch from a parsed row (unchanged from the original import logic).
+  const buildNewBatch = (c: ParsedColor): DyeingBatch => {
+    const dye = c.rawDyehouse ? dyehouseById(mapping[c.rawDyehouse]) : undefined;
+    const accessorySent = round2(c.accessories.reduce((s, a) => s + (a.sent || 0), 0));
+    const accessoryReceived = round2(c.accessories.reduce((s, a) => s + (a.received || 0), 0));
+    const hasSent = c.quantitySent > 0 || accessorySent > 0;
+    const hasReceived = (c.received || 0) > 0 || accessoryReceived > 0;
+    const sentDate = c.dateSent || today();
+
+    return {
+      id: crypto.randomUUID(),
+      color: c.color,
+      colorHex: c.colorHex || undefined,
+      quantity: c.quantity || 0,
+      machine: '',
+      notes: c.notes || '',
+      colorApproval: c.colorApproval || undefined,
+      dyehouse: dye?.name || '',
+      dispatchNumber: c.dispatchNumber || undefined,
+      dateSent: c.dateSent || undefined,
+      formationDate: c.formationDate || undefined,
+      // Raw & accessory sent are recorded once, via sentEvents / the accessories
+      // array. Leaving these legacy fields set would double-count in the live row.
+      quantitySentRaw: undefined,
+      quantitySentAccessory: undefined,
+      sentEvents: hasSent ? [{
+        id: crypto.randomUUID(), date: sentDate, quantity: c.quantitySent || 0, accessorySent: 0, notes: c.notes || '',
+      }] : [],
+      receiveEvents: hasReceived ? [{
+        id: crypto.randomUUID(), date: sentDate, quantityRaw: c.received || 0, quantityAccessory: accessoryReceived || 0, notes: c.notes || '',
+      }] : [],
+      accessories: c.accessories.map(a => ({
+        id: a.id, name: a.name, sent: a.sent || 0, received: a.received || 0,
+        dateSent: c.dateSent || undefined, dispatchNumber: c.dispatchNumber || undefined, formationDate: c.formationDate || undefined,
+      })),
+      status: hasReceived ? 'received' : hasSent ? 'sent' : 'pending',
+    };
+  };
+
+  // Apply a computed diff onto an EXISTING batch — only ever adds new sent/receive
+  // events and fills in fields that were blank; never overwrites something already
+  // recorded (so a partial re-paste, or a paste against a batch someone edited
+  // in-app since, can't clobber real data).
+  const applyDiffToBatch = (existing: DyeingBatch, c: ParsedColor, diff: ReconcileDiff): DyeingBatch => {
+    const dye = c.rawDyehouse ? dyehouseById(mapping[c.rawDyehouse]) : undefined;
+    const eventDate = c.dateSent || today();
+
+    const sentEvents = [...(existing.sentEvents || [])];
+    if (Math.abs(diff.sentDelta) >= 0.01) {
+      sentEvents.push({
+        id: crypto.randomUUID(), date: eventDate, quantity: diff.sentDelta, accessorySent: 0,
+        notes: diff.sentDelta < 0 ? 'تصحيح من استيراد إكسل' : (c.notes || ''),
+      });
+    }
+    const receiveEvents = [...(existing.receiveEvents || [])];
+    if (Math.abs(diff.receivedDelta) >= 0.01) {
+      receiveEvents.push({
+        id: crypto.randomUUID(), date: eventDate, quantityRaw: diff.receivedDelta, quantityAccessory: 0,
+        notes: diff.receivedDelta < 0 ? 'تصحيح من استيراد إكسل' : (c.notes || ''),
+      });
+    }
+
+    const accessories = [...(existing.accessories || [])];
+    diff.accessoryDiffs.forEach(a => {
+      if (a.isNew) {
+        if (a.sentChanged || a.receivedChanged) {
+          accessories.push({
+            id: crypto.randomUUID(), name: a.name, sent: a.sent, received: a.received,
+            dateSent: c.dateSent || undefined, dispatchNumber: c.dispatchNumber || undefined, formationDate: c.formationDate || undefined,
+          });
+        }
+      } else if (a.existingId && (a.sentChanged || a.receivedChanged)) {
+        const idx = accessories.findIndex(x => x.id === a.existingId);
+        if (idx !== -1) {
+          accessories[idx] = {
+            ...accessories[idx],
+            sent: a.sentChanged ? a.sent : accessories[idx].sent,
+            received: a.receivedChanged ? a.received : accessories[idx].received,
+          };
+        }
+      }
+    });
+
+    const hasSent = (c.quantitySent || 0) > 0 || accessories.some(a => (a.sent || 0) > 0);
+    const hasReceived = (c.received || 0) > 0 || accessories.some(a => (a.received || 0) > 0);
+
+    return {
+      ...existing,
+      dispatchNumber: diff.fillsDispatch ? (c.dispatchNumber || existing.dispatchNumber) : existing.dispatchNumber,
+      dateSent: diff.fillsDate ? (c.dateSent || existing.dateSent) : existing.dateSent,
+      formationDate: diff.fillsFormationDate ? (c.formationDate || existing.formationDate) : existing.formationDate,
+      colorApproval: diff.fillsApproval ? (c.colorApproval || existing.colorApproval) : existing.colorApproval,
+      notes: diff.fillsNotes ? (c.notes || existing.notes) : existing.notes,
+      dyehouse: existing.dyehouse || dye?.name || existing.dyehouse,
+      sentEvents, receiveEvents, accessories,
+      status: hasReceived ? 'received' : hasSent ? 'sent' : (existing.status || 'pending'),
+    };
+  };
+
+  // ---- derived reconciliation stats ----
+  const reconciledRows = colors.map(rowState);
+  const newCount = reconciledRows.filter(r => r.state === 'new').length;
+  const updateCount = reconciledRows.filter(r => r.state === 'update').length;
+  const unchangedCount = reconciledRows.filter(r => r.state === 'unchanged').length;
+  const conflictRows = reconciledRows.filter(r => r.state === 'conflict');
+  const unresolvedConflicts = conflictRows.filter(r => !conflictResolutions[r.parsed.id]);
+  const orderHasExistingColors = (order.dyeingPlan || []).length > 0;
+  // Nothing pasted matched anything already on this order — likely the wrong sheet.
+  const showMismatchWarning = orderHasExistingColors && newCount > 0 && (updateCount + unchangedCount) === 0 && conflictRows.length === 0;
+
   // ---- validation ----
   const unmappedDyehouses = distinctDyehouses.filter(raw => !mapping[raw]);
   const unresolvedFields = neededFields.filter(f => !(f in headerMap));
   // Missing dates/notes/etc. don't block import (unlike the dyehouse, which is
   // required to route the batch) — they're just informational until linked.
-  const canImport = unmappedDyehouses.length === 0 && colors.length > 0;
+  const canImport = unmappedDyehouses.length === 0 && colors.length > 0
+    && unresolvedConflicts.length === 0 && (!showMismatchWarning || mismatchAcknowledged);
 
   const handleImport = async () => {
     setStep('importing');
@@ -215,59 +359,49 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
         }
       }));
 
-      const batches: DyeingBatch[] = colors.map(c => {
-        const dye = c.rawDyehouse ? dyehouseById(mapping[c.rawDyehouse]) : undefined;
-        const accessorySent = round2(c.accessories.reduce((s, a) => s + (a.sent || 0), 0));
-        const accessoryReceived = round2(c.accessories.reduce((s, a) => s + (a.received || 0), 0));
-        const hasSent = c.quantitySent > 0 || accessorySent > 0;
-        const hasReceived = (c.received || 0) > 0 || accessoryReceived > 0;
-        const sentDate = c.dateSent || today();
+      const nextPlan = (order.dyeingPlan || []).map(b => ({ ...b }));
+      const newBatches: DyeingBatch[] = [];
 
-        const batch: DyeingBatch = {
-          id: crypto.randomUUID(),
-          color: c.color,
-          colorHex: c.colorHex || undefined,
-          quantity: c.quantity || 0,
-          machine: '',
-          notes: c.notes || '',
-          colorApproval: c.colorApproval || undefined,
-          dyehouse: dye?.name || '',
-          dispatchNumber: c.dispatchNumber || undefined,
-          dateSent: c.dateSent || undefined,
-          formationDate: c.formationDate || undefined,
-          // Raw & accessory sent are recorded once, via sentEvents / the accessories
-          // array. Leaving these legacy fields set would double-count in the live row.
-          quantitySentRaw: undefined,
-          quantitySentAccessory: undefined,
-          sentEvents: hasSent ? [{
-            id: crypto.randomUUID(),
-            date: sentDate,
-            quantity: c.quantitySent || 0,
-            accessorySent: 0,
-            notes: c.notes || '',
-          }] : [],
-          receiveEvents: hasReceived ? [{
-            id: crypto.randomUUID(),
-            date: sentDate,
-            quantityRaw: c.received || 0,
-            quantityAccessory: accessoryReceived || 0,
-            notes: c.notes || '',
-          }] : [],
-          accessories: c.accessories.map(a => ({
-            id: a.id,
-            name: a.name,
-            sent: a.sent || 0,
-            received: a.received || 0,
-            dateSent: c.dateSent || undefined,
-            dispatchNumber: c.dispatchNumber || undefined,
-            formationDate: c.formationDate || undefined,
-          })),
-          status: hasReceived ? 'received' : hasSent ? 'sent' : 'pending',
-        };
-        return batch;
-      });
+      for (const c of colors) {
+        const rec = rowState(c);
+        const resolution = conflictResolutions[c.id];
 
-      await onImport(batches);
+        if (rec.state === 'unchanged') continue; // safe no-op — batch stays exactly as recorded
+
+        if (rec.state === 'new') {
+          newBatches.push(buildNewBatch(c));
+          continue;
+        }
+
+        if (rec.state === 'conflict') {
+          if (rec.conflictReason === 'decrease') {
+            if (!resolution || resolution.action === 'ignore') continue; // skip — don't touch recorded history
+            // action === 'correct': apply as-is; diff already carries the negative delta
+            const idx = nextPlan.findIndex(b => b.id === rec.matchedBatchId);
+            if (idx === -1) { newBatches.push(buildNewBatch(c)); continue; }
+            nextPlan[idx] = applyDiffToBatch(nextPlan[idx], c, rec.diff!);
+            continue;
+          }
+          // ambiguous
+          if (!resolution) continue; // guarded by canImport, but stay safe
+          if (resolution.action === 'treatAsNew') {
+            newBatches.push(buildNewBatch(c));
+          } else if (resolution.action === 'linkTo') {
+            const idx = nextPlan.findIndex(b => b.id === resolution.batchId);
+            if (idx === -1) { newBatches.push(buildNewBatch(c)); continue; }
+            const diff = computeReconcileDiff(c, nextPlan[idx]);
+            nextPlan[idx] = applyDiffToBatch(nextPlan[idx], c, diff);
+          }
+          continue;
+        }
+
+        // rec.state === 'update'
+        const idx = nextPlan.findIndex(b => b.id === rec.matchedBatchId);
+        if (idx === -1) { newBatches.push(buildNewBatch(c)); continue; }
+        nextPlan[idx] = applyDiffToBatch(nextPlan[idx], c, rec.diff!);
+      }
+
+      await onImport([...nextPlan, ...newBatches]);
       onClose();
     } catch (err) {
       console.error('Import failed', err);
@@ -344,10 +478,44 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
 
           {step === 'review' && (
             <div className="space-y-4">
+              {/* Mismatch warning — nothing pasted matched any of this order's existing colors */}
+              {showMismatchWarning && (
+                <div className="border-2 border-red-300 bg-red-50 rounded-lg p-4 space-y-2">
+                  <div className="flex items-center gap-2 text-red-700 font-bold text-sm">
+                    <AlertTriangle size={18} />
+                    لم يتم التعرف على أي من الألوان الملصقة كألوان موجودة في هذه الطلبية
+                  </div>
+                  <p className="text-xs text-red-600">
+                    هذه الطلبية تحتوي بالفعل على {(order.dyeingPlan || []).length} لون مسجّل، لكن لا شيء في الجدول الذي أدخلته يطابقها.
+                    تأكد أنك نسخت الجدول الصحيح لهذه الطلبية قبل المتابعة — وإلا فسيتم إضافة كل هذه الألوان كألوان جديدة منفصلة.
+                  </p>
+                  <label className="flex items-center gap-2 text-xs text-red-700 font-medium cursor-pointer">
+                    <input type="checkbox" checked={mismatchAcknowledged} onChange={e => setMismatchAcknowledged(e.target.checked)} />
+                    نعم، هذا هو الجدول الصحيح لهذه الطلبية — متابعة رغم ذلك
+                  </label>
+                </div>
+              )}
+
               {/* Summary */}
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 font-medium">{colors.length} لون</span>
                 <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 font-medium">{totalAccessories} اكسسوار</span>
+                {newCount > 0 && (
+                  <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 font-medium">{newCount} جديد</span>
+                )}
+                {updateCount > 0 && (
+                  <span className="px-2.5 py-1 rounded-full bg-blue-100 text-blue-700 font-medium flex items-center gap-1">
+                    <RefreshCw size={11} /> {updateCount} تحديث
+                  </span>
+                )}
+                {unchangedCount > 0 && (
+                  <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-400 font-medium">{unchangedCount} بدون تغيير</span>
+                )}
+                {conflictRows.length > 0 && (
+                  <span className="px-2.5 py-1 rounded-full bg-red-100 text-red-700 font-medium flex items-center gap-1">
+                    <AlertTriangle size={12} /> {conflictRows.length} تعارض يحتاج مراجعة
+                  </span>
+                )}
                 {unmappedDyehouses.length > 0 && (
                   <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-700 font-medium flex items-center gap-1">
                     <AlertTriangle size={12} /> {unmappedDyehouses.length} مصبغة بحاجة لربط
@@ -468,12 +636,30 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
                       const remRaw = Math.max(0, round2((c.quantitySent || 0) - (c.received || 0)));
                       const remAcc = Math.max(0, round2(accSent - accReceived));
                       const dyeId = c.rawDyehouse ? mapping[c.rawDyehouse] : '';
+                      const rec = rowState(c);
+                      const rowTint = rec.state === 'conflict' ? 'bg-red-50/60 hover:bg-red-50'
+                        : rec.state === 'update' ? 'bg-blue-50/40 hover:bg-blue-50/60'
+                        : rec.state === 'unchanged' ? 'bg-slate-50/40 opacity-70 hover:opacity-100'
+                        : 'hover:bg-slate-50/60';
                       return (
                       <React.Fragment key={c.id}>
-                        <tr className="hover:bg-slate-50/60">
+                        <tr className={rowTint}>
                           {/* color + swatch */}
                           <td className="px-2 py-1">
                             <div className="flex items-center gap-2">
+                              {rec.state !== 'new' && (
+                                <span className={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                                  rec.state === 'update' ? 'bg-blue-100 text-blue-700'
+                                    : rec.state === 'unchanged' ? 'bg-slate-200 text-slate-500'
+                                    : 'bg-red-100 text-red-700'
+                                }`} title={
+                                  rec.state === 'update' ? 'تحديث للون موجود'
+                                    : rec.state === 'unchanged' ? 'لا تغيير — يطابق السجل الحالي'
+                                    : 'تعارض يحتاج مراجعة'
+                                }>
+                                  {rec.state === 'update' ? 'تحديث' : rec.state === 'unchanged' ? '=' : '⚠'}
+                                </span>
+                              )}
                               <div className="relative overflow-hidden w-5 h-5 rounded-full border border-slate-200 shadow-sm shrink-0 hover:scale-110 transition-transform">
                                 <input type="color" value={c.colorHex || '#ffffff'}
                                   onChange={e => updateColor(c.id, { colorHex: e.target.value })}
@@ -569,6 +755,100 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
                               className="p-1 text-slate-300 hover:text-red-600"><Trash2 size={13} /></button>
                           </td>
                         </tr>
+                        {rec.state === 'unchanged' && (
+                          <tr className="bg-slate-50/30 text-[11px] text-slate-400">
+                            <td colSpan={14} className="px-3 py-1">
+                              <span className="inline-flex items-center gap-1"><Check size={11} className="text-slate-300" /> لا تغيير — يطابق السجل الحالي</span>
+                            </td>
+                          </tr>
+                        )}
+                        {rec.state === 'update' && rec.diff && (() => {
+                          const d = rec.diff;
+                          const parts: string[] = [];
+                          if (Math.abs(d.sentDelta) >= 0.01) parts.push(`مرسل ${d.sentDelta > 0 ? '+' : ''}${d.sentDelta}`);
+                          if (Math.abs(d.receivedDelta) >= 0.01) parts.push(`مستلم ${d.receivedDelta > 0 ? '+' : ''}${d.receivedDelta}`);
+                          if (d.fillsDispatch) parts.push('إضافة رقم الاذن');
+                          if (d.fillsDate) parts.push('إضافة تاريخ الارسال');
+                          if (d.fillsFormationDate) parts.push('إضافة تاريخ التشكيل');
+                          if (d.fillsApproval) parts.push('إضافة موافقة اللون');
+                          return (
+                            <tr className="bg-blue-50/40 text-[11px] text-blue-700">
+                              <td colSpan={14} className="px-3 py-1.5">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-bold px-1.5 py-0.5 rounded bg-blue-100 shrink-0">تحديث للون موجود</span>
+                                  {parts.map((p, i) => <span key={i} className="px-1.5 py-0.5 rounded bg-white border border-blue-200">{p}</span>)}
+                                  {d.accessoryDiffs.filter(a => a.isNew || a.sentChanged || a.receivedChanged).map((a, i) => (
+                                    <span key={i} className="px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700">
+                                      {a.isNew ? `اكسسوار جديد: ${a.name}` : `${a.name}: ${a.sentChanged ? `مرسل←${a.sent}` : ''} ${a.receivedChanged ? `مستلم←${a.received}` : ''}`}
+                                    </span>
+                                  ))}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })()}
+                        {rec.state === 'conflict' && rec.conflictReason === 'decrease' && rec.diff && (() => {
+                          const d = rec.diff;
+                          const resolution = conflictResolutions[c.id];
+                          return (
+                            <tr className="bg-red-50 text-[11px] text-red-700">
+                              <td colSpan={14} className="px-3 py-2">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <AlertTriangle size={13} className="shrink-0" />
+                                  <span className="font-bold">تعارض: القيمة الملصقة أقل من المسجل حالياً</span>
+                                  {d.sentDelta < -0.01 && <span className="px-1.5 py-0.5 rounded bg-white border border-red-200">مرسل {d.sentDelta}</span>}
+                                  {d.receivedDelta < -0.01 && <span className="px-1.5 py-0.5 rounded bg-white border border-red-200">مستلم {d.receivedDelta}</span>}
+                                  <select
+                                    value={resolution?.action || ''}
+                                    onChange={e => setConflictResolutions(m => ({
+                                      ...m,
+                                      [c.id]: e.target.value === 'correct' ? { action: 'correct' } : e.target.value === 'ignore' ? { action: 'ignore' } : undefined as any,
+                                    }))}
+                                    className="border border-red-300 rounded px-2 py-1 bg-white text-red-700 min-w-[220px]"
+                                  >
+                                    <option value="">— اختر كيفية المعالجة —</option>
+                                    <option value="ignore">تجاهل هذا الصف (لا تغيير)</option>
+                                    <option value="correct">تطبيق كتصحيح (تقليل السجل)</option>
+                                  </select>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })()}
+                        {rec.state === 'conflict' && rec.conflictReason === 'ambiguous' && rec.candidates && (() => {
+                          const resolution = conflictResolutions[c.id];
+                          const linkedId = resolution?.action === 'linkTo' ? resolution.batchId : '';
+                          const value = resolution?.action === 'treatAsNew' ? '__new__' : linkedId;
+                          return (
+                            <tr className="bg-amber-50 text-[11px] text-amber-700">
+                              <td colSpan={14} className="px-3 py-2">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <AlertTriangle size={13} className="shrink-0" />
+                                  <span className="font-bold">تعارض: عدة ألوان مطابقة — حدد المقصود</span>
+                                  <select
+                                    value={value}
+                                    onChange={e => {
+                                      const v = e.target.value;
+                                      setConflictResolutions(m => ({
+                                        ...m,
+                                        [c.id]: v === '__new__' ? { action: 'treatAsNew' } : v ? { action: 'linkTo', batchId: v } : undefined as any,
+                                      }));
+                                    }}
+                                    className="border border-amber-300 rounded px-2 py-1 bg-white text-amber-700 min-w-[260px]"
+                                  >
+                                    <option value="">— اختر —</option>
+                                    {rec.candidates.map(cand => (
+                                      <option key={cand.id} value={cand.id}>
+                                        {cand.color} — {cand.dispatchNumber ? `ازن #${cand.dispatchNumber}` : 'بدون ارسال بعد'} — {cand.quantity} كجم
+                                      </option>
+                                    ))}
+                                    <option value="__new__">معاملته كلون جديد منفصل</option>
+                                  </select>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })()}
                         {c.accessories.map(a => (
                           <tr key={a.id} className="bg-slate-50/50 text-xs">
                             <td className="px-2 py-1">
@@ -626,7 +906,10 @@ export const DyehouseFabricImportModal: React.FC<Props> = ({ isOpen, onClose, or
               className={`flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-colors ${
                 canImport ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-200 text-slate-400 cursor-not-allowed'
               }`}>
-              <Check size={16} /> استيراد {colors.length} لون
+              <Check size={16} />
+              {updateCount > 0
+                ? `تطبيق ${newCount > 0 ? `${newCount} جديد + ` : ''}${updateCount} تحديث${unchangedCount > 0 ? ` (${unchangedCount} بدون تغيير)` : ''}`
+                : `استيراد ${colors.length} لون`}
             </button>
           </div>
         )}
