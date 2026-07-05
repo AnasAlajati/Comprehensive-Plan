@@ -2597,14 +2597,28 @@ const MemoizedOrderRow = React.memo(({
               <button
                 onClick={() => onOpenHistory(row)}
                 className={`p-1.5 rounded-md transition-all flex-shrink-0 ${
-                  hasHistory 
-                    ? "text-orange-600 bg-orange-50 hover:bg-orange-100 ring-1 ring-orange-200 shadow-sm" 
+                  hasHistory
+                    ? "text-orange-600 bg-orange-50 hover:bg-orange-100 ring-1 ring-orange-200 shadow-sm"
                     : "text-slate-300 hover:text-slate-500 hover:bg-slate-50 opacity-60 hover:opacity-100"
                 }`}
                 title={hasHistory ? "View Production History" : "No Production History Found"}
               >
                 <History className="w-4 h-4" />
               </button>
+
+              {onOpenSampleCertificate && (
+                <button
+                  onClick={() => onOpenSampleCertificate(row, selectedCustomerName)}
+                  className={`p-1.5 rounded-md transition-all flex-shrink-0 ${
+                    row.sampleCertificate
+                      ? "text-indigo-600 bg-indigo-50 hover:bg-indigo-100 ring-1 ring-indigo-200 shadow-sm"
+                      : "text-slate-300 hover:text-slate-500 hover:bg-slate-50 opacity-60 hover:opacity-100"
+                  }`}
+                  title={row.sampleCertificate ? "Sample Certificate exists — click to open" : "No Sample Certificate yet — click to start one"}
+                >
+                  <ClipboardList className="w-4 h-4" />
+                </button>
+              )}
 
               {userRole === 'admin' && (
                 <button
@@ -11412,6 +11426,17 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         )}
 
 
+
+        {/* Sample Certificate Modal — opened from the status column's report indicator */}
+        {sampleCertModal && (
+          <SampleCertificatePage
+            order={sampleCertModal.order}
+            clientName={sampleCertModal.clientName}
+            onClose={() => setSampleCertModal(null)}
+            userRole={userRole}
+            userName={userName}
+          />
+        )}
 
         {/* Customer Delivery Modal */}
         {deliveryModal.isOpen && deliveryModal.batches !== null && (

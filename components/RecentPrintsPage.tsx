@@ -3,6 +3,7 @@ import { collection, query, orderBy, onSnapshot, limit, doc, getDoc, getDocs } f
 import { db } from '../services/firebase';
 import { ProductionTicket, MachineRow, OrderRow } from '../types';
 import { ReportViewer, CertEntry } from './FabricReportsPage';
+import { OrderPickerModal } from './OrderPickerModal';
 import {
   Printer,
   Calendar,
@@ -19,6 +20,8 @@ import {
   FileText,
   FileEdit,
   Layers,
+  Plus,
+  Sparkles,
 } from 'lucide-react';
 
 interface RecentPrintsPageProps {
@@ -75,16 +78,29 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
 
   // orderId → sample-certificate status (has the report been worked on?)
   const [certStatusMap, setCertStatusMap] = useState<Record<string, 'draft' | 'finalized'>>({});
+  // Full cert docs, so manually-started reports (no printed ticket) can render their own cards.
+  const [allCerts, setAllCerts] = useState<CertEntry[]>([]);
   useEffect(() => {
     getDocs(collection(db, 'sample_certificates')).then(snap => {
       const map: Record<string, 'draft' | 'finalized'> = {};
+      const certs: CertEntry[] = [];
       snap.docs.forEach(d => {
         const data = d.data() as any;
-        map[data.orderId || d.id] = data.status === 'finalized' ? 'finalized' : 'draft';
+        const orderId = data.orderId || d.id;
+        map[orderId] = data.status === 'finalized' ? 'finalized' : 'draft';
+        certs.push({ ...data, orderId } as CertEntry);
       });
       setCertStatusMap(map);
+      setAllCerts(certs);
     }).catch(() => {});
   }, []);
+
+  // Reports started via "Add New Report" that were never printed as a Production Order.
+  const [showPicker, setShowPicker] = useState(false);
+  const manualOnlyCerts = useMemo(
+    () => allCerts.filter(c => !tickets.some(t => t.orderId === c.orderId)),
+    [allCerts, tickets]
+  );
 
   // Fetch Recent Tickets
   useEffect(() => {
@@ -201,6 +217,12 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
               <p className="text-slate-500 mt-2">Track and review all production orders printed today and earlier</p>
             </div>
 
+            <button
+              onClick={() => setShowPicker(true)}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-br from-indigo-600 to-purple-600 text-white font-semibold text-sm shadow-md hover:shadow-lg transition-shadow"
+            >
+              <Plus size={18} /> إضافة تقرير جديد
+            </button>
           </div>
 
           {/* Filters */}
@@ -235,6 +257,30 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
           </div>
         </div>
       </div>
+
+      {/* Manually-created reports — started via "Add New Report", never printed */}
+      {manualOnlyCerts.length > 0 && (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10">
+          <div className="flex items-center gap-3 mb-6">
+            <Sparkles className="w-5 h-5 text-purple-500" />
+            <h2 className="font-bold text-slate-800">تقارير تم إنشاؤها يدويًا</h2>
+            <span className="text-sm text-slate-500 font-medium bg-purple-50 text-purple-600 px-2 py-0.5 rounded-full border border-purple-100">
+              {manualOnlyCerts.length}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-4">
+            {manualOnlyCerts
+              .sort((a, b) => (b.lastSavedAt || '').localeCompare(a.lastSavedAt || ''))
+              .map(cert => (
+                <ManualReportCard
+                  key={cert.orderId}
+                  cert={cert}
+                  onOpenReport={(order, clientName, c) => setOpenReport({ order, clientName, cert: c })}
+                />
+              ))}
+          </div>
+        </div>
+      )}
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -290,6 +336,87 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
                 </div>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+
+      <OrderPickerModal
+        isOpen={showPicker}
+        onClose={() => setShowPicker(false)}
+        onSelect={(order, clientName) => {
+          const stubOrder: OrderRow = {
+            id: order.id,
+            material: order.material,
+            machine: '',
+            requiredQty: order.requiredQty,
+            accessory: '', manufacturedQty: 0, remainingQty: order.remainingQty,
+            orderReceiptDate: '', startDate: '', endDate: '',
+            scrapQty: 0, others: '', notes: '', batchDeliveries: 0, accessoryDeliveries: 0,
+          };
+          const stubCert: CertEntry = {
+            orderId: order.id,
+            clientName,
+            material: order.material,
+            sampleNumber: '', date: '', status: 'draft',
+            lastSavedAt: '', finalizedAt: '', finalizedBy: '',
+            rawWeight: '', rawWidth: '', finishedWeight: '', finishedWidth: '',
+          };
+          setShowPicker(false);
+          setOpenReport({ order: stubOrder, clientName, cert: stubCert });
+        }}
+      />
+    </div>
+  );
+};
+
+const ManualReportCard: React.FC<{
+  cert: CertEntry;
+  onOpenReport: (order: OrderRow, clientName: string, cert: CertEntry) => void;
+}> = ({ cert, onOpenReport }) => {
+  const isFinalized = cert.status === 'finalized';
+  return (
+    <div className={`group relative bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200 border-l-4 ${
+      isFinalized ? 'border-l-emerald-500 border-y border-r border-slate-200' : 'border-l-purple-400 border-y border-r border-slate-200'
+    }`}>
+      <div className="p-5">
+        <div className="flex items-start justify-between mb-4">
+          <div className="flex-1 min-w-0 pr-2">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1 truncate">{cert.clientName}</h3>
+            <p className="text-base font-extrabold text-slate-800 leading-tight line-clamp-2">{cert.material}</p>
+            <span className={`inline-flex items-center gap-1 mt-2 px-2 py-0.5 text-[10px] font-bold rounded border ${
+              isFinalized ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-purple-50 text-purple-700 border-purple-200'
+            }`}>
+              {isFinalized ? <CheckCircle2 size={10} /> : <FileEdit size={10} />}
+              {isFinalized ? 'Report Approved' : 'Report Draft'}
+            </span>
+          </div>
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-purple-100/80 text-purple-700 uppercase tracking-wide shrink-0">
+            <Sparkles size={10} /> تقرير
+          </span>
+        </div>
+
+        <div className="h-px bg-slate-100 my-4 w-full" />
+
+        <button
+          onClick={() => {
+            const stubOrder: OrderRow = {
+              id: cert.orderId, material: cert.material, machine: '', requiredQty: 0,
+              accessory: '', manufacturedQty: 0, remainingQty: 0,
+              orderReceiptDate: '', startDate: '', endDate: '',
+              scrapQty: 0, others: '', notes: '', batchDeliveries: 0, accessoryDeliveries: 0,
+            };
+            onOpenReport(stubOrder, cert.clientName, cert);
+          }}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-purple-50 hover:bg-purple-100 text-purple-600 text-xs font-semibold transition-colors border border-purple-100"
+        >
+          <FileText className="w-3.5 h-3.5" />
+          فتح التقرير
+        </button>
+
+        {cert.lastSavedAt && (
+          <div className="pt-3 mt-3 flex items-center gap-1.5 text-xs text-slate-400 border-t border-slate-50">
+            <Clock className="w-3.5 h-3.5 text-slate-300" />
+            آخر حفظ: {new Date(cert.lastSavedAt).toLocaleString('en-GB')}
           </div>
         )}
       </div>

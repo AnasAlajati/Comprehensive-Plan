@@ -412,6 +412,7 @@ export interface OrderRow {
   printedAt?: string; // NEW: Date when the order was printed
   lastPrintedBy?: string; // NEW: User who printed the order
   lastPrintedAt?: string; // NEW: Date when the order was last printed
+  sampleCertificate?: any; // NEW: Embedded Sample Certificate data (presence = a report has been started)
   seasonId?: string;   // Season ID this order row belongs to
   seasonName?: string; // Season display name (e.g. "Summer 2026")
   noMachineDataNote?: string; // NEW: User explanation when finished but no machine data found
