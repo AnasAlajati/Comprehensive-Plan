@@ -9964,47 +9964,58 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                         >
                                           <Eye size={11} />
                                         </button>
-                                        {showOrdersColPicker && (
+                                        {showOrdersColPicker && createPortal(
                                           <div
-                                            className="fixed left-12 top-1/4 z-[9999] bg-white border border-slate-200 rounded-xl shadow-2xl p-3 min-w-[200px]"
-                                            onClick={(e) => e.stopPropagation()}
+                                            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/30 p-4"
+                                            onClick={() => setShowOrdersColPicker(false)}
                                           >
-                                            <div className="flex items-center justify-between mb-2 pb-2 border-b border-slate-100">
-                                              <span className="text-xs font-semibold text-slate-600">Visible Columns</span>
-                                              <button onClick={() => setShowOrdersColPicker(false)} className="text-slate-400 hover:text-slate-600 text-xs">✕</button>
+                                            <div
+                                              className="bg-white border border-slate-200 rounded-xl shadow-2xl w-full max-w-xs max-h-[80vh] flex flex-col overflow-hidden"
+                                              onClick={(e) => e.stopPropagation()}
+                                            >
+                                              <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-100 shrink-0">
+                                                <span className="text-xs font-semibold text-slate-600">Visible Columns</span>
+                                                <button onClick={() => setShowOrdersColPicker(false)} className="text-slate-400 hover:text-slate-600 p-1 -m-1">✕</button>
+                                              </div>
+                                              <div className="p-3 overflow-y-auto">
+                                                {isMobileScreen && (
+                                                  <p className="text-[10px] text-slate-400 mb-2">Status is always shown on phone.</p>
+                                                )}
+                                                {[
+                                                  { id: 'reqGsm', label: 'Req GSM' },
+                                                  { id: 'reqWidth', label: 'Req Width' },
+                                                  { id: 'customerOrderedQty', label: 'QTY Customer Ordered' },
+                                                  { id: 'accessories', label: 'Accessories' },
+                                                  { id: 'accQty', label: 'Acc. Qty' },
+                                                  { id: 'status', label: 'Status' },
+                                                  { id: 'dyehousePlan', label: 'Dyehouse Plan' },
+                                                  { id: 'ordered', label: 'To Be Produced' },
+                                                  { id: 'produced', label: 'Produced' },
+                                                  { id: 'remaining', label: 'Remaining' },
+                                                  { id: 'receiveDate', label: 'Receive Date' },
+                                                  { id: 'promisedDeliveryDate', label: 'Promised Delivery' },
+                                                  { id: 'startDate', label: 'Start Date' },
+                                                  { id: 'endDate', label: 'End Date' },
+                                                  { id: 'scrap', label: 'Scrap' },
+                                                  { id: 'others', label: 'Others' },
+                                                  { id: 'delivery', label: 'Delivery' },
+                                                  { id: 'notes', label: 'Notes' },
+                                                  { id: 'reorder', label: 'Reorder' },
+                                                ].filter(col => !(isMobileScreen && col.id === 'status')).map(col => (
+                                                  <label key={col.id} className="flex items-center gap-2 py-1.5 px-1 rounded hover:bg-slate-50 cursor-pointer">
+                                                    <input
+                                                      type="checkbox"
+                                                      checked={ordersVisibleCols[col.id] !== false}
+                                                      onChange={() => handleToggleOrdersCol(col.id)}
+                                                      className="w-3.5 h-3.5 accent-indigo-600"
+                                                    />
+                                                    <span className="text-xs text-slate-700">{col.label}</span>
+                                                  </label>
+                                                ))}
+                                              </div>
                                             </div>
-                                            {[
-                                              { id: 'reqGsm', label: 'Req GSM' },
-                                              { id: 'reqWidth', label: 'Req Width' },
-                                              { id: 'customerOrderedQty', label: 'QTY Customer Ordered' },
-                                              { id: 'accessories', label: 'Accessories' },
-                                              { id: 'accQty', label: 'Acc. Qty' },
-                                              { id: 'status', label: 'Status' },
-                                              { id: 'dyehousePlan', label: 'Dyehouse Plan' },
-                                              { id: 'ordered', label: 'To Be Produced' },
-                                              { id: 'produced', label: 'Produced' },
-                                              { id: 'remaining', label: 'Remaining' },
-                                              { id: 'receiveDate', label: 'Receive Date' },
-                                              { id: 'promisedDeliveryDate', label: 'Promised Delivery' },
-                                              { id: 'startDate', label: 'Start Date' },
-                                              { id: 'endDate', label: 'End Date' },
-                                              { id: 'scrap', label: 'Scrap' },
-                                              { id: 'others', label: 'Others' },
-                                              { id: 'delivery', label: 'Delivery' },
-                                              { id: 'notes', label: 'Notes' },
-                                              { id: 'reorder', label: 'Reorder' },
-                                            ].map(col => (
-                                              <label key={col.id} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-slate-50 cursor-pointer">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={ordersVisibleCols[col.id] !== false}
-                                                  onChange={() => handleToggleOrdersCol(col.id)}
-                                                  className="w-3 h-3 accent-indigo-600"
-                                                />
-                                                <span className="text-xs text-slate-700">{col.label}</span>
-                                              </label>
-                                            ))}
-                                          </div>
+                                          </div>,
+                                          document.body
                                         )}
                                       </div>
                                     </div>
@@ -10018,7 +10029,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                               )}
                               {!showDyehouse && (
                                 <>
-                                  {ordersVisibleCols['status'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-28">Status</th>}
+                                  {(isMobileScreen || ordersVisibleCols['status'] !== false) && <th className="p-3 text-center border-b border-r border-slate-200 w-28">Status</th>}
                                   {ordersVisibleCols['dyehousePlan'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-32 bg-indigo-50">Dyehouse Plan</th>}
                                   {ordersVisibleCols['ordered'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20">To Be Produced</th>}
                                   {ordersVisibleCols['produced'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20 bg-emerald-50 text-emerald-700">Produced</th>}
@@ -10152,7 +10163,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                     onUploadFabricImage={handleUploadFabricImage}
                                     inventory={inventory}
                                     setNoMachineDataModal={setNoMachineDataModal}
-                                    ordersColVis={ordersVisibleCols}
+                                    ordersColVis={isMobileScreen ? { ...ordersVisibleCols, status: true } : ordersVisibleCols}
                                     onReorder={handleReorderRow}
                                     transferAdjustment={customerTransfers.reduce((sum, t) => {
                                       if (t.toOrderId === row.id) return sum + (Number(t.quantity) || 0);
