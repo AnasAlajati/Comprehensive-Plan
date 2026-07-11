@@ -591,6 +591,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
             date:           next.date,
             status:         next.isFinalized ? 'finalized' : 'draft',
             lastSavedAt:    new Date().toISOString(),
+            lastSavedBy:    getAuth().currentUser?.email || userName || 'Unknown',
             finalizedAt:    next.finalizedAt    || '',
             finalizedBy:    next.finalizedBy    || '',
             rawWeight:      next.rawWeight,
@@ -603,7 +604,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
         }
       } catch { setSave('error'); }
     }, 1500);
-  }, [order.id, clientName, order.material]);
+  }, [order.id, clientName, order.material, userName]);
 
   const update = useCallback(<K extends keyof SampleCertData>(key: K, value: SampleCertData[K]) => {
     setData(prev => { const next = { ...prev, [key]: value }; scheduleSave(next); return next; });
@@ -640,6 +641,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
         date:           next.date,
         status:         'finalized',
         lastSavedAt:    next.finalizedAt,
+        lastSavedBy:    next.finalizedBy,
         finalizedAt:    next.finalizedAt,
         finalizedBy:    next.finalizedBy,
         rawWeight:      next.rawWeight,

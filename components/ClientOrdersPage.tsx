@@ -2068,7 +2068,7 @@ const MemoizedOrderRow = React.memo(({
           <td className="p-0 border-r border-slate-200 relative group/fabric sticky left-0 z-10 bg-white sm:static sm:z-auto" title={refCode}>
             <div className={`flex items-center h-full w-full gap-2 px-2 py-1.5 rounded-lg border border-slate-100 bg-white shadow-sm ${groupDepth ? 'pl-6' : ''}`}>
               {/* Fabric Image Thumbnail with Hover Popup */}
-              <div className="relative flex-shrink-0 ml-2 group/img hidden sm:block">
+              <div className="relative flex-shrink-0 ml-2 group/img">
                 {fabricDetails?.imageUrl ? (
                   <>
                     <img 
@@ -5357,7 +5357,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       const elapsed = Date.now() - loadStartRef.current;
       setLoadTimeMs(elapsed);
       setShowLoadTime(true);
-      const t = setTimeout(() => setShowLoadTime(false), 20000);
+      const t = setTimeout(() => setShowLoadTime(false), 2000);
       return () => clearTimeout(t);
     }
   }, [isFullyLoaded, loadTimeMs]);

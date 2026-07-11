@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { collection, collectionGroup, query, getDocs, orderBy, setDoc, doc, where } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { OrderRow, ProductionTicket } from '../types';
@@ -19,6 +19,7 @@ export interface CertEntry {
   date: string;
   status: 'draft' | 'finalized';
   lastSavedAt: string;
+  lastSavedBy?: string;
   finalizedAt: string;
   finalizedBy: string;
   rawWeight: string;
@@ -369,9 +370,14 @@ export function FabricReportsPage({ userRole, userName }: { userRole: string; us
   const [search,   setSearch]   = useState('');
   const [selected, setSelected] = useState<FabricGroup | null>(null);
   const [opening,  setOpening]  = useState<{ order: OrderRow; clientName: string; cert: CertEntry } | null>(null);
+  const [viewMode, setViewMode] = useState<'fabric' | 'date'>('fabric');
+  const [dayFilter, setDayFilter] = useState<'all' | 'today' | '3days' | '7days'>('all');
 
-  useEffect(() => {
-    (async () => {
+  // Extracted so it can be re-run when returning from the editor (see onClose
+  // below) — otherwise this list only ever reflects data from first mount,
+  // and an edit that saved successfully would still look stale on return.
+  const loadGroups = useCallback(async () => {
+      setLoading(true);
       try {
         // ── 1. Build clientId → name map ─────────────────────────────────
         const clientsSnap = await getDocs(collection(db, 'clients'));
@@ -424,6 +430,7 @@ export function FabricReportsPage({ userRole, userName }: { userRole: string; us
             date:           cert.date           || '',
             status:         cert.isFinalized ? 'finalized' : 'draft',
             lastSavedAt:    cert.finalizedAt || cert.date || new Date().toISOString(),
+            lastSavedBy:    cert.finalizedBy || '', // legacy embedded certs only tracked the finalizer, not draft-time edits
             finalizedAt:    cert.finalizedAt || '',
             finalizedBy:    cert.finalizedBy || '',
             rawWeight:      cert.rawWeight      || '',
@@ -451,11 +458,15 @@ export function FabricReportsPage({ userRole, userName }: { userRole: string; us
         })).sort((a, b) => a.code.localeCompare(b.code));
 
         setGroups(built);
+        // If a fabric's detail view is open, re-point it at the fresh data too —
+        // otherwise it keeps showing the pre-edit snapshot it was opened with.
+        setSelected(prev => (prev ? (built.find(g => g.material === prev.material) || prev) : prev));
       } finally {
         setLoading(false);
       }
-    })();
   }, []);
+
+  useEffect(() => { loadGroups(); }, [loadGroups]);
 
   const openCert = (cert: CertEntry) => {
     setOpening({
@@ -470,19 +481,6 @@ export function FabricReportsPage({ userRole, userName }: { userRole: string; us
     });
   };
 
-  if (opening) {
-    return (
-      <ReportViewer
-        order={opening.order}
-        clientName={opening.clientName}
-        cert={opening.cert}
-        onClose={() => setOpening(null)}
-        userRole={userRole}
-        userName={userName}
-      />
-    );
-  }
-
   const q = search.toLowerCase();
   const filtered = groups.filter(g =>
     !search ||
@@ -490,6 +488,51 @@ export function FabricReportsPage({ userRole, userName }: { userRole: string; us
     g.label.toLowerCase().includes(q) ||
     g.material.toLowerCase().includes(q)
   );
+
+  // ── "By Date" view — every report across every fabric, grouped by the day
+  //    it was done (finalizedAt for approved certs, lastSavedAt otherwise). ──
+  // NOTE: this hook must run on every render — it's declared before the early
+  // returns below (if (opening)/if (selected)) so the hook order never changes.
+  const dayGroupedCerts = useMemo(() => {
+    const now = Date.now();
+    const cutoff = dayFilter === 'today' ? new Date(new Date().setHours(0, 0, 0, 0)).getTime()
+      : dayFilter === '3days' ? now - 3 * 86400000
+      : dayFilter === '7days' ? now - 7 * 86400000
+      : null;
+
+    const flat = groups.flatMap(g => g.certs.map(c => ({
+      ...c,
+      fabricCode: g.code,
+      fabricLabel: g.label,
+      displayDate: (c.status === 'finalized' && c.finalizedAt) ? c.finalizedAt : c.lastSavedAt,
+    })))
+      .filter(c => !search || c.fabricCode.toLowerCase().includes(q) || c.fabricLabel.toLowerCase().includes(q)
+        || c.material.toLowerCase().includes(q) || (c.clientName || '').toLowerCase().includes(q))
+      .filter(c => c.displayDate && (!cutoff || new Date(c.displayDate).getTime() >= cutoff))
+      .sort((a, b) => b.displayDate.localeCompare(a.displayDate));
+
+    const groupsByDay = new Map<string, typeof flat>();
+    flat.forEach(c => {
+      const dayKey = new Date(c.displayDate).toLocaleDateString('en-GB', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+      if (!groupsByDay.has(dayKey)) groupsByDay.set(dayKey, []);
+      groupsByDay.get(dayKey)!.push(c);
+    });
+    return [...groupsByDay.entries()];
+  }, [groups, search, dayFilter]);
+  const totalDateFiltered = dayGroupedCerts.reduce((s, [, certs]) => s + certs.length, 0);
+
+  if (opening) {
+    return (
+      <ReportViewer
+        order={opening.order}
+        clientName={opening.clientName}
+        cert={opening.cert}
+        onClose={() => { setOpening(null); loadGroups(); }}
+        userRole={userRole}
+        userName={userName}
+      />
+    );
+  }
 
   // ══════════════════════════════════════════════════════════════════════════
   //  DETAIL VIEW
@@ -612,17 +655,118 @@ export function FabricReportsPage({ userRole, userName }: { userRole: string; us
               {groups.length} fabric{groups.length !== 1 ? 's' : ''} · {groups.reduce((a, g) => a + g.certs.length, 0)} total records
             </p>
           </div>
-          <div style={{ position: 'relative' }}>
-            <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', pointerEvents: 'none' }} />
-            <input
-              placeholder="Search code or name..."
-              value={search} onChange={e => setSearch(e.target.value)}
-              style={{ paddingLeft: 36, paddingRight: 16, paddingTop: 10, paddingBottom: 10, fontSize: 13, borderRadius: 10, border: '1px solid #e5e7eb', background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,.06)', outline: 'none', width: 240 }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            {/* View mode toggle */}
+            <div style={{ display: 'flex', background: '#f3f4f6', borderRadius: 10, padding: 3, gap: 2 }}>
+              {([['fabric', 'By Fabric'], ['date', 'By Date']] as const).map(([mode, label]) => (
+                <button key={mode} onClick={() => setViewMode(mode)}
+                  style={{
+                    fontSize: 12, fontWeight: 600, padding: '7px 12px', borderRadius: 7, border: 'none', cursor: 'pointer',
+                    background: viewMode === mode ? '#fff' : 'transparent',
+                    color: viewMode === mode ? '#111827' : '#6b7280',
+                    boxShadow: viewMode === mode ? '0 1px 3px rgba(0,0,0,.1)' : 'none',
+                  }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div style={{ position: 'relative' }}>
+              <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', pointerEvents: 'none' }} />
+              <input
+                placeholder={viewMode === 'date' ? 'Search code, name, or client...' : 'Search code or name...'}
+                value={search} onChange={e => setSearch(e.target.value)}
+                style={{ paddingLeft: 36, paddingRight: 16, paddingTop: 10, paddingBottom: 10, fontSize: 13, borderRadius: 10, border: '1px solid #e5e7eb', background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,.06)', outline: 'none', width: 240 }} />
+            </div>
           </div>
         </div>
 
-        {/* Grid */}
-        {loading ? (
+        {/* Day filter — only relevant in "By Date" mode */}
+        {viewMode === 'date' && (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 24, flexWrap: 'wrap' }}>
+            {([['all', 'All Time'], ['today', 'Today'], ['3days', 'Last 3 Days'], ['7days', 'Last 7 Days']] as const).map(([f, label]) => (
+              <button key={f} onClick={() => setDayFilter(f)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600,
+                  padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
+                  border: dayFilter === f ? '1px solid #4f46e5' : '1px solid #e5e7eb',
+                  background: dayFilter === f ? '#eef2ff' : '#fff',
+                  color: dayFilter === f ? '#4f46e5' : '#6b7280',
+                }}>
+                <Calendar size={12} /> {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Grid / Day-grouped list */}
+        {viewMode === 'date' ? (
+          loading ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200, gap: 10, color: '#9ca3af' }}>
+              <RefreshCw size={16} className="animate-spin" />
+              <span style={{ fontSize: 14 }}>Loading archive...</span>
+            </div>
+          ) : totalDateFiltered === 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 200, gap: 12, color: '#9ca3af' }}>
+              <Calendar size={36} style={{ opacity: 0.3 }} />
+              <p style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>No reports in this range</p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
+              {dayGroupedCerts.map(([day, certs]) => (
+                <div key={day}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>{day}</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', background: '#f3f4f6', padding: '2px 8px', borderRadius: 20 }}>{certs.length}</span>
+                    <div style={{ flex: 1, height: 1, background: '#f3f4f6' }} />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {certs.map(cert => {
+                      const isFin = cert.status === 'finalized';
+                      return (
+                        <div key={cert.orderId}
+                          style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, transition: 'box-shadow .15s' }}
+                          onMouseEnter={e => (e.currentTarget.style.boxShadow = '0 2px 12px rgba(0,0,0,.08)')}
+                          onMouseLeave={e => (e.currentTarget.style.boxShadow = 'none')}>
+                          <div style={{ width: 8, height: 8, borderRadius: '50%', background: isFin ? '#10b981' : '#f59e0b', flexShrink: 0 }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+                              <span style={{ fontFamily: 'monospace', fontSize: 11, fontWeight: 700, color: '#4f46e5', background: '#eef2ff', border: '1px solid #c7d2fe', padding: '2px 8px', borderRadius: 5 }}>
+                                {cert.fabricCode}
+                              </span>
+                              <span style={{ fontWeight: 700, fontSize: 13, color: '#111827' }}>{cert.clientName || 'Unknown Client'}</span>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: isFin ? '#059669' : '#d97706', background: isFin ? '#ecfdf5' : '#fffbeb', padding: '2px 8px', borderRadius: 5 }}>
+                                {isFin ? 'Approved' : 'Draft'}
+                              </span>
+                            </div>
+                            <p style={{ fontSize: 12, color: '#6b7280', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cert.fabricLabel}</p>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, flexShrink: 0 }}>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#9ca3af' }}>
+                              <Calendar size={10} />
+                              {new Date(cert.displayDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                            {userRole === 'admin' && (
+                              <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: cert.lastSavedBy ? '#b1b8c4' : '#d1d5db', fontStyle: cert.lastSavedBy ? 'normal' : 'italic' }}
+                                title={cert.lastSavedBy ? 'Last worked on by' : 'No editor recorded — saved before this was tracked'}>
+                                <User size={9} />
+                                {cert.lastSavedBy ? cert.lastSavedBy.split('@')[0] : 'unknown'}
+                              </span>
+                            )}
+                          </div>
+                          <button onClick={() => openCert(cert)}
+                            style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', fontSize: 12, fontWeight: 600, color: '#fff', background: '#111827', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+                            Open <ExternalLink size={11} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        ) : (
+        loading ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200, gap: 10, color: '#9ca3af' }}>
             <RefreshCw size={16} className="animate-spin" />
             <span style={{ fontSize: 14 }}>Loading archive...</span>
@@ -692,6 +836,7 @@ export function FabricReportsPage({ userRole, userName }: { userRole: string; us
               );
             })}
           </div>
+        )
         )}
       </div>
     </div>
