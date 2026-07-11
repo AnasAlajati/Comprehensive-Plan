@@ -52,18 +52,21 @@ service cloud.firestore {
       return isAuthenticated() && userExists() && getUserData().role != 'pending';
     }
     
-    // Can write data (admin or editor)
-    // TEMP: Allow any authenticated user while debugging
+    // Can write data: any APPROVED role except read-only 'viewer'.
+    // This deliberately mirrors the UI's own gating (isReadOnly = viewer),
+    // so every role that writes today (admin, schedule_editor, dyehouse_manager,
+    // dyehouse_colors_manager, factory_manager, daily_planner, machine_technician)
+    // keeps writing — but enforced by the database, not just hidden buttons.
+    // 'pending' and missing/unknown roles are denied.
     function canWrite() {
-      return isAuthenticated();
-      // return isAdmin() || isEditor() || isFactoryManager();
+      return isAuthenticated() && userExists()
+        && getUserData().role != 'pending'
+        && getUserData().role != 'viewer';
     }
-    
-    // Can read data (any approved user)
-    // TEMP: Allow any authenticated user while debugging
+
+    // Can read data: any approved user (all roles except 'pending')
     function canRead() {
-      return isAuthenticated();
-      // return isApproved();
+      return isApproved();
     }
     
     // ========================================
@@ -117,6 +120,16 @@ service cloud.firestore {
     // CollectionGroup rule required for collectionGroup("dailyLogs") queries
     // (Firestore requires a top-level wildcard match for collectionGroup reads)
     match /{path=**}/dailyLogs/{logDate} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // CollectionGroup rule required for collectionGroup("orders") queries —
+    // used all over the app (ClientOrdersPage, FabricReportsPage,
+    // SampleCertificatePage, Dyehouse pages, OrderPickerModal, ...).
+    // Covers every collection named "orders" at any depth, including
+    // CustomerSheets/{id}/orders and the top-level /orders.
+    match /{path=**}/orders/{orderId} {
       allow read: if canRead();
       allow write: if canWrite();
     }
@@ -251,6 +264,126 @@ service cloud.firestore {
       allow create: if canWrite();
       allow delete: if canWrite();
       allow update: if false; // transfers are immutable; delete and re-create
+    }
+
+    // ========================================
+    // COLLECTIONS PREVIOUSLY MISSING FROM RULES
+    // (inventoried from every collection()/doc() reference in the code so the
+    //  repo rules file can be deployed without breaking any workflow)
+    // ========================================
+
+    // Sample certificates index (written by SampleCertificatePage autosave/finalize)
+    match /sample_certificates/{orderId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Production tickets (printed production orders, Recent Prints)
+    match /ProductionTickets/{ticketId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Seasons
+    match /Seasons/{seasonId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Dyehouse name aliases (Excel import "remember this link")
+    match /dyehouseAliases/{aliasId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Color palette (color name -> hex links)
+    match /colorPalette/{colorId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Legacy/parallel client + fabric collections still read in places
+    match /clients/{clientId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /customers/{customerId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /fabrics/{fabricId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /Fabrics/{fabricId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /OrderSS/{orderId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /YarnInventory/{itemId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Client real-name mapping
+    match /ClientRealNames/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Daily summaries + reporting overrides
+    match /DailySummaries/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /DeliveryOverrides/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /MonthlyProductionOverrides/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /MonthlyScrapOverrides/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Fabric purchases
+    match /FabricPurchases/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // External production logs
+    match /externalProduction/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Sample daily work tracking
+    match /sampleDailyWork/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Technicians & workers directories
+    match /technicians/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /workers/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Work center mappings
+    match /work_center_mappings/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
     }
 
     // ========================================
