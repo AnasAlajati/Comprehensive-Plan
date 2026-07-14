@@ -178,6 +178,63 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
     return groups;
   }, [filteredTickets]);
 
+  // Manual reports, filtered the same way printed tickets are (search + day filter),
+  // keyed by when they were saved so they can sit inside the same date groups as
+  // printed tickets instead of piling up forever in their own pinned section.
+  const filteredManualCerts = useMemo(() => {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const searchLower = searchTerm.toLowerCase();
+
+    return manualOnlyCerts.filter(cert => {
+      const matchesSearch = !searchLower ||
+        cert.clientName?.toLowerCase().includes(searchLower) ||
+        cert.material?.toLowerCase().includes(searchLower);
+      if (!matchesSearch) return false;
+
+      if (dayFilter !== 'all' && cert.lastSavedAt) {
+        const certDate = new Date(cert.lastSavedAt);
+        const daysDiff = Math.floor((now.getTime() - certDate.getTime()) / (1000 * 60 * 60 * 24));
+        switch (dayFilter) {
+          case 'today': return certDate >= startOfToday;
+          case '3days': return daysDiff < 3;
+          case '7days': return daysDiff < 7;
+        }
+      }
+      return true;
+    });
+  }, [manualOnlyCerts, searchTerm, dayFilter]);
+
+  // Same day-grouping as groupedByDay, but merges in manual reports (keyed by
+  // lastSavedAt) so a manual report appears next to the date it was actually
+  // made instead of in an ever-growing pinned block at the top of the page.
+  const groupedByDayCombined = useMemo(() => {
+    const groups: Record<string, { tickets: ProductionTicket[]; manualCerts: CertEntry[]; sortKey: number }> = {};
+    const dateKey = (iso: string) => new Date(iso).toLocaleDateString('en-GB', {
+      weekday: 'short', year: 'numeric', month: 'short', day: 'numeric'
+    });
+
+    filteredTickets.forEach(ticket => {
+      const ts = new Date(ticket.printedAt).getTime();
+      const date = dateKey(ticket.printedAt);
+      if (!groups[date]) groups[date] = { tickets: [], manualCerts: [], sortKey: ts };
+      groups[date].tickets.push(ticket);
+      groups[date].sortKey = Math.max(groups[date].sortKey, ts);
+    });
+
+    filteredManualCerts.forEach(cert => {
+      if (!cert.lastSavedAt) return;
+      const ts = new Date(cert.lastSavedAt).getTime();
+      if (Number.isNaN(ts)) return;
+      const date = dateKey(cert.lastSavedAt);
+      if (!groups[date]) groups[date] = { tickets: [], manualCerts: [], sortKey: ts };
+      groups[date].manualCerts.push(cert);
+      groups[date].sortKey = Math.max(groups[date].sortKey, ts);
+    });
+
+    return Object.entries(groups).sort((a, b) => b[1].sortKey - a[1].sortKey);
+  }, [filteredTickets, filteredManualCerts]);
+
   // Statistics
   const stats = useMemo(() => {
     return {
@@ -258,30 +315,6 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
         </div>
       </div>
 
-      {/* Manually-created reports — started via "Add New Report", never printed */}
-      {manualOnlyCerts.length > 0 && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10">
-          <div className="flex items-center gap-3 mb-6">
-            <Sparkles className="w-5 h-5 text-purple-500" />
-            <h2 className="font-bold text-slate-800">تقارير تم إنشاؤها يدويًا</h2>
-            <span className="text-sm text-slate-500 font-medium bg-purple-50 text-purple-600 px-2 py-0.5 rounded-full border border-purple-100">
-              {manualOnlyCerts.length}
-            </span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-4">
-            {manualOnlyCerts
-              .sort((a, b) => (b.lastSavedAt || '').localeCompare(a.lastSavedAt || ''))
-              .map(cert => (
-                <ManualReportCard
-                  key={cert.orderId}
-                  cert={cert}
-                  onOpenReport={(order, clientName, c) => setOpenReport({ order, clientName, cert: c })}
-                />
-              ))}
-          </div>
-        </div>
-      )}
-
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         {loading ? (
@@ -291,7 +324,7 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
               <div className="absolute inset-2 bg-white rounded-full"></div>
             </div>
           </div>
-        ) : filteredTickets.length === 0 ? (
+        ) : groupedByDayCombined.length === 0 ? (
           <div className="text-center py-24">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 mb-4">
               <Printer className="w-8 h-8 text-slate-400" />
@@ -301,7 +334,7 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
           </div>
         ) : (
           <div className="space-y-10">
-            {Object.entries(groupedByDay).map(([date, dayTickets]: [string, ProductionTicket[]]) => (
+            {groupedByDayCombined.map(([date, group]) => (
               <div key={date}>
                 {/* Day Header */}
                 <div className="flex items-center gap-4 mb-6">
@@ -310,15 +343,24 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
                     <Calendar className="w-5 h-5 text-indigo-600" />
                     <span className="font-bold text-slate-900">{date}</span>
                     <span className="text-sm text-slate-600 font-medium bg-white px-2 py-0.5 rounded-full border border-slate-200">
-                      {dayTickets.length}
+                      {group.tickets.length + group.manualCerts.length}
                     </span>
                   </div>
                   <div className="flex-1 h-px bg-gradient-to-l from-slate-300 to-transparent"></div>
                 </div>
 
-                {/* Report Cards Grid */}
+                {/* Report Cards Grid — manual reports sit alongside printed ones on
+                    the day they were actually made, instead of piling up in their
+                    own ever-growing section at the top of the page. */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {dayTickets.map(ticket => (
+                  {group.manualCerts.map(cert => (
+                    <ManualReportCard
+                      key={cert.orderId}
+                      cert={cert}
+                      onOpenReport={(order, clientName, c) => setOpenReport({ order, clientName, cert: c })}
+                    />
+                  ))}
+                  {group.tickets.map(ticket => (
                     <ReportCard
                       key={ticket.id}
                       ticket={ticket}

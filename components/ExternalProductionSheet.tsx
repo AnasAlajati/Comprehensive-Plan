@@ -16,6 +16,7 @@ interface ExternalProductionSheetProps {
 interface ExternalEntry {
   id?: string;
   factory: string;
+  machine?: string;
   client: string;
   fabric: string;
   receivedQty: number;
@@ -38,6 +39,8 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
   const [allFlatOrders, setAllFlatOrders] = useState<any[]>([]);
   const [seasons, setSeasons] = useState<{ id: string; name: string }[]>([]);
   const [factoryNames, setFactoryNames] = useState<string[]>([]);
+  // machine names previously used per factory, for autocomplete + consistent naming
+  const [machinesByFactory, setMachinesByFactory] = useState<Record<string, string[]>>({});
 
   // ── Picker popup ──────────────────────────────────────────────────────
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -50,6 +53,7 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [selectedClientName, setSelectedClientName] = useState('');
   const [factoryInput, setFactoryInput] = useState('');
+  const [machineInput, setMachineInput] = useState('');
   const [receivedQty, setReceivedQty] = useState<number | ''>('');
   const [scrapQty, setScrapQty] = useState<number | ''>('');
   const [notes, setNotes] = useState('');
@@ -60,12 +64,13 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
     const loadData = async () => {
       setLoading(true);
       try {
-        const [entriesSnap, customersSnap, seasonsSnap, plansSnap, ordersSnap] = await Promise.all([
+        const [entriesSnap, customersSnap, seasonsSnap, plansSnap, ordersSnap, allExternalSnap] = await Promise.all([
           getDocs(query(collection(db, 'externalProduction'), where('date', '==', date))),
           getDocs(collection(db, 'CustomerSheets')),
           getDocs(collection(db, 'Seasons')),
           getDocs(collection(db, 'ExternalPlans')),
           getDocs(collectionGroup(db, 'orders')),
+          getDocs(collection(db, 'externalProduction')), // all-time, for machine-name suggestions per factory
         ]);
 
         const loadedEntries = entriesSnap.docs.map(d => ({ id: d.id, ...d.data() })) as ExternalEntry[];
@@ -78,6 +83,17 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
         setSeasons(seasonsSnap.docs.map(d => ({ id: d.id, name: (d.data() as any).name || d.id })));
         setFactoryNames(plansSnap.docs.map(d => (d.data() as any).name).filter(Boolean));
         setAllFlatOrders(ordersSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+
+        const byFactory: Record<string, Set<string>> = {};
+        allExternalSnap.docs.forEach(d => {
+          const data = d.data() as any;
+          const factory = (data.factory || '').trim();
+          const machine = (data.machine || '').trim();
+          if (!factory || !machine) return;
+          if (!byFactory[factory]) byFactory[factory] = new Set();
+          byFactory[factory].add(machine);
+        });
+        setMachinesByFactory(Object.fromEntries(Object.entries(byFactory).map(([f, s]) => [f, [...s]])));
       } catch (err) {
         console.error('ExternalProductionSheet load error', err);
       } finally {
@@ -120,6 +136,7 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
         orderReference: orderRef, receivedQty: Number(receivedQty),
         scrap: Number(scrapQty) || 0, remainingQty: newRemaining, notes,
       };
+      if (machineInput.trim()) newEntry.machine = machineInput.trim();
       if (seasonId) newEntry.clientSeason = seasonId;
       else if (seasonName) newEntry.clientSeason = seasonName;
 
@@ -131,7 +148,7 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
         Math.round(updated.reduce((s, e) => s + (Number(e.receivedQty) || 0), 0) * 100) / 100,
         Math.round(updated.reduce((s, e) => s + (Number(e.scrap) || 0), 0) * 100) / 100,
       );
-      setReceivedQty(''); setScrapQty(''); setNotes('');
+      setReceivedQty(''); setScrapQty(''); setNotes(''); setMachineInput('');
     } catch (err) {
       console.error(err);
       alert('Failed to save. Please try again.');
@@ -346,7 +363,7 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
           </div>
 
           {/* Factory + quantities row */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
             <div className="col-span-2 md:col-span-1">
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Factory</label>
               <input
@@ -359,6 +376,23 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
               />
               <datalist id="factory-suggestions">
                 {factoryNames.map(n => <option key={n} value={n} />)}
+              </datalist>
+            </div>
+
+            <div className="col-span-2 md:col-span-1">
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                Machine <span className="font-normal normal-case text-slate-400">(optional)</span>
+              </label>
+              <input
+                type="text"
+                list="machine-suggestions"
+                value={machineInput}
+                onChange={e => setMachineInput(e.target.value)}
+                placeholder="e.g. Line 1..."
+                className="w-full px-3 py-2.5 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+              <datalist id="machine-suggestions">
+                {(machinesByFactory[factoryInput.trim()] || []).map(n => <option key={n} value={n} />)}
               </datalist>
             </div>
 
@@ -431,7 +465,10 @@ export const ExternalProductionSheet: React.FC<ExternalProductionSheetProps> = (
                 ) : entries.map((entry, idx) => (
                   <tr key={entry.id} className="hover:bg-slate-50 border-b border-slate-100 last:border-0">
                     <td className="p-3 text-center text-slate-400 font-mono text-xs">{idx + 1}</td>
-                    <td className="p-3 font-medium text-slate-800">{entry.factory}</td>
+                    <td className="p-3 font-medium text-slate-800">
+                      {entry.factory}
+                      {entry.machine && <div className="text-[10px] font-normal text-indigo-500 mt-0.5">{entry.machine}</div>}
+                    </td>
                     <td className="p-3 text-slate-600">{entry.client}</td>
                     <td className="p-3">
                       <div className="text-slate-700 font-medium">{entry.fabric}</div>

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { FabricDefinition, FabricVariant } from '../types';
 import { X, Copy, Search, Sparkles, AlertCircle, Plus, Trash2, Loader2, Zap } from 'lucide-react';
 import { parseFabricName } from '../services/data';
+import { computeFabricDNA } from '../utils/fabricMachineDna';
 
 interface FabricFormModalProps {
   isOpen: boolean;
@@ -11,14 +12,6 @@ interface FabricFormModalProps {
   machines: any[];
   highlightAddVariant?: boolean;
 }
-
-// Helper to normalize machine type
-const getMachineCategory = (type: string = '') => {
-  const t = type.toLowerCase();
-  if (t.includes('single') || t.includes('jersey') || t.includes('fleece')) return 'Single Jersey';
-  if (t.includes('double') || t.includes('rib') || t.includes('interlock')) return 'Double Jersey';
-  return 'Other';
-};
 
 export const FabricFormModal: React.FC<FabricFormModalProps> = ({
   isOpen,
@@ -106,77 +99,7 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
     }
   };
 
-  const getFabricDNA = (workCenters: string[]) => {
-    if (!workCenters || workCenters.length === 0) return { status: 'No Machines', groups: [] };
-    
-    const linkedMachines = machines.filter(m => workCenters.includes(m.machineName || m.name));
-    if (linkedMachines.length === 0) return { status: 'No Machines', groups: [] };
-
-    // Group by Type + Gauge
-    const groupsMap = new Map<string, {
-      id: string;
-      type: string;
-      gauge: string;
-      brands: Set<string>;
-      machines: any[];
-    }>();
-
-    linkedMachines.forEach(m => {
-      const key = `${m.type}-${m.gauge}`;
-      if (!groupsMap.has(key)) {
-        groupsMap.set(key, {
-          id: key,
-          type: m.type,
-          gauge: m.gauge,
-          brands: new Set(),
-          machines: []
-        });
-      }
-      const group = groupsMap.get(key)!;
-      group.machines.push(m);
-      if (m.brand) group.brands.add(m.brand);
-    });
-
-    const groups = Array.from(groupsMap.values()).map(g => {
-      const brandList = Array.from(g.brands);
-      const brandName = brandList.length > 0 ? brandList.join(' & ') : 'Unknown Brand';
-      const name = `${brandName} Group`;
-      return {
-        ...g,
-        name,
-        brandList
-      };
-    });
-
-    // Check for conflicting types (Single vs Double)
-    const categories = new Set(linkedMachines.map(m => getMachineCategory(m.type)));
-    if (categories.has('Single Jersey') && categories.has('Double Jersey')) {
-      return { status: 'Conflicting Types', groups };
-    }
-
-    if (groups.length > 1) {
-      return { status: 'Multiple Groups', groups };
-    }
-
-    // Single Group Logic
-    const group = groups[0];
-    const subGroups = new Set(group.machines.map(m => `${m.dia}-${m.needles}`));
-    
-    const firstM = group.machines[0];
-    const dna = {
-      gauge: firstM.gauge,
-      dia: firstM.dia,
-      needles: firstM.needles,
-      type: firstM.type
-    };
-
-    return { 
-      status: subGroups.size === 1 ? 'Tier 1' : 'Tier 2', 
-      groups: [group],
-      dna,
-      variants: subGroups.size
-    };
-  };
+  const getFabricDNA = (workCenters: string[]) => computeFabricDNA(workCenters, machines);
 
   if (!isOpen) return null;
 

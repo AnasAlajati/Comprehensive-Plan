@@ -2,13 +2,15 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { MachineRow, PlanItem, MachineStatus, CustomerOrder, MachineSS, OrderRow } from '../types';
 import { SmartPlanModal } from './SmartPlanModal';
 import { OrderProductionHistoryModal } from './OrderProductionHistoryModal';
-import { recalculateSchedule, addDays, getFabricProductionRate } from '../services/data';
+import { recalculateSchedule, addDays, getFabricProductionRate, parseFabricName } from '../services/data';
+import { computeFabricDNA, matchFabricToMachine, MachineMatchLevel } from '../utils/fabricMachineDna';
 import { DataService } from '../services/dataService';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { doc, onSnapshot, setDoc, updateDoc, collection, getDocs, deleteDoc, collectionGroup, query, where } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { Search, Play, GripVertical, Factory, Plus, History, X } from 'lucide-react';
+import { Search, Play, GripVertical, Factory, Plus, History, X, LayoutGrid, Table2 } from 'lucide-react';
+import { ExternalMachinesOverview } from './ExternalMachinesOverview';
 
 // Global CSS to hide number input spinners
 const globalStyles = `
@@ -255,6 +257,11 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
 
   // External Schedule State
   const [viewMode, setViewMode] = useState<'INTERNAL' | 'EXTERNAL'>(initialViewMode);
+  // Sub-view within External Schedule: the original editable table (default,
+  // unchanged) or the new read-only Machines Overview built from real
+  // receiving history. Purely additive — the table keeps working exactly as
+  // before either way.
+  const [externalSubView, setExternalSubView] = useState<'table' | 'overview'>('table');
   const [externalFactories, setExternalFactories] = useState<ExternalFactory[]>([]);
   const [newFactoryName, setNewFactoryName] = useState('');
 
@@ -268,8 +275,36 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
     fabric: string;
     orderId: string;
   }>({ isOpen: false, factoryId: '', planIndex: -1, season: '', clientId: '', fabric: '', orderId: '' });
+
+  // Same order-linking picker, for INTERNAL machine plan rows (was previously
+  // just two disconnected free-text Client/Fabric search fields with no real
+  // link to an order — see intOrderPicker apply handler below).
+  const [intOrderPicker, setIntOrderPicker] = useState<{
+    isOpen: boolean;
+    machineSSId: string;
+    planIndex: number;
+    season: string;
+    clientId: string;
+    fabric: string;
+    orderId: string;
+  }>({ isOpen: false, machineSSId: '', planIndex: -1, season: '', clientId: '', fabric: '', orderId: '' });
   const [seasons, setSeasons] = useState<{ id: string; name: string }[]>([]);
   const [allFlatOrders, setAllFlatOrders] = useState<any[]>([]);
+
+  // Opens the internal order-linking picker for a given plan row — shared by
+  // both the Client cell's "+ Link Order" button and the Fabric cell's
+  // "Link an order to set fabric" prompt, so either one opens the same modal.
+  const openIntOrderPicker = (machine: PlanningMachine, index: number, plan: PlanItem) => {
+    setIntOrderPicker({
+      isOpen: true,
+      machineSSId: machine.machineSSId,
+      planIndex: index,
+      season: (plan as any).seasonId || '',
+      clientId: clients.find((c: any) => c.name === plan.client)?.id || '',
+      fabric: plan.fabric || '',
+      orderId: (plan as any).orderId || '',
+    });
+  };
 
   // Load seasons
   useEffect(() => {
@@ -553,6 +588,10 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
       scheduleIndex: machine.scheduleIndex !== undefined ? machine.scheduleIndex : 9999,
       brand: machine.brand || '—',
       type: machine.type || '—',
+      gauge: machine.gauge,
+      dia: machine.dia,
+      needles: machine.needles,
+      feeders: machine.feeders,
       machineName: machine.name || machine.machineName || `Machine ${machineNumericId}`,
       status: resolvedStatus,
       customStatusNote: machine.customStatusNote || '',
@@ -1683,22 +1722,32 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                           )}
                         </td>
                         <td className="p-1 align-middle relative group">
-                          {!isSettings && <SearchDropdown
-                            id={`client-${machine.machineSSId}-${index}`}
-                            options={clients}
-                            value={plan.client || ''}
-                            onChange={(val) => handlePlanChange(machine, index, 'client', val)}
-                            placeholder="-"
-                            className="w-full text-center py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent font-bold text-slate-700"
-                          />}
-                          
-                          {/* Reference Code Tooltip */}
-                          {!isSettings && plan.client && (
-                            <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 bg-slate-800 text-white text-xs rounded shadow-lg z-20 whitespace-nowrap pointer-events-none">
-                              {plan.client}-{plan.fabric}
-                              {plan.orderReference && <span className="block text-[10px] opacity-75">Ref: {plan.orderReference}</span>}
-                              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
-                            </div>
+                          {!isSettings && (
+                            <>
+                              <button
+                                onClick={() => openIntOrderPicker(machine, index, plan)}
+                                className={`w-full text-center py-1.5 px-2 rounded border transition-colors text-xs font-bold ${
+                                  plan.client
+                                    ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
+                                    : 'bg-white border-dashed border-slate-300 text-slate-400 hover:border-blue-300 hover:text-blue-500'
+                                }`}
+                              >
+                                {plan.client || '+ Link Order'}
+                              </button>
+                              {/* Reference shown inline, not just on hover */}
+                              {plan.orderReference && (
+                                <div className="text-[9px] text-indigo-500 font-mono mt-0.5 text-center truncate" title={plan.orderReference}>
+                                  {plan.orderReference}
+                                </div>
+                              )}
+                              {plan.client && (
+                                <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 bg-slate-800 text-white text-xs rounded shadow-lg z-20 whitespace-nowrap pointer-events-none">
+                                  {plan.client}-{plan.fabric}
+                                  {plan.orderReference && <span className="block text-[10px] opacity-75">Ref: {plan.orderReference}</span>}
+                                  <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+                                </div>
+                              )}
+                            </>
                           )}
                         </td>
                         <td className="p-1 align-middle">
@@ -1723,25 +1772,21 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                                 )}
                              </>
                           ) : (
-                             <SearchDropdown
-                                id={`fabric-${machine.machineSSId}-${index}`}
-                                options={fabrics}
-                                value={plan.fabric || ''}
-                                onChange={(val) => handlePlanChange(machine, index, 'fabric', val)}
-                                placeholder="-"
-                                className="w-full text-right py-1.5 px-2 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-400 outline-none bg-transparent text-sm text-slate-700 leading-tight"
-                                extraInfo={(opt) => {
-                                   const clientName = plan.client;
-                                   if (!clientName) return null;
-                                   const order = customerOrders.find(o => o.customerName === clientName);
-                                   const fabricInOrder = order?.fabrics.find(f => f.fabricName === opt.name);
-                                   
-                                   if (fabricInOrder) {
-                                     return <span className="text-[10px] text-slate-400 ml-2">Rem: {fabricInOrder.remainingQuantity}kg</span>;
-                                   }
-                                   return null;
-                                }}
-                             />
+                             // Fabric is no longer freely typed here — it's set only by
+                             // linking an order (same picker as the Client cell), so the
+                             // schedule row can never drift from what the order actually says.
+                             plan.fabric ? (
+                               <div className="w-full text-right py-1.5 px-2 text-sm leading-tight text-slate-700">
+                                  {plan.fabric}
+                               </div>
+                             ) : (
+                               <button
+                                 onClick={() => openIntOrderPicker(machine, index, plan)}
+                                 className="w-full text-right py-1.5 px-2 text-xs italic text-slate-400 hover:text-blue-500 transition-colors"
+                               >
+                                  Link an order to set fabric
+                               </button>
+                             )
                           )}
                         </td>
                         <td className="p-2 text-xs text-slate-300 font-mono align-middle">{index + 1}</td>
@@ -1951,7 +1996,32 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
              </button>
           </div>
 
-          {externalFactories.map(factory => (
+          {/* Schedule Table (original, editable) vs Machines Overview (new, read-only,
+              built from real receiving history) — additive, table stays the default. */}
+          <div className="flex justify-center mb-6">
+            <div className="bg-slate-100 p-1 rounded-lg inline-flex">
+              <button
+                onClick={() => setExternalSubView('table')}
+                className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  externalSubView === 'table' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <Table2 size={13} /> Schedule Table
+              </button>
+              <button
+                onClick={() => setExternalSubView('overview')}
+                className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  externalSubView === 'overview' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <LayoutGrid size={13} /> Machines Overview
+              </button>
+            </div>
+          </div>
+
+          {externalSubView === 'overview' && <ExternalMachinesOverview />}
+
+          {externalSubView === 'table' && externalFactories.map(factory => (
             <div key={factory.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mb-8">
               <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-6 py-4 flex justify-between items-center text-white border-b border-slate-700">
                 <div className="flex items-center gap-4">
@@ -2445,6 +2515,256 @@ export const PlanningSchedule: React.FC<PlanningScheduleProps> = ({ onUpdate, in
                     await updateDoc(doc(db, 'ExternalPlans', factoryId), { plans: updatedPlans });
                     setExternalFactories(externalFactories.map(f => f.id === factoryId ? { ...f, plans: updatedPlans } : f));
                     setExtOrderPicker(p => ({ ...p, isOpen: false }));
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  Apply
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Internal Order Picker Modal — same season -> client -> order flow as
+          the external one and Daily Machine Plan's "Assign to Machine", but
+          applies to an internal machine's futurePlans row via updateMachinePlans
+          (so recalculateSchedule + persistence stay exactly as they already work). */}
+      {intOrderPicker.isOpen && (() => {
+        const pickerSeason = intOrderPicker.season;
+        const pickerClientId = intOrderPicker.clientId;
+        const selectedSeasonName = seasons.find(s => s.id === pickerSeason)?.name || '';
+        const machine = machines.find(m => m.machineSSId === intOrderPicker.machineSSId);
+
+        const orderMatchesSeason = (o: any) => {
+          if (!pickerSeason) return true;
+          if (o.seasonId) return o.seasonId === pickerSeason || o.seasonName === selectedSeasonName;
+          return pickerSeason === '2025-summer';
+        };
+
+        const filteredClients = pickerSeason
+          ? clients.filter((c: any) => allFlatOrders.some(o => o.customerId === c.id && orderMatchesSeason(o)))
+          : clients;
+        const sortedClients = [...filteredClients].sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
+
+        const clientOrders = pickerClientId
+          ? allFlatOrders.filter(o => o.customerId === pickerClientId && orderMatchesSeason(o))
+          : [];
+
+        const selectedClientName = clients.find((c: any) => c.id === pickerClientId)?.name || '';
+        const canApply = !!(pickerClientId && intOrderPicker.fabric && intOrderPicker.orderId);
+
+        return (
+          <div
+            className="fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center p-4"
+            onClick={() => setIntOrderPicker(p => ({ ...p, isOpen: false }))}
+          >
+            <div
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-xl flex flex-col overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-4 flex items-center justify-between">
+                <div>
+                  <p className="text-indigo-200 text-xs font-medium uppercase tracking-wide">Link Order to Schedule</p>
+                  <h2 className="text-white font-bold text-lg leading-tight">{machine?.machineName || 'Machine'}</h2>
+                </div>
+                <button
+                  onClick={() => setIntOrderPicker(p => ({ ...p, isOpen: false }))}
+                  className="p-2 text-indigo-200 hover:text-white hover:bg-white/20 rounded-full transition"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 overflow-auto max-h-[70vh]">
+                {/* Season */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Season</label>
+                  <div className="flex flex-wrap gap-2">
+                    {seasons.length === 0 && <span className="text-sm text-slate-400 italic">No seasons found</span>}
+                    {seasons.map(s => (
+                      <button
+                        key={s.id}
+                        onClick={() => setIntOrderPicker(p => ({ ...p, season: s.id, clientId: '', fabric: '', orderId: '' }))}
+                        className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                          pickerSeason === s.id
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                            : 'bg-white text-slate-600 border-slate-300 hover:border-indigo-400 hover:text-indigo-600'
+                        }`}
+                      >
+                        {s.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Client */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">
+                    Client
+                    {pickerSeason && sortedClients.length > 0 && (
+                      <span className="ml-2 text-slate-400 font-normal normal-case">{sortedClients.length} available</span>
+                    )}
+                  </label>
+                  {!pickerSeason ? (
+                    <p className="text-sm text-slate-400 italic">Select a season first</p>
+                  ) : sortedClients.length === 0 ? (
+                    <p className="text-sm text-amber-600">No clients have orders in this season.</p>
+                  ) : (
+                    <select
+                      value={pickerClientId}
+                      onChange={e => setIntOrderPicker(p => ({ ...p, clientId: e.target.value, fabric: '', orderId: '' }))}
+                      className="w-full border-2 border-slate-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-indigo-500 transition-colors"
+                    >
+                      <option value="">— Choose client —</option>
+                      {sortedClients.map((c: any) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* Fabric / Order — ranked against the target machine's own
+                    proven/compatible fabrics, so the ones that already run
+                    on this machine (or its DNA group) float to the top. */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">
+                    Fabric / Order
+                    {pickerClientId && clientOrders.length > 0 && (
+                      <span className="ml-2 text-slate-400 font-normal normal-case">
+                        {clientOrders.filter((o: any) => o.material).length} order{clientOrders.filter((o: any) => o.material).length !== 1 ? 's' : ''}
+                      </span>
+                    )}
+                  </label>
+                  {!pickerClientId ? (
+                    <p className="text-sm text-slate-400 italic">Select a client first</p>
+                  ) : clientOrders.length === 0 ? (
+                    <p className="text-sm text-amber-600">No orders found for this client &amp; season.</p>
+                  ) : (() => {
+                    const rankOf = (level: MachineMatchLevel) => level === 'exact' ? 0 : level === 'group' ? 1 : 2;
+                    const rankedOrders = clientOrders
+                      .filter((o: any) => o.material)
+                      .map((o: any) => {
+                        const codeMatch = (o.material || '').match(/^\[(.*?)\]/);
+                        const fabricDef = codeMatch ? fabrics.find((f: any) => f.code === codeMatch[1]) : undefined;
+                        const dna = computeFabricDNA(fabricDef?.workCenters, machines);
+                        const match = matchFabricToMachine(fabricDef?.workCenters, machine, machines);
+                        return { o, dna, match };
+                      })
+                      .sort((a, b) => rankOf(a.match.level) - rankOf(b.match.level));
+
+                    const firstOtherIndex = rankedOrders.findIndex(r => r.match.level === 'none');
+                    const hasRecommended = rankedOrders.length > 0 && rankedOrders[0].match.level !== 'none';
+
+                    return (
+                      <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto pr-1">
+                        {rankedOrders.map((r, idx) => {
+                          const { o, dna, match } = r;
+                          const isSelected = intOrderPicker.fabric === o.material && intOrderPicker.orderId === o.id;
+                          const worksOnText = dna.groups.length > 0
+                            ? dna.groups.map(g => `${g.name} (${g.gauge}G ${g.type})`).join(', ')
+                            : '';
+                          return (
+                            <React.Fragment key={o.id}>
+                              {idx === 0 && hasRecommended && (
+                                <div className="text-[10px] font-bold text-emerald-600 uppercase tracking-wide px-1 pt-1">
+                                  Recommended for {machine?.machineName || 'this machine'}
+                                </div>
+                              )}
+                              {idx === firstOtherIndex && hasRecommended && (
+                                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide px-1 pt-2">
+                                  Other fabrics in this order
+                                </div>
+                              )}
+                              <button
+                                onClick={() => setIntOrderPicker(p => ({ ...p, fabric: o.material, orderId: o.id }))}
+                                className={`w-full text-left px-4 py-3 rounded-xl border-2 transition-all ${
+                                  isSelected
+                                    ? 'border-indigo-500 bg-indigo-50 shadow-sm'
+                                    : 'border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50'
+                                }`}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className={`font-semibold text-sm leading-snug ${isSelected ? 'text-indigo-700' : 'text-slate-800'}`}>{o.material}</div>
+                                  {match.level === 'exact' && (
+                                    <span className="shrink-0 px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded text-[10px] font-bold whitespace-nowrap">
+                                      ✓ Proven on {machine?.machineName}
+                                    </span>
+                                  )}
+                                  {match.level === 'group' && (
+                                    <span className="shrink-0 px-1.5 py-0.5 bg-indigo-50 text-indigo-600 border border-indigo-200 rounded text-[10px] font-bold whitespace-nowrap">
+                                      ≈ {match.groupName}
+                                    </span>
+                                  )}
+                                </div>
+                                {worksOnText && (
+                                  <div className="text-[10px] text-slate-400 mt-0.5">Works on: {worksOnText}</div>
+                                )}
+                                <div className="flex gap-3 mt-1 flex-wrap">
+                                  <span className="text-[11px] text-slate-400 font-mono">#{o.id.slice(0, 8)}</span>
+                                  {o.requiredQty > 0 && <span className="text-[11px] text-slate-500">Req: <span className="font-medium">{Number(o.requiredQty).toLocaleString()} kg</span></span>}
+                                  {o.remainingQty > 0 && <span className="text-[11px] text-slate-500">Rem: <span className="font-medium text-amber-600">{Number(o.remainingQty).toLocaleString()} kg</span></span>}
+                                </div>
+                              </button>
+                            </React.Fragment>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Preview */}
+                {canApply && (
+                  <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl px-4 py-3 flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] text-indigo-500 font-bold uppercase tracking-wide mb-0.5">Will be saved as</p>
+                      <p className="text-sm font-bold text-indigo-800 truncate">{selectedClientName}</p>
+                      <p className="text-xs text-indigo-600 truncate">{intOrderPicker.fabric}</p>
+                      {intOrderPicker.orderId && <p className="text-[10px] text-indigo-400 font-mono mt-0.5">Order #{intOrderPicker.orderId.slice(0, 8)}</p>}
+                    </div>
+                    <div className="text-indigo-400 text-xl">→</div>
+                    <div className="shrink-0 font-bold text-indigo-700 text-sm">{machine?.machineName || 'Machine'}</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="border-t border-slate-100 px-5 py-4 flex gap-3">
+                <button
+                  onClick={() => setIntOrderPicker(p => ({ ...p, isOpen: false }))}
+                  className="flex-1 py-2.5 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold text-sm hover:bg-slate-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={!canApply}
+                  onClick={() => {
+                    if (!canApply || !machine) return;
+                    const { planIndex, fabric, orderId, season } = intOrderPicker;
+                    const initials = fabric.split(/[\s-]+/).map((w: string) => w[0]).join('').toUpperCase();
+                    const orderReference = selectedClientName && fabric ? `${selectedClientName}-${initials}` : undefined;
+                    // Seed remaining/quantity straight from the order's own
+                    // to-be-produced figures — user can still edit them
+                    // afterward, but the starting point is the real order
+                    // data, not whatever was left over from a prior link.
+                    const linkedOrder = clientOrders.find((o: any) => o.id === orderId);
+                    updateMachinePlans(machine, (plans) => {
+                      const updated = [...plans];
+                      updated[planIndex] = {
+                        ...updated[planIndex],
+                        client: selectedClientName,
+                        fabric,
+                        orderId,
+                        seasonId: season,
+                        ...(orderReference ? { orderReference } : {}),
+                        ...(linkedOrder?.remainingQty > 0 ? { remaining: linkedOrder.remainingQty } : {}),
+                        ...(linkedOrder?.requiredQty > 0 ? { quantity: linkedOrder.requiredQty } : {}),
+                      } as PlanItem;
+                      return updated;
+                    });
+                    setIntOrderPicker(p => ({ ...p, isOpen: false }));
                   }}
                   className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
                 >

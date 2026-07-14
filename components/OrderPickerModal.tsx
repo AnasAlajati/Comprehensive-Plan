@@ -1,13 +1,17 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { collectionGroup, getDocs } from 'firebase/firestore';
+import { collection, collectionGroup, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { DataService } from '../services/dataService';
-import { X, Search, FileText } from 'lucide-react';
+import { X } from 'lucide-react';
 
 /**
  * A narrow, selection-only picker: season -> client -> fabric/order.
  * Deliberately does NOT expose the full Orders page (editing, dyeing plans,
  * machine assignment, etc.) — just enough to pick which order a report is for.
+ *
+ * Mirrors the "Link Order to Schedule" picker in PlanningSchedule.tsx
+ * (season pills -> gated client select -> gated order cards -> preview ->
+ * Cancel/Apply) so both pickers in the app look and behave the same way.
  */
 interface Props {
   isOpen: boolean;
@@ -18,11 +22,11 @@ interface Props {
 export const OrderPickerModal: React.FC<Props> = ({ isOpen, onClose, onSelect }) => {
   const [flatOrders, setFlatOrders] = useState<any[]>([]);
   const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
+  const [seasonOptions, setSeasonOptions] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [season, setSeason] = useState<string>('');
   const [clientId, setClientId] = useState<string>('');
   const [orderId, setOrderId] = useState<string>('');
-  const [search, setSearch] = useState('');
   const loadedRef = useRef(false);
 
   useEffect(() => {
@@ -32,19 +36,24 @@ export const OrderPickerModal: React.FC<Props> = ({ isOpen, onClose, onSelect })
     Promise.all([
       getDocs(collectionGroup(db, 'orders')),
       DataService.getClients(),
-    ]).then(([ordersSnap, clientList]) => {
+      getDocs(collection(db, 'Seasons')),
+    ]).then(([ordersSnap, clientList, seasonsSnap]) => {
       const orders = ordersSnap.docs.map(d => ({
         id: d.id, ...d.data(), customerId: d.ref.parent.parent?.id,
       }));
       setFlatOrders(orders);
       setClients(clientList.map(c => ({ id: c.id || c.clientId, name: c.name })));
+      // Same canonical source PlanningSchedule's "Link Order" picker uses —
+      // real Season docs, not each order's own embedded seasonId/seasonName,
+      // which can be a raw slug or point at a season that no longer exists.
+      setSeasonOptions(seasonsSnap.docs.map(d => ({ id: d.id, name: (d.data() as any).name || d.id })));
     }).finally(() => setLoading(false));
   }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
       loadedRef.current = false;
-      setSeason(''); setClientId(''); setOrderId(''); setSearch('');
+      setSeason(''); setClientId(''); setOrderId('');
     }
   }, [isOpen]);
 
@@ -57,17 +66,8 @@ export const OrderPickerModal: React.FC<Props> = ({ isOpen, onClose, onSelect })
     return flatOrders.filter(o => o.customerId && validCustomerIds.has(o.customerId) && o.material);
   }, [flatOrders, clients]);
 
-  const seasonOptions = useMemo(() => {
-    const seen = new Map<string, string>();
-    liveOrders.forEach(o => {
-      if (o.seasonId && !seen.has(o.seasonId)) seen.set(o.seasonId, o.seasonName || o.seasonId);
-    });
-    return Array.from(seen.entries()).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
-  }, [liveOrders]);
-
   const orderMatchesSeason = (o: any) => !season || o.seasonId === season;
 
-  // Only clients with at least one live order (matching the season, if one is picked).
   const filteredClients = useMemo(() => {
     const list = clients.filter(c => liveOrders.some(o => o.customerId === c.id && orderMatchesSeason(o)));
     return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
@@ -75,11 +75,8 @@ export const OrderPickerModal: React.FC<Props> = ({ isOpen, onClose, onSelect })
 
   const clientOrders = useMemo(() => {
     if (!clientId) return [];
-    const term = search.trim().toLowerCase();
-    return liveOrders
-      .filter(o => o.customerId === clientId && orderMatchesSeason(o))
-      .filter(o => !term || o.material.toLowerCase().includes(term) || o.id.toLowerCase().includes(term));
-  }, [flatOrders, clientId, season, search]);
+    return liveOrders.filter(o => o.customerId === clientId && orderMatchesSeason(o));
+  }, [liveOrders, clientId, season]);
 
   const selectedOrder = clientOrders.find(o => o.id === orderId);
   const selectedClientName = clients.find(c => c.id === clientId)?.name || '';
@@ -89,92 +86,136 @@ export const OrderPickerModal: React.FC<Props> = ({ isOpen, onClose, onSelect })
 
   return (
     <div className="fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden max-h-[85vh]" onClick={e => e.stopPropagation()} dir="rtl">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden" onClick={e => e.stopPropagation()} dir="rtl">
         {/* Header */}
         <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-white">
-            <FileText size={18} />
-            <span className="font-bold">إنشاء تقرير جديد</span>
+          <div>
+            <p className="text-indigo-200 text-xs font-medium uppercase tracking-wide">تقرير جديد</p>
+            <h2 className="text-white font-bold text-lg leading-tight">إنشاء تقرير</h2>
           </div>
-          <button onClick={onClose} className="text-white/80 hover:text-white"><X size={20} /></button>
+          <button
+            onClick={onClose}
+            className="p-2 text-indigo-200 hover:text-white hover:bg-white/20 rounded-full transition"
+          >
+            <X size={18} />
+          </button>
         </div>
 
-        <div className="p-5 space-y-4 overflow-y-auto flex-1">
+        <div className="p-5 space-y-4 overflow-auto max-h-[70vh]">
           {loading ? (
             <div className="py-10 text-center text-sm text-slate-400">جارٍ التحميل...</div>
           ) : (
             <>
-              {seasonOptions.length > 0 && (
-                <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wide">الموسم</label>
-                  <div className="flex flex-wrap gap-2 mt-1.5">
-                    {seasonOptions.map(s => (
-                      <button key={s.id}
-                        onClick={() => { setSeason(s.id === season ? '' : s.id); setClientId(''); setOrderId(''); }}
-                        className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
-                          season === s.id ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
-                        }`}>
-                        {s.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
+              {/* Season */}
               <div>
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wide">العميل</label>
-                <select value={clientId} onChange={e => { setClientId(e.target.value); setOrderId(''); }}
-                  className="w-full mt-1.5 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-400 outline-none text-sm">
-                  <option value="">اختر عميل...</option>
-                  {filteredClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">الموسم</label>
+                <div className="flex flex-wrap gap-2">
+                  {seasonOptions.length === 0 && <span className="text-sm text-slate-400 italic">لا توجد مواسم</span>}
+                  {seasonOptions.map(s => (
+                    <button
+                      key={s.id}
+                      onClick={() => { setSeason(s.id === season ? '' : s.id); setClientId(''); setOrderId(''); }}
+                      className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                        season === s.id
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                          : 'bg-white text-slate-600 border-slate-300 hover:border-indigo-400 hover:text-indigo-600'
+                      }`}
+                    >
+                      {s.name}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              {clientId && (
-                <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wide">الخامة / الطلبية</label>
-                  <div className="relative mt-1.5">
-                    <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300" />
-                    <input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث..."
-                      className="w-full pr-9 pl-3 py-2 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-400 outline-none text-sm" />
-                  </div>
-                  <div className="flex flex-col gap-1.5 max-h-52 overflow-y-auto mt-2 pl-1">
-                    {clientOrders.length === 0 && (
-                      <div className="text-xs text-slate-400 text-center py-4">لا توجد طلبيات لهذا العميل</div>
-                    )}
+              {/* Client */}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">
+                  العميل
+                  {season && filteredClients.length > 0 && (
+                    <span className="mr-2 text-slate-400 font-normal normal-case">{filteredClients.length} متاح</span>
+                  )}
+                </label>
+                {!season ? (
+                  <p className="text-sm text-slate-400 italic">اختر موسمًا أولاً</p>
+                ) : filteredClients.length === 0 ? (
+                  <p className="text-sm text-amber-600">لا يوجد عملاء لديهم طلبيات في هذا الموسم.</p>
+                ) : (
+                  <select
+                    value={clientId}
+                    onChange={e => { setClientId(e.target.value); setOrderId(''); }}
+                    className="w-full border-2 border-slate-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-indigo-500 transition-colors"
+                  >
+                    <option value="">— اختر عميل —</option>
+                    {filteredClients.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {/* Fabric / Order */}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">
+                  الخامة / الطلبية
+                  {clientId && clientOrders.length > 0 && (
+                    <span className="mr-2 text-slate-400 font-normal normal-case">{clientOrders.length} طلبية</span>
+                  )}
+                </label>
+                {!clientId ? (
+                  <p className="text-sm text-slate-400 italic">اختر عميلاً أولاً</p>
+                ) : clientOrders.length === 0 ? (
+                  <p className="text-sm text-amber-600">لا توجد طلبيات لهذا العميل والموسم.</p>
+                ) : (
+                  <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto pr-1">
                     {clientOrders.map(o => {
                       const isSelected = orderId === o.id;
                       return (
-                        <button key={o.id} onClick={() => setOrderId(o.id)}
-                          className={`text-right px-3 py-2 rounded-lg border text-sm transition-colors ${
-                            isSelected ? 'bg-indigo-50 border-indigo-300' : 'bg-white border-slate-200 hover:border-indigo-200'
-                          }`}>
-                          <div className="font-semibold text-slate-800">{o.material}</div>
-                          <div className="flex gap-3 mt-1 flex-wrap text-[11px] text-slate-400">
-                            <span className="font-mono">#{o.id.slice(0, 8)}</span>
-                            {o.requiredQty > 0 && <span>مطلوب: {Number(o.requiredQty).toLocaleString()} كجم</span>}
-                            {o.remainingQty > 0 && <span>متبقي: {Number(o.remainingQty).toLocaleString()} كجم</span>}
+                        <button
+                          key={o.id}
+                          onClick={() => setOrderId(o.id)}
+                          className={`w-full text-right px-4 py-3 rounded-xl border-2 transition-all ${
+                            isSelected
+                              ? 'border-indigo-500 bg-indigo-50 shadow-sm'
+                              : 'border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50'
+                          }`}
+                        >
+                          <div className={`font-semibold text-sm leading-snug ${isSelected ? 'text-indigo-700' : 'text-slate-800'}`}>{o.material}</div>
+                          <div className="flex gap-3 mt-1 flex-wrap">
+                            <span className="text-[11px] text-slate-400 font-mono">#{o.id.slice(0, 8)}</span>
+                            {o.requiredQty > 0 && <span className="text-[11px] text-slate-500">مطلوب: <span className="font-medium">{Number(o.requiredQty).toLocaleString()} كجم</span></span>}
+                            {o.remainingQty > 0 && <span className="text-[11px] text-slate-500">متبقي: <span className="font-medium text-amber-600">{Number(o.remainingQty).toLocaleString()} كجم</span></span>}
                           </div>
                         </button>
                       );
                     })}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
-              {selectedOrder && (
-                <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl px-4 py-3">
-                  <p className="text-[10px] text-indigo-500 font-bold uppercase mb-1">سيتم إنشاء التقرير لـ</p>
-                  <p className="text-sm font-bold text-indigo-800">{selectedClientName}</p>
-                  <p className="text-xs text-indigo-600">{selectedOrder.material}</p>
+              {/* Preview */}
+              {canApply && (
+                <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl px-4 py-3 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] text-indigo-500 font-bold uppercase tracking-wide mb-0.5">سيتم الحفظ باسم</p>
+                    <p className="text-sm font-bold text-indigo-800 truncate">{selectedClientName}</p>
+                    <p className="text-xs text-indigo-600 truncate">{selectedOrder!.material}</p>
+                  </div>
+                  <div className="text-indigo-400 text-xl">←</div>
+                  <div className="shrink-0 font-bold text-indigo-700 text-sm">تقرير</div>
                 </div>
               )}
             </>
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-100 bg-slate-50">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100">إلغاء</button>
+        {/* Footer */}
+        <div className="border-t border-slate-100 px-5 py-4 flex gap-3">
+          <button
+            onClick={onClose}
+            className="flex-1 py-2.5 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold text-sm hover:bg-slate-50 transition"
+          >
+            إلغاء
+          </button>
           <button
             disabled={!canApply}
             onClick={() => {
@@ -184,9 +225,7 @@ export const OrderPickerModal: React.FC<Props> = ({ isOpen, onClose, onSelect })
                 selectedClientName,
               );
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold text-white transition-colors ${
-              canApply ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-slate-300 cursor-not-allowed'
-            }`}
+            className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
           >
             إنشاء التقرير
           </button>
