@@ -1,6 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { ArrowRight, TrendingUp, TrendingDown, Activity, Calendar, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
 import { MachineStatus } from '../types';
+import { collectionGroup, onSnapshot, query, doc, getDoc } from 'firebase/firestore';
+import { db } from '../services/firebase';
+import { ProfessionalDatePicker } from './ProfessionalDatePicker';
 
 interface CompareDaysPageProps {
   allMachineData: any[];
@@ -27,23 +30,86 @@ export const CompareDaysPage: React.FC<CompareDaysPageProps> = ({
   const [date2, setDate2] = useState<string>(initialDate2);
   const [showExtras, setShowExtras] = useState(false);
 
+  // Daily logs live in a Firestore sub-collection per machine (MachineSS/{id}/dailyLogs/{date}),
+  // not as an embedded array on the machine doc, so we subscribe to the whole collection group
+  // directly instead of reading a `machine.dailyLogs` field (which no longer exists). This also
+  // gives us every date that has a report, for the calendar's highlighted-day dots.
+  const [logsByKey, setLogsByKey] = useState<Record<string, any>>({});
+  const [reportDates, setReportDates] = useState<string[]>([]);
+  const [logsLoaded, setLogsLoaded] = useState(false);
+  const [activeDay, setActiveDay] = useState<string>('');
+  const defaultsAppliedRef = useRef(false);
+
+  useEffect(() => {
+    const q = query(collectionGroup(db, 'dailyLogs'));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const map: Record<string, any> = {};
+      const dates = new Set<string>();
+      snapshot.docs.forEach(d => {
+        const data = d.data() as any;
+        const machineId = d.ref.parent.parent?.id;
+        if (!machineId || !data.date) return;
+        map[`${machineId}__${data.date}`] = data;
+        dates.add(data.date);
+      });
+      setLogsByKey(map);
+      setReportDates(Array.from(dates).sort());
+      setLogsLoaded(true);
+    }, (error) => {
+      console.warn('CompareDaysPage dailyLogs listener error:', error);
+    });
+    return () => unsub();
+  }, []);
+
+  // Fetch the factory's global "active day" once on mount
+  useEffect(() => {
+    getDoc(doc(db, 'settings', 'global')).then(snap => {
+      const active = snap.exists() ? snap.data().activeDay : '';
+      if (active) setActiveDay(active);
+    }).catch(error => console.error('Error fetching active day:', error));
+  }, []);
+
+  // Default Target Date to the active day, and Baseline Date to the most recent
+  // prior day that actually has a report — only until the user picks dates manually.
+  useEffect(() => {
+    if (defaultsAppliedRef.current || !activeDay || !logsLoaded) return;
+    defaultsAppliedRef.current = true;
+    const priorReportDate = reportDates.filter(d => d < activeDay).pop();
+    setDate1(activeDay);
+    setDate2(priorReportDate || getPreviousDay(activeDay));
+  }, [activeDay, logsLoaded, reportDates]);
+
+  // A machine's real total for a day includes its main slot plus any extra
+  // sessions (split runs for a second client/fabric on the same day).
+  const runTotals = (log: any) => {
+    const extraSessions = log?.extraSessions || [];
+    const production = (Number(log?.dayProduction) || 0) +
+      extraSessions.reduce((s: number, es: any) => s + (Number(es.dayProduction) || 0), 0);
+    // Remaining stock is per-session, not summable — "finished" means every
+    // active session for that day is at 0 remaining.
+    const remainings = [Number(log?.remainingMfg) || 0, ...extraSessions.map((es: any) => Number(es.remainingMfg) || 0)];
+    const allFinished = production > 0 && remainings.every(r => r <= 0);
+    return { production, remainings, allFinished };
+  };
+
   const comparisonData = useMemo(() => {
     // Filter for Wide machines only (Exclude BOUS)
     const wideMachines = allMachineData.filter(m => m.type !== 'BOUS');
 
     let totalProd1 = 0;
     let totalProd2 = 0;
-    
+
     const significantChanges: any[] = [];
     const minorChanges: any[] = [];
 
     wideMachines.forEach(machine => {
-      const logs = machine.dailyLogs || [];
-      const log1 = logs.find((l: any) => l.date === date1);
-      const log2 = logs.find((l: any) => l.date === date2);
+      const log1 = logsByKey[`${machine.id}__${date1}`];
+      const log2 = logsByKey[`${machine.id}__${date2}`];
 
-      const prod1 = Number(log1?.dayProduction) || 0;
-      const prod2 = Number(log2?.dayProduction) || 0;
+      const r1 = runTotals(log1);
+      const r2 = runTotals(log2);
+      const prod1 = r1.production;
+      const prod2 = r2.production;
 
       totalProd1 += prod1;
       totalProd2 += prod2;
@@ -70,11 +136,12 @@ export const CompareDaysPage: React.FC<CompareDaysPageProps> = ({
         } 
         
         // 2. Check for Order Finished
-        // Logic: Yesterday had remaining > 0, Today has remaining 0 (or very close to 0)
-        const remainingYesterday = Number(log2?.remainingMfg) || 0;
-        const remainingToday = Number(log1?.remainingMfg) || 0;
-        
-        if (remainingYesterday > 0 && remainingToday <= 0) {
+        // Logic: Yesterday had remaining > 0 (in the main slot or an extra session),
+        // Today every active session is at 0 remaining.
+        const hadRemainingYesterday = r2.remainings.some(r => r > 0);
+        const allFinishedToday = r1.remainings.every(r => r <= 0);
+
+        if (hadRemainingYesterday && allFinishedToday) {
             const hasFuturePlans = machine.futurePlans && machine.futurePlans.length > 0;
             reason = `Order Finished. ${hasFuturePlans ? '✅ Has Future Plans' : '⚠️ No Future Plans'}`;
             type = 'neutral';
@@ -129,7 +196,7 @@ export const CompareDaysPage: React.FC<CompareDaysPageProps> = ({
       significantChanges,
       minorChanges
     };
-  }, [allMachineData, date1, date2]);
+  }, [allMachineData, date1, date2, logsByKey]);
 
   const formatNumber = (num: number) => num.toLocaleString();
 
@@ -149,24 +216,24 @@ export const CompareDaysPage: React.FC<CompareDaysPageProps> = ({
 
           <div className="flex items-center gap-4 bg-slate-50 p-2 rounded-lg border border-slate-200">
             <div className="relative group">
-              <label className="absolute -top-2 left-2 text-[10px] bg-slate-50 px-1 text-blue-600 font-bold">Target Date</label>
-              <input 
-                type="date" 
-                value={date1}
-                onChange={(e) => setDate1(e.target.value)}
-                className="bg-transparent border-none text-slate-700 text-sm font-medium rounded-lg px-3 py-2 focus:ring-0 outline-none"
+              <label className="absolute -top-2 left-2 text-[10px] bg-slate-50 px-1 text-blue-600 font-bold z-10">Target Date</label>
+              <ProfessionalDatePicker
+                selectedDate={date1}
+                onChange={(d) => { defaultsAppliedRef.current = true; setDate1(d); }}
+                highlightedDates={reportDates}
+                activeDay={activeDay}
               />
             </div>
             <div className="text-slate-400">
               <ArrowRight size={16} />
             </div>
             <div className="relative group">
-              <label className="absolute -top-2 left-2 text-[10px] bg-slate-50 px-1 text-slate-500 font-bold">Baseline Date</label>
-              <input 
-                type="date" 
-                value={date2}
-                onChange={(e) => setDate2(e.target.value)}
-                className="bg-transparent border-none text-slate-700 text-sm font-medium rounded-lg px-3 py-2 focus:ring-0 outline-none"
+              <label className="absolute -top-2 left-2 text-[10px] bg-slate-50 px-1 text-slate-500 font-bold z-10">Baseline Date</label>
+              <ProfessionalDatePicker
+                selectedDate={date2}
+                onChange={(d) => { defaultsAppliedRef.current = true; setDate2(d); }}
+                highlightedDates={reportDates}
+                activeDay={activeDay}
               />
             </div>
           </div>
