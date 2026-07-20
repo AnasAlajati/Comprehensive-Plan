@@ -19,6 +19,7 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { db, auth } from './services/firebase';
 import { DataService } from './services/dataService';
 import { ActivityService } from './services/activityService';
+import { TimeTrackingService } from './services/timeTrackingService';
 import { MachineRow } from './types';
 import { StatusBadge } from './components/StatusBadge';
 import { PlanningSchedule } from './components/PlanningSchedule';
@@ -104,7 +105,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'real-maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'fabric-reports' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'sample-tracking' | 'sample-archive' | 'fabrics' | 'machines' | 'users'>('excel'); 
+  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'real-maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'fabric-reports' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'sample-tracking' | 'sample-archive' | 'fabrics' | 'machines' | 'users' | 'recent-prints'>('excel');
   const [planningInitialViewMode, setPlanningInitialViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
   
   // Force dyehouse_manager and dyehouse_colors_manager to only see dyehouse-directory or orders
@@ -226,16 +227,22 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
+  // Keep a ref to the current page so the presence heartbeat (below) can
+  // attribute active seconds to whichever page was open at each tick,
+  // without needing to restart that effect on every navigation.
+  const viewModeRef = useRef(viewMode);
+  useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
+
   // Presence & Activity Tracking (Online, Idle, Background)
   useEffect(() => {
     if (!user?.email || !isAuthorized) return;
-    
+
     const email = user.email.toLowerCase();
     const userDocRef = doc(db, 'users', email);
-    
+
     // Mutable state for the effect closure
     let lastActivity = Date.now();
-    let currentStatus = 'online'; 
+    let currentStatus = 'online';
 
     // Helper: Update Firestore
     const updatePresence = async (status: string) => {
@@ -273,6 +280,12 @@ const App: React.FC = () => {
         
         // Always send heartbeat to update 'lastSeen'
         updatePresence(newStatus);
+
+        // Only count time toward daily/weekly totals while genuinely online —
+        // idle and backgrounded time is never recorded.
+        if (newStatus === 'online') {
+            TimeTrackingService.recordActiveSeconds(email, 60, viewModeRef.current);
+        }
     }, 60000);
 
     // 2. VISIBILITY LISTENER (Immediate Background Detection)

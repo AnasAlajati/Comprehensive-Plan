@@ -20,7 +20,9 @@ import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, firebaseConfig, auth } from '../services/firebase';
 import { ActivityService, ActivityLog } from '../services/activityService';
-import { Trash2, UserPlus, Shield, ShieldAlert, Mail, User as UserIcon, Copy, Check, Key, Circle, Clock, Activity, MapPin, Edit3, Plus, X, ChevronDown, ChevronUp, AlertTriangle, Database, RefreshCw } from 'lucide-react';
+import { getCairoDateString, formatDuration } from '../services/timeTrackingService';
+import { FeatureUsagePage } from './FeatureUsagePage';
+import { Trash2, UserPlus, Shield, ShieldAlert, Mail, User as UserIcon, Copy, Check, Key, Circle, Clock, Activity, MapPin, Edit3, Plus, X, ChevronDown, ChevronUp, AlertTriangle, Database, RefreshCw, BarChart3 } from 'lucide-react';
 
 interface UserData {
   id: string;
@@ -58,6 +60,12 @@ export const UserManagementPage: React.FC = () => {
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
   const [userActivities, setUserActivities] = useState<Record<string, ActivityLog[]>>({});
   const [loadingActivities, setLoadingActivities] = useState<string | null>(null);
+
+  // Today's active-time-per-user (Cairo calendar day), keyed by user email
+  const [todayActiveSeconds, setTodayActiveSeconds] = useState<Record<string, number>>({});
+
+  // Tab: the user list/management tools, or the Feature Usage report
+  const [activeTab, setActiveTab] = useState<'users' | 'feature-usage'>('users');
 
   // Season Migration states
   const [migrationOpen, setMigrationOpen] = useState(false);
@@ -325,6 +333,24 @@ export const UserManagementPage: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
+  // Live "Active Today" total per user, from each user's dailyActivity sub-collection
+  useEffect(() => {
+    const todayStr = getCairoDateString();
+    const q = query(collectionGroup(db, 'dailyActivity'), where('date', '==', todayStr));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const map: Record<string, number> = {};
+      snapshot.docs.forEach(d => {
+        const email = d.ref.parent.parent?.id;
+        if (!email) return;
+        map[email] = Number(d.data().totalSeconds) || 0;
+      });
+      setTodayActiveSeconds(map);
+    }, (err) => {
+      console.warn('UserManagementPage dailyActivity listener error:', err);
+    });
+    return () => unsubscribe();
+  }, []);
+
   const fetchUsers = async () => {
     try {
       const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
@@ -468,6 +494,36 @@ export const UserManagementPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="flex items-center gap-2 border-b border-slate-200">
+        <button
+          onClick={() => setActiveTab('users')}
+          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors ${
+            activeTab === 'users'
+              ? 'border-indigo-600 text-indigo-700'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <Shield size={16} />
+          Users
+        </button>
+        <button
+          onClick={() => setActiveTab('feature-usage')}
+          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors ${
+            activeTab === 'feature-usage'
+              ? 'border-indigo-600 text-indigo-700'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <BarChart3 size={16} />
+          Feature Usage
+        </button>
+      </div>
+
+      {activeTab === 'feature-usage' && <FeatureUsagePage />}
+
+      {activeTab === 'users' && (
+      <>
       {/* Success Credential Display */}
       {createdUserCreds && (
         <div className="bg-green-50 border border-green-200 rounded-xl p-6 shadow-sm animate-in fade-in slide-in-from-top-4">
@@ -594,6 +650,7 @@ export const UserManagementPage: React.FC = () => {
                 <th className="px-6 py-5 font-bold text-slate-700 whitespace-nowrap">Password</th>
                 <th className="px-6 py-5 font-bold text-slate-700 whitespace-nowrap">Status</th>
                 <th className="px-6 py-5 font-bold text-slate-700 whitespace-nowrap">Current Page</th>
+                <th className="px-6 py-5 font-bold text-slate-700 whitespace-nowrap">Active Today</th>
                 <th className="px-6 py-5 font-bold text-slate-700 whitespace-nowrap">Last Modification</th>
                 <th className="px-6 py-5 font-bold text-slate-700 whitespace-nowrap min-w-[180px]">Role</th>
                 <th className="px-6 py-5 font-bold text-slate-700 text-right whitespace-nowrap px-8">Actions</th>
@@ -602,7 +659,7 @@ export const UserManagementPage: React.FC = () => {
             <tbody className="divide-y divide-slate-100 text-sm">
               {users.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-8 text-center text-slate-500">
+                  <td colSpan={8} className="px-6 py-8 text-center text-slate-500">
                     No users found. Add the first user above.
                   </td>
                 </tr>
@@ -751,6 +808,21 @@ export const UserManagementPage: React.FC = () => {
                         <span className="text-xs text-slate-400 italic">No activity yet</span>
                       )}
                     </td>
+                    {/* Active Today */}
+                    <td className="px-6 py-4">
+                      {(() => {
+                        const seconds = todayActiveSeconds[user.id] || 0;
+                        if (seconds < 60) {
+                          return <span className="text-xs text-slate-400 italic">Not active yet</span>;
+                        }
+                        return (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 w-fit">
+                            <Clock className="w-3 h-3" />
+                            {formatDuration(seconds)}
+                          </span>
+                        );
+                      })()}
+                    </td>
                     {/* Last Modification */}
                     <td className="px-6 py-4">
                       {user.lastModification ? (
@@ -840,7 +912,7 @@ export const UserManagementPage: React.FC = () => {
                   {/* Expanded Activity Row */}
                   {expandedUserId === user.id && (
                     <tr className="bg-indigo-50/50">
-                      <td colSpan={7} className="px-6 py-4">
+                      <td colSpan={8} className="px-6 py-4">
                         <div className="bg-white rounded-lg border border-indigo-100 p-4">
                           <h4 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
                             <Activity size={16} className="text-indigo-600" />
@@ -1306,6 +1378,8 @@ export const UserManagementPage: React.FC = () => {
         </div>
 
       </div>
+      </>
+      )}
     </div>
   );
 };

@@ -98,8 +98,24 @@ service cloud.firestore {
         // Prevent admin from changing their own role to non-admin
         !(getUserEmail() == userEmail && request.resource.data.role != 'admin')
       );
-      
+
       allow delete: if isAdmin();
+
+      // Daily active-time tracking (Users page "Active Today" column +
+      // admin Feature Usage report). Each user can only write their own
+      // bucket; any approved user can read all of them for the reports.
+      match /dailyActivity/{dateId} {
+        allow read: if canRead();
+        allow write: if isAuthenticated() && getUserEmail() == userEmail;
+      }
+    }
+
+    // CollectionGroup rule required for collectionGroup("dailyActivity") queries
+    // (Firestore requires a top-level wildcard match for collectionGroup reads).
+    // Writes always go through the direct users/{email}/dailyActivity path above.
+    match /{path=**}/dailyActivity/{dateId} {
+      allow read: if canRead();
+      allow write: if false;
     }
     
     // ========================================
