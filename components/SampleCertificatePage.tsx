@@ -743,9 +743,11 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
   const uploadSwatch = async (file: File) => {
     setUploading(true);
     try {
+      // Uses the same "samples/" prefix as the rest of the app's image uploads
+      // (SampleTrackingPage etc.) so it works under existing Storage rules.
       const r = ref(storage, isSample
-        ? `fabricSamples/${sampleId}/swatch-${Date.now()}`
-        : `sampleCertificates/${order.id}/swatch-${Date.now()}`);
+        ? `samples/sampleReport_${sampleId}_${Date.now()}.jpg`
+        : `samples/cert_${order.id}_${Date.now()}.jpg`);
       await uploadBytes(r, file);
       update('swatchImageUrl', await getDownloadURL(r));
     } finally { setUploading(false); }
