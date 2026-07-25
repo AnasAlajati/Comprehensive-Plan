@@ -4077,12 +4077,6 @@ const MemoizedOrderRow = React.memo(({
                            else if (row.dyehouse) sourceInfo = 'Source: Order Default (Hierarchy)';
                            else sourceInfo = 'Debug: Checked Batch, Approval & Order - None found.';
 
-                           console.log(`[DyehouseDebug] Row: ${row.id}, Batch: ${idx}, Effective: ${effectiveDyehouse}`, { 
-                               batchDyehouse: batch.dyehouse, 
-                               approvalDyehouse: batch.colorApprovals?.[0]?.dyehouseName, 
-                               orderDyehouse: row.dyehouse 
-                           });
-
                            return (
                             <div className="w-full h-full relative group/debug">
                                 <SearchDropdown

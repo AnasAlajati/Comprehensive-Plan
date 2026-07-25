@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { collectionGroup, collection, query, getDocs, updateDoc, setDoc, doc, where, getDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { getAuth } from 'firebase/auth';
 import { db, storage } from '../services/firebase';
 import { OrderRow } from '../types';
@@ -751,6 +751,14 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
     } finally { setUploading(false); }
   };
 
+  const removeSwatch = async () => {
+    if (!data.swatchImageUrl) return;
+    if (!window.confirm('هل تريد إزالة صورة العينة؟')) return;
+    const url = data.swatchImageUrl;
+    update('swatchImageUrl', '');
+    try { await deleteObject(ref(storage, url)); } catch { /* file may already be gone — safe to ignore */ }
+  };
+
   // ── Needle helpers ──
   const toggleNeedle = (track: string, i: number) => {
     setData(prev => {
@@ -985,7 +993,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                     <Upload size={12} /> {data.swatchImageUrl ? 'تغيير الصورة' : 'رفع صورة'}
                   </button>
                   {data.swatchImageUrl && (
-                    <button type="button" onClick={() => update('swatchImageUrl', '')}
+                    <button type="button" onClick={removeSwatch}
                       className="text-xs font-medium px-3 py-1.5 rounded-lg bg-rose-50 text-rose-500 hover:bg-rose-100 transition-colors">
                       إزالة
                     </button>
