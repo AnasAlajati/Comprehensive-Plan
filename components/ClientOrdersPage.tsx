@@ -1181,6 +1181,8 @@ const MemoizedOrderRow = React.memo(({
   onOpenDelivery,
   visibleColumns,
   onToggleColumnVisibility,
+  colorColWidths,
+  onColorColWidthChange,
   onUploadFabricImage,
   inventory,
   setNoMachineDataModal,
@@ -1233,6 +1235,8 @@ const MemoizedOrderRow = React.memo(({
   onOpenDelivery: (orderId: string, batchIdx: number, batch: DyeingBatch | null) => void;
   visibleColumns: Record<string, boolean>;
   onToggleColumnVisibility: (columnId: string) => void;
+  colorColWidths: Record<string, number>;
+  onColorColWidthChange: (columnId: string, width: number) => void;
   onUploadFabricImage: (fabricId: string, file: File) => void;
   inventory: YarnInventoryItem[];
   setNoMachineDataModal: React.Dispatch<React.SetStateAction<{isOpen: boolean; orderId: string; currentNote: string}>>;
@@ -1256,6 +1260,61 @@ const MemoizedOrderRow = React.memo(({
   const [selectedForGroup, setSelectedForGroup] = React.useState<number[]>([]);
   const [newGroupNote, setNewGroupNote] = React.useState('');
   const [showDyehouseImport, setShowDyehouseImport] = React.useState(false);
+
+  // ── Resizable colors-table columns (per-user, this device) ──────────────
+  // Default widths (px) match the previous Tailwind widths so day-1 looks the same.
+  const COLOR_COL_DEFAULTS: Record<string, number> = {
+    color: 160, colorApproval: 96, dispatchNumber: 96, formationDate: 128,
+    daysAfterFormation: 80, dateSent: 128, daysAfterSent: 80, dyehouse: 128,
+    quantity: 80, machine: 96, accessory: 64, sent: 80, received: 96,
+    remaining: 80, delivery: 96, status: 80, dyehouseStatus: 144, notes: 200, actions: 44,
+  };
+  // Column order + which toggleable id gates them (color/actions are always shown)
+  const COLOR_COL_ORDER: { id: string; always?: boolean }[] = [
+    { id: 'color', always: true }, { id: 'colorApproval' }, { id: 'dispatchNumber' },
+    { id: 'formationDate' }, { id: 'daysAfterFormation' }, { id: 'dateSent' },
+    { id: 'daysAfterSent' }, { id: 'dyehouse' }, { id: 'quantity' }, { id: 'machine' },
+    { id: 'accessory' }, { id: 'sent' }, { id: 'received' }, { id: 'remaining' },
+    { id: 'delivery' }, { id: 'status' }, { id: 'dyehouseStatus' }, { id: 'notes' },
+    { id: 'actions', always: true },
+  ];
+  const [dragColWidths, setDragColWidths] = React.useState<Record<string, number>>({});
+  const resizeRef = React.useRef<{ id: string; startX: number; startW: number } | null>(null);
+  const colW = (id: string) => dragColWidths[id] ?? colorColWidths[id] ?? COLOR_COL_DEFAULTS[id] ?? 100;
+  const visibleColorCols = COLOR_COL_ORDER.filter(c => c.always || visibleColumns[c.id] !== false);
+  const onColResizing = (e: MouseEvent) => {
+    const r = resizeRef.current; if (!r) return;
+    const delta = r.startX - e.clientX; // RTL: dragging the left (trailing) edge left => wider
+    setDragColWidths(prev => ({ ...prev, [r.id]: Math.max(48, Math.round(r.startW + delta)) }));
+  };
+  const onColResizeEnd = () => {
+    const r = resizeRef.current;
+    if (r) {
+      const finalW = dragColWidthsRef.current[r.id];
+      if (typeof finalW === 'number') onColorColWidthChange(r.id, finalW);
+    }
+    resizeRef.current = null;
+    setDragColWidths({});
+    window.removeEventListener('mousemove', onColResizing);
+    window.removeEventListener('mouseup', onColResizeEnd);
+  };
+  const dragColWidthsRef = React.useRef<Record<string, number>>({});
+  dragColWidthsRef.current = dragColWidths;
+  const startColResize = (e: React.MouseEvent, id: string) => {
+    e.preventDefault(); e.stopPropagation();
+    resizeRef.current = { id, startX: e.clientX, startW: colW(id) };
+    window.addEventListener('mousemove', onColResizing);
+    window.addEventListener('mouseup', onColResizeEnd);
+  };
+  // Drag-handle rendered inside a th (sits on the column's trailing/left edge in RTL)
+  const colResizeHandle = (id: string) => (
+    <span
+      onMouseDown={(e) => startColResize(e, id)}
+      onClick={(e) => e.stopPropagation()}
+      className="absolute left-0 top-1 bottom-1 w-1.5 cursor-col-resize hover:bg-indigo-400 rounded z-20"
+      title="اسحب لتغيير عرض العمود"
+    />
+  );
   const [editingGroupId, setEditingGroupId] = React.useState<string | null>(null);
   const [editGroupNote, setEditGroupNote] = React.useState('');
   const [showMachineDetails, setShowMachineDetails] = useState<{ capacity: number; batches: any[] } | null>(null);
@@ -2009,7 +2068,7 @@ const MemoizedOrderRow = React.memo(({
           <td className="p-0 border-r border-slate-200 relative group/fabric sticky left-0 z-10 bg-white sm:static sm:z-auto" title={refCode}>
             <div className={`flex items-center h-full w-full gap-2 px-2 py-1.5 rounded-lg border border-slate-100 bg-white shadow-sm ${groupDepth ? 'pl-6' : ''}`}>
               {/* Fabric Image Thumbnail with Hover Popup */}
-              <div className="relative flex-shrink-0 ml-2 group/img hidden sm:block">
+              <div className="relative flex-shrink-0 ml-2 group/img">
                 {fabricDetails?.imageUrl ? (
                   <>
                     <img 
@@ -2538,14 +2597,28 @@ const MemoizedOrderRow = React.memo(({
               <button
                 onClick={() => onOpenHistory(row)}
                 className={`p-1.5 rounded-md transition-all flex-shrink-0 ${
-                  hasHistory 
-                    ? "text-orange-600 bg-orange-50 hover:bg-orange-100 ring-1 ring-orange-200 shadow-sm" 
+                  hasHistory
+                    ? "text-orange-600 bg-orange-50 hover:bg-orange-100 ring-1 ring-orange-200 shadow-sm"
                     : "text-slate-300 hover:text-slate-500 hover:bg-slate-50 opacity-60 hover:opacity-100"
                 }`}
                 title={hasHistory ? "View Production History" : "No Production History Found"}
               >
                 <History className="w-4 h-4" />
               </button>
+
+              {onOpenSampleCertificate && (
+                <button
+                  onClick={() => onOpenSampleCertificate(row, selectedCustomerName)}
+                  className={`p-1.5 rounded-md transition-all flex-shrink-0 ${
+                    row.sampleCertificate
+                      ? "text-indigo-600 bg-indigo-50 hover:bg-indigo-100 ring-1 ring-indigo-200 shadow-sm"
+                      : "text-slate-300 hover:text-slate-500 hover:bg-slate-50 opacity-60 hover:opacity-100"
+                  }`}
+                  title={row.sampleCertificate ? "Sample Certificate exists — click to open" : "No Sample Certificate yet — click to start one"}
+                >
+                  <ClipboardList className="w-4 h-4" />
+                </button>
+              )}
 
               {userRole === 'admin' && (
                 <button
@@ -3471,11 +3544,14 @@ const MemoizedOrderRow = React.memo(({
       <tr className="bg-slate-50/50 animate-in slide-in-from-top-2 table-row">
         <td colSpan={1} className="border-r border-slate-200"></td>
         <td colSpan={10} className="p-4 border-b border-slate-200 shadow-inner">
-            <div className="bg-white rounded border border-slate-200 overflow-hidden">
-              <table className="w-full text-xs" dir="rtl">
+            <div className="bg-white rounded border border-slate-200 overflow-x-auto">
+              <table className="text-xs" dir="rtl" style={{ tableLayout: 'fixed', width: visibleColorCols.reduce((s, c) => s + colW(c.id), 0), minWidth: '100%' }}>
+                <colgroup>
+                  {visibleColorCols.map(c => <col key={c.id} style={{ width: colW(c.id) }} />)}
+                </colgroup>
                 <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                   <tr>
-                    <th className="px-3 py-2 text-right min-w-[120px] relative">
+                    <th className="px-3 py-2 text-right min-w-[120px] relative sticky right-0 z-20 bg-slate-50 sm:static sm:z-auto">
                       <div className="flex items-center gap-2">
                         <span>اللون</span>
                         {/* Column Visibility Toggle */}
@@ -3513,6 +3589,13 @@ const MemoizedOrderRow = React.memo(({
                                     title="إظهار الكل"
                                   >
                                     إظهار الكل
+                                  </button>
+                                  <button
+                                    onClick={() => onColorColWidthChange('__RESET__', 0)}
+                                    className="text-[9px] text-amber-500 hover:text-amber-700 hover:underline"
+                                    title="إعادة تعيين عرض الأعمدة"
+                                  >
+                                    عرض افتراضي
                                   </button>
                                   <button
                                     onClick={() => setShowColumnPicker(false)}
@@ -3559,25 +3642,26 @@ const MemoizedOrderRow = React.memo(({
                           )}
                         </div>
                       </div>
+                      {colResizeHandle('color')}
                     </th>
-                    {visibleColumns['colorApproval'] !== false && <th className="px-3 py-2 text-right w-24">موافقة اللون</th>}
-                    {visibleColumns['dispatchNumber'] !== false && <th className="px-3 py-2 text-right w-24">رقم الازن</th>}
-                    {visibleColumns['formationDate'] !== false && <th className="px-3 py-2 text-right w-32">تاريخ التشكيل</th>}
-                    {visibleColumns['daysAfterFormation'] !== false && <th className="px-3 py-2 text-center w-20 text-[9px] text-slate-400">ايام بعد التشكيل</th>}
-                    {visibleColumns['dateSent'] !== false && <th className="px-3 py-2 text-right w-32">تاريخ الارسال</th>}
-                    {visibleColumns['daysAfterSent'] !== false && <th className="px-3 py-2 text-center w-20 text-[9px] text-slate-400">ايام بعد الارسال</th>}
-                    {visibleColumns['dyehouse'] !== false && <th className="px-3 py-2 text-right w-32">المصبغة</th>}
-                    {visibleColumns['quantity'] !== false && <th className="px-3 py-2 text-center w-20" title="Customer Demand">مطلوب</th>}
-                    {visibleColumns['machine'] !== false && <th className="px-3 py-2 text-center w-24" title="Vessel Capacity">ماكنة الصباغة</th>}
-                    {visibleColumns['accessory'] !== false && <th className="px-3 py-2 text-center w-16">اكسسوار</th>}
-                    {visibleColumns['sent'] !== false && <th className="px-3 py-2 text-center w-20" title="Sent">مرسل</th>}
-                    {visibleColumns['received'] !== false && <th className="px-3 py-2 text-center w-24" title="Click to add receive">مستلم</th>}
-                    {visibleColumns['remaining'] !== false && <th className="px-3 py-2 text-center w-20" title="Sent - Received">متبقي</th>}
-                    {visibleColumns['delivery'] !== false && <th className="px-3 py-2 text-center w-24" title="Customer Delivery">التسليم</th>}
-                    {visibleColumns['status'] !== false && <th className="px-3 py-2 text-center w-20">الحالة</th>}
-                    {visibleColumns['dyehouseStatus'] !== false && <th className="px-3 py-2 text-center w-36">وضع جوا المصبغة</th>}
-                    {visibleColumns['notes'] !== false && <th className="px-3 py-2 text-right">ملاحظات</th>}
-                    <th className="px-3 py-2 w-10"></th>
+                    {visibleColumns['colorApproval'] !== false && <th className="px-3 py-2 text-right relative">موافقة اللون{colResizeHandle('colorApproval')}</th>}
+                    {visibleColumns['dispatchNumber'] !== false && <th className="px-3 py-2 text-right relative">رقم الازن{colResizeHandle('dispatchNumber')}</th>}
+                    {visibleColumns['formationDate'] !== false && <th className="px-3 py-2 text-right relative">تاريخ التشكيل{colResizeHandle('formationDate')}</th>}
+                    {visibleColumns['daysAfterFormation'] !== false && <th className="px-3 py-2 text-center text-[9px] text-slate-400 relative">ايام بعد التشكيل{colResizeHandle('daysAfterFormation')}</th>}
+                    {visibleColumns['dateSent'] !== false && <th className="px-3 py-2 text-right relative">تاريخ الارسال{colResizeHandle('dateSent')}</th>}
+                    {visibleColumns['daysAfterSent'] !== false && <th className="px-3 py-2 text-center text-[9px] text-slate-400 relative">ايام بعد الارسال{colResizeHandle('daysAfterSent')}</th>}
+                    {visibleColumns['dyehouse'] !== false && <th className="px-3 py-2 text-right relative">المصبغة{colResizeHandle('dyehouse')}</th>}
+                    {visibleColumns['quantity'] !== false && <th className="px-3 py-2 text-center relative" title="Customer Demand">مطلوب{colResizeHandle('quantity')}</th>}
+                    {visibleColumns['machine'] !== false && <th className="px-3 py-2 text-center relative" title="Vessel Capacity">ماكنة الصباغة{colResizeHandle('machine')}</th>}
+                    {visibleColumns['accessory'] !== false && <th className="px-3 py-2 text-center relative">اكسسوار{colResizeHandle('accessory')}</th>}
+                    {visibleColumns['sent'] !== false && <th className="px-3 py-2 text-center relative" title="Sent">مرسل{colResizeHandle('sent')}</th>}
+                    {visibleColumns['received'] !== false && <th className="px-3 py-2 text-center relative" title="Click to add receive">مستلم{colResizeHandle('received')}</th>}
+                    {visibleColumns['remaining'] !== false && <th className="px-3 py-2 text-center relative" title="Sent - Received">متبقي{colResizeHandle('remaining')}</th>}
+                    {visibleColumns['delivery'] !== false && <th className="px-3 py-2 text-center relative" title="Customer Delivery">التسليم{colResizeHandle('delivery')}</th>}
+                    {visibleColumns['status'] !== false && <th className="px-3 py-2 text-center relative">الحالة{colResizeHandle('status')}</th>}
+                    {visibleColumns['dyehouseStatus'] !== false && <th className="px-3 py-2 text-center relative">وضع جوا المصبغة{colResizeHandle('dyehouseStatus')}</th>}
+                    {visibleColumns['notes'] !== false && <th className="px-3 py-2 text-right relative">ملاحظات{colResizeHandle('notes')}</th>}
+                    <th className="px-3 py-2"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -3781,7 +3865,9 @@ const MemoizedOrderRow = React.memo(({
                       elements.push(
                     <tr key={batch.id || idx} className={`group/batch ${rowBgClass}`} style={rowStyle}>
                       {/* Planned Info Tooltip for locked batches */}
-                      <td className="p-0 relative">
+                      {/* Sticky on phone so the color stays visible while scrolling horizontally
+                          through the rest of the columns (mirrors the Fabric-name column). */}
+                      <td className={`p-0 relative sticky right-0 z-10 sm:static sm:z-auto ${currentGroupId ? 'bg-indigo-50' : 'bg-white'}`}>
                         <div className="flex items-center h-full pl-2">
                             {/* Checkbox for grouping */}
                             {isGroupingMode && canEditColors && (
@@ -4836,15 +4922,18 @@ const MemoizedOrderRow = React.memo(({
                           اضافة لون
                         </button>
 
-                        {/* Import from Excel - only for orders with no colors yet */}
-                        {canEditColors && (row.dyeingPlan || []).length === 0 && (
+                        {/* Import/reconcile from Excel — always available: adds new colors and
+                            updates existing ones (matched by color + dispatch number) from the
+                            same pasted sheet, so re-pasting a sheet after it's shipped/received
+                            reconciles sent/received instead of duplicating colors. */}
+                        {canEditColors && (
                           <button
                             onClick={() => setShowDyehouseImport(true)}
                             className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 px-2 py-1 rounded hover:bg-emerald-50 transition-colors border border-emerald-200"
-                            title="استيراد ألوان المصبغة من ملف Excel"
+                            title="استيراد أو تحديث ألوان المصبغة من ملف Excel أو باللصق"
                           >
                             <FileSpreadsheet className="w-3 h-3" />
-                            استيراد من اكسل
+                            استيراد / تحديث من اكسل
                           </button>
                         )}
 
@@ -5139,14 +5228,15 @@ const MemoizedOrderRow = React.memo(({
       document.body
     )}
 
-    {showDyehouseImport && (
+    {showDyehouseImport && createPortal(
       <DyehouseFabricImportModal
         isOpen={showDyehouseImport}
         onClose={() => setShowDyehouseImport(false)}
         order={row}
         dyehouses={dyehouses as Dyehouse[]}
-        onImport={(batches) => handleUpdateOrder(row.id, { dyeingPlan: [...(row.dyeingPlan || []), ...batches] })}
-      />
+        onImport={(nextDyeingPlan) => handleUpdateOrder(row.id, { dyeingPlan: nextDyeingPlan })}
+      />,
+      document.body
     )}
     </>
   );
@@ -5267,7 +5357,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       const elapsed = Date.now() - loadStartRef.current;
       setLoadTimeMs(elapsed);
       setShowLoadTime(true);
-      const t = setTimeout(() => setShowLoadTime(false), 20000);
+      const t = setTimeout(() => setShowLoadTime(false), 2000);
       return () => clearTimeout(t);
     }
   }, [isFullyLoaded, loadTimeMs]);
@@ -5456,6 +5546,23 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       ...prev,
       [columnId]: prev[columnId] === false ? true : false
     }));
+  };
+
+  // Colors-table column WIDTHS (localStorage for user-only persistence, this device)
+  const [colorColWidths, setColorColWidths] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem('manageColorsColWidths');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    localStorage.setItem('manageColorsColWidths', JSON.stringify(colorColWidths));
+  }, [colorColWidths]);
+  const handleColorColWidthChange = (columnId: string, width: number) => {
+    if (columnId === '__RESET__') { setColorColWidths({}); return; }
+    setColorColWidths(prev => ({ ...prev, [columnId]: width }));
   };
 
   // Orders Table Column Visibility
@@ -9857,47 +9964,58 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                         >
                                           <Eye size={11} />
                                         </button>
-                                        {showOrdersColPicker && (
+                                        {showOrdersColPicker && createPortal(
                                           <div
-                                            className="fixed left-12 top-1/4 z-[9999] bg-white border border-slate-200 rounded-xl shadow-2xl p-3 min-w-[200px]"
-                                            onClick={(e) => e.stopPropagation()}
+                                            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/30 p-4"
+                                            onClick={() => setShowOrdersColPicker(false)}
                                           >
-                                            <div className="flex items-center justify-between mb-2 pb-2 border-b border-slate-100">
-                                              <span className="text-xs font-semibold text-slate-600">Visible Columns</span>
-                                              <button onClick={() => setShowOrdersColPicker(false)} className="text-slate-400 hover:text-slate-600 text-xs">✕</button>
+                                            <div
+                                              className="bg-white border border-slate-200 rounded-xl shadow-2xl w-full max-w-xs max-h-[80vh] flex flex-col overflow-hidden"
+                                              onClick={(e) => e.stopPropagation()}
+                                            >
+                                              <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-100 shrink-0">
+                                                <span className="text-xs font-semibold text-slate-600">Visible Columns</span>
+                                                <button onClick={() => setShowOrdersColPicker(false)} className="text-slate-400 hover:text-slate-600 p-1 -m-1">✕</button>
+                                              </div>
+                                              <div className="p-3 overflow-y-auto">
+                                                {isMobileScreen && (
+                                                  <p className="text-[10px] text-slate-400 mb-2">Status is always shown on phone.</p>
+                                                )}
+                                                {[
+                                                  { id: 'reqGsm', label: 'Req GSM' },
+                                                  { id: 'reqWidth', label: 'Req Width' },
+                                                  { id: 'customerOrderedQty', label: 'QTY Customer Ordered' },
+                                                  { id: 'accessories', label: 'Accessories' },
+                                                  { id: 'accQty', label: 'Acc. Qty' },
+                                                  { id: 'status', label: 'Status' },
+                                                  { id: 'dyehousePlan', label: 'Dyehouse Plan' },
+                                                  { id: 'ordered', label: 'To Be Produced' },
+                                                  { id: 'produced', label: 'Produced' },
+                                                  { id: 'remaining', label: 'Remaining' },
+                                                  { id: 'receiveDate', label: 'Receive Date' },
+                                                  { id: 'promisedDeliveryDate', label: 'Promised Delivery' },
+                                                  { id: 'startDate', label: 'Start Date' },
+                                                  { id: 'endDate', label: 'End Date' },
+                                                  { id: 'scrap', label: 'Scrap' },
+                                                  { id: 'others', label: 'Others' },
+                                                  { id: 'delivery', label: 'Delivery' },
+                                                  { id: 'notes', label: 'Notes' },
+                                                  { id: 'reorder', label: 'Reorder' },
+                                                ].filter(col => !(isMobileScreen && col.id === 'status')).map(col => (
+                                                  <label key={col.id} className="flex items-center gap-2 py-1.5 px-1 rounded hover:bg-slate-50 cursor-pointer">
+                                                    <input
+                                                      type="checkbox"
+                                                      checked={ordersVisibleCols[col.id] !== false}
+                                                      onChange={() => handleToggleOrdersCol(col.id)}
+                                                      className="w-3.5 h-3.5 accent-indigo-600"
+                                                    />
+                                                    <span className="text-xs text-slate-700">{col.label}</span>
+                                                  </label>
+                                                ))}
+                                              </div>
                                             </div>
-                                            {[
-                                              { id: 'reqGsm', label: 'Req GSM' },
-                                              { id: 'reqWidth', label: 'Req Width' },
-                                              { id: 'customerOrderedQty', label: 'QTY Customer Ordered' },
-                                              { id: 'accessories', label: 'Accessories' },
-                                              { id: 'accQty', label: 'Acc. Qty' },
-                                              { id: 'status', label: 'Status' },
-                                              { id: 'dyehousePlan', label: 'Dyehouse Plan' },
-                                              { id: 'ordered', label: 'To Be Produced' },
-                                              { id: 'produced', label: 'Produced' },
-                                              { id: 'remaining', label: 'Remaining' },
-                                              { id: 'receiveDate', label: 'Receive Date' },
-                                              { id: 'promisedDeliveryDate', label: 'Promised Delivery' },
-                                              { id: 'startDate', label: 'Start Date' },
-                                              { id: 'endDate', label: 'End Date' },
-                                              { id: 'scrap', label: 'Scrap' },
-                                              { id: 'others', label: 'Others' },
-                                              { id: 'delivery', label: 'Delivery' },
-                                              { id: 'notes', label: 'Notes' },
-                                              { id: 'reorder', label: 'Reorder' },
-                                            ].map(col => (
-                                              <label key={col.id} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-slate-50 cursor-pointer">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={ordersVisibleCols[col.id] !== false}
-                                                  onChange={() => handleToggleOrdersCol(col.id)}
-                                                  className="w-3 h-3 accent-indigo-600"
-                                                />
-                                                <span className="text-xs text-slate-700">{col.label}</span>
-                                              </label>
-                                            ))}
-                                          </div>
+                                          </div>,
+                                          document.body
                                         )}
                                       </div>
                                     </div>
@@ -9911,7 +10029,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                               )}
                               {!showDyehouse && (
                                 <>
-                                  {ordersVisibleCols['status'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-28">Status</th>}
+                                  {(isMobileScreen || ordersVisibleCols['status'] !== false) && <th className="p-3 text-center border-b border-r border-slate-200 w-28">Status</th>}
                                   {ordersVisibleCols['dyehousePlan'] !== false && <th className="p-3 text-center border-b border-r border-slate-200 w-32 bg-indigo-50">Dyehouse Plan</th>}
                                   {ordersVisibleCols['ordered'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20">To Be Produced</th>}
                                   {ordersVisibleCols['produced'] !== false && <th className="p-3 text-right border-b border-r border-slate-200 w-20 bg-emerald-50 text-emerald-700">Produced</th>}
@@ -10040,10 +10158,12 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                     }}
                                     visibleColumns={manageColorsVisibleColumns}
                                     onToggleColumnVisibility={handleToggleColumnVisibility}
+                                    colorColWidths={colorColWidths}
+                                    onColorColWidthChange={handleColorColWidthChange}
                                     onUploadFabricImage={handleUploadFabricImage}
                                     inventory={inventory}
                                     setNoMachineDataModal={setNoMachineDataModal}
-                                    ordersColVis={ordersVisibleCols}
+                                    ordersColVis={isMobileScreen ? { ...ordersVisibleCols, status: true } : ordersVisibleCols}
                                     onReorder={handleReorderRow}
                                     transferAdjustment={customerTransfers.reduce((sum, t) => {
                                       if (t.toOrderId === row.id) return sum + (Number(t.quantity) || 0);
@@ -11320,6 +11440,17 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         )}
 
 
+
+        {/* Sample Certificate Modal — opened from the status column's report indicator */}
+        {sampleCertModal && (
+          <SampleCertificatePage
+            order={sampleCertModal.order}
+            clientName={sampleCertModal.clientName}
+            onClose={() => setSampleCertModal(null)}
+            userRole={userRole}
+            userName={userName}
+          />
+        )}
 
         {/* Customer Delivery Modal */}
         {deliveryModal.isOpen && deliveryModal.batches !== null && (

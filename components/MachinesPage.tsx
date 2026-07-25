@@ -3,19 +3,12 @@ import { collection, getDocs, doc, updateDoc, deleteDoc } from 'firebase/firesto
 import { db } from '../services/firebase';
 import { MachineRow, FabricDefinition, MachineStatus } from '../types';
 import { Settings, Box, Info, Search, X, Layers, List, CheckCircle2, Trash2, AlertTriangle } from 'lucide-react';
+import { getMachineCategory } from '../utils/fabricMachineDna';
 
 interface MachinesPageProps {
   machines: MachineRow[];
   userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | null;
 }
-
-// Helper to normalize machine type
-const getMachineCategory = (type: string = '') => {
-  const t = type.toLowerCase();
-  if (t.includes('single') || t.includes('jersey') || t.includes('fleece')) return 'Single Jersey';
-  if (t.includes('double') || t.includes('rib') || t.includes('interlock')) return 'Double Jersey';
-  return 'Other';
-};
 
 const EditableCell = ({ 
   value, 

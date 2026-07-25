@@ -2,13 +2,14 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { MachineRow, PlanItem } from '../types';
 
 /**
- * Safely retrieve the API key from various environment configurations.
- * This prevents "process is not defined" errors in browsers.
+ * Retrieve the API key from the environment. SECURITY: never hardcode a key
+ * here — anything in this file ships inside the public JS bundle. The old
+ * hardcoded fallback key was removed and must be treated as compromised
+ * (rotate it in Google Cloud Console).
  */
 const getAiClient = () => {
-  // Check for Vite env (most likely on Vercel) or Standard React env
   // @ts-ignore
-  const apiKey = import.meta.env?.VITE_GOOGLE_API_KEY || process.env.REACT_APP_GOOGLE_API_KEY || process.env.API_KEY || "AIzaSyC4dqr5i9Bo_oKNzdgl2Uv1CtHMB8wBPdo";
+  const apiKey = import.meta.env?.VITE_GOOGLE_API_KEY;
 
   if (!apiKey) {
     throw new Error("Missing Google API Key. Please set VITE_GOOGLE_API_KEY in your environment variables.");

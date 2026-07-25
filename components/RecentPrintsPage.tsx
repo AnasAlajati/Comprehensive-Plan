@@ -3,6 +3,7 @@ import { collection, query, orderBy, onSnapshot, limit, doc, getDoc, getDocs } f
 import { db } from '../services/firebase';
 import { ProductionTicket, MachineRow, OrderRow } from '../types';
 import { ReportViewer, CertEntry } from './FabricReportsPage';
+import { OrderPickerModal } from './OrderPickerModal';
 import {
   Printer,
   Calendar,
@@ -15,7 +16,12 @@ import {
   TrendingUp,
   AlertCircle,
   CheckCircle,
+  CheckCircle2,
   FileText,
+  FileEdit,
+  Layers,
+  Plus,
+  Sparkles,
 } from 'lucide-react';
 
 interface RecentPrintsPageProps {
@@ -23,9 +29,10 @@ interface RecentPrintsPageProps {
   selectedDate?: string;
   onNavigateToOrder?: (order: any) => void;
   userRole?: string;
+  userName?: string;
 }
 
-export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [], selectedDate, onNavigateToOrder, userRole }) => {
+export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [], selectedDate, onNavigateToOrder, userRole, userName }) => {
   const [tickets, setTickets] = useState<ProductionTicket[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -68,6 +75,32 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
       setKnittingFabrics(names);
     }).catch(() => {});
   }, []);
+
+  // orderId → sample-certificate status (has the report been worked on?)
+  const [certStatusMap, setCertStatusMap] = useState<Record<string, 'draft' | 'finalized'>>({});
+  // Full cert docs, so manually-started reports (no printed ticket) can render their own cards.
+  const [allCerts, setAllCerts] = useState<CertEntry[]>([]);
+  useEffect(() => {
+    getDocs(collection(db, 'sample_certificates')).then(snap => {
+      const map: Record<string, 'draft' | 'finalized'> = {};
+      const certs: CertEntry[] = [];
+      snap.docs.forEach(d => {
+        const data = d.data() as any;
+        const orderId = data.orderId || d.id;
+        map[orderId] = data.status === 'finalized' ? 'finalized' : 'draft';
+        certs.push({ ...data, orderId } as CertEntry);
+      });
+      setCertStatusMap(map);
+      setAllCerts(certs);
+    }).catch(() => {});
+  }, []);
+
+  // Reports started via "Add New Report" that were never printed as a Production Order.
+  const [showPicker, setShowPicker] = useState(false);
+  const manualOnlyCerts = useMemo(
+    () => allCerts.filter(c => !tickets.some(t => t.orderId === c.orderId)),
+    [allCerts, tickets]
+  );
 
   // Fetch Recent Tickets
   useEffect(() => {
@@ -145,6 +178,63 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
     return groups;
   }, [filteredTickets]);
 
+  // Manual reports, filtered the same way printed tickets are (search + day filter),
+  // keyed by when they were saved so they can sit inside the same date groups as
+  // printed tickets instead of piling up forever in their own pinned section.
+  const filteredManualCerts = useMemo(() => {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const searchLower = searchTerm.toLowerCase();
+
+    return manualOnlyCerts.filter(cert => {
+      const matchesSearch = !searchLower ||
+        cert.clientName?.toLowerCase().includes(searchLower) ||
+        cert.material?.toLowerCase().includes(searchLower);
+      if (!matchesSearch) return false;
+
+      if (dayFilter !== 'all' && cert.lastSavedAt) {
+        const certDate = new Date(cert.lastSavedAt);
+        const daysDiff = Math.floor((now.getTime() - certDate.getTime()) / (1000 * 60 * 60 * 24));
+        switch (dayFilter) {
+          case 'today': return certDate >= startOfToday;
+          case '3days': return daysDiff < 3;
+          case '7days': return daysDiff < 7;
+        }
+      }
+      return true;
+    });
+  }, [manualOnlyCerts, searchTerm, dayFilter]);
+
+  // Same day-grouping as groupedByDay, but merges in manual reports (keyed by
+  // lastSavedAt) so a manual report appears next to the date it was actually
+  // made instead of in an ever-growing pinned block at the top of the page.
+  const groupedByDayCombined = useMemo(() => {
+    const groups: Record<string, { tickets: ProductionTicket[]; manualCerts: CertEntry[]; sortKey: number }> = {};
+    const dateKey = (iso: string) => new Date(iso).toLocaleDateString('en-GB', {
+      weekday: 'short', year: 'numeric', month: 'short', day: 'numeric'
+    });
+
+    filteredTickets.forEach(ticket => {
+      const ts = new Date(ticket.printedAt).getTime();
+      const date = dateKey(ticket.printedAt);
+      if (!groups[date]) groups[date] = { tickets: [], manualCerts: [], sortKey: ts };
+      groups[date].tickets.push(ticket);
+      groups[date].sortKey = Math.max(groups[date].sortKey, ts);
+    });
+
+    filteredManualCerts.forEach(cert => {
+      if (!cert.lastSavedAt) return;
+      const ts = new Date(cert.lastSavedAt).getTime();
+      if (Number.isNaN(ts)) return;
+      const date = dateKey(cert.lastSavedAt);
+      if (!groups[date]) groups[date] = { tickets: [], manualCerts: [], sortKey: ts };
+      groups[date].manualCerts.push(cert);
+      groups[date].sortKey = Math.max(groups[date].sortKey, ts);
+    });
+
+    return Object.entries(groups).sort((a, b) => b[1].sortKey - a[1].sortKey);
+  }, [filteredTickets, filteredManualCerts]);
+
   // Statistics
   const stats = useMemo(() => {
     return {
@@ -163,6 +253,7 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
         cert={openReport.cert}
         onClose={() => setOpenReport(null)}
         userRole={userRole}
+        userName={userName}
       />
     );
   }
@@ -183,6 +274,12 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
               <p className="text-slate-500 mt-2">Track and review all production orders printed today and earlier</p>
             </div>
 
+            <button
+              onClick={() => setShowPicker(true)}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-br from-indigo-600 to-purple-600 text-white font-semibold text-sm shadow-md hover:shadow-lg transition-shadow"
+            >
+              <Plus size={18} /> إضافة تقرير جديد
+            </button>
           </div>
 
           {/* Filters */}
@@ -227,7 +324,7 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
               <div className="absolute inset-2 bg-white rounded-full"></div>
             </div>
           </div>
-        ) : filteredTickets.length === 0 ? (
+        ) : groupedByDayCombined.length === 0 ? (
           <div className="text-center py-24">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 mb-4">
               <Printer className="w-8 h-8 text-slate-400" />
@@ -237,7 +334,7 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
           </div>
         ) : (
           <div className="space-y-10">
-            {Object.entries(groupedByDay).map(([date, dayTickets]: [string, ProductionTicket[]]) => (
+            {groupedByDayCombined.map(([date, group]) => (
               <div key={date}>
                 {/* Day Header */}
                 <div className="flex items-center gap-4 mb-6">
@@ -246,15 +343,24 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
                     <Calendar className="w-5 h-5 text-indigo-600" />
                     <span className="font-bold text-slate-900">{date}</span>
                     <span className="text-sm text-slate-600 font-medium bg-white px-2 py-0.5 rounded-full border border-slate-200">
-                      {dayTickets.length}
+                      {group.tickets.length + group.manualCerts.length}
                     </span>
                   </div>
                   <div className="flex-1 h-px bg-gradient-to-l from-slate-300 to-transparent"></div>
                 </div>
 
-                {/* Report Cards Grid */}
+                {/* Report Cards Grid — manual reports sit alongside printed ones on
+                    the day they were actually made, instead of piling up in their
+                    own ever-growing section at the top of the page. */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {dayTickets.map(ticket => (
+                  {group.manualCerts.map(cert => (
+                    <ManualReportCard
+                      key={cert.orderId}
+                      cert={cert}
+                      onOpenReport={(order, clientName, c) => setOpenReport({ order, clientName, cert: c })}
+                    />
+                  ))}
+                  {group.tickets.map(ticket => (
                     <ReportCard
                       key={ticket.id}
                       ticket={ticket}
@@ -265,12 +371,94 @@ export const RecentPrintsPage: React.FC<RecentPrintsPageProps> = ({ machines = [
                         const m = ticket.fabricName?.match(/\[([^\]]+)\]/);
                         return m ? knittingFabrics.has(m[1].trim()) : false;
                       })()}
+                      certStatus={certStatusMap[ticket.orderId] || 'none'}
                       userRole={userRole}
                     />
                   ))}
                 </div>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+
+      <OrderPickerModal
+        isOpen={showPicker}
+        onClose={() => setShowPicker(false)}
+        onSelect={(order, clientName) => {
+          const stubOrder: OrderRow = {
+            id: order.id,
+            material: order.material,
+            machine: '',
+            requiredQty: order.requiredQty,
+            accessory: '', manufacturedQty: 0, remainingQty: order.remainingQty,
+            orderReceiptDate: '', startDate: '', endDate: '',
+            scrapQty: 0, others: '', notes: '', batchDeliveries: 0, accessoryDeliveries: 0,
+          };
+          const stubCert: CertEntry = {
+            orderId: order.id,
+            clientName,
+            material: order.material,
+            sampleNumber: '', date: '', status: 'draft',
+            lastSavedAt: '', finalizedAt: '', finalizedBy: '',
+            rawWeight: '', rawWidth: '', finishedWeight: '', finishedWidth: '',
+          };
+          setShowPicker(false);
+          setOpenReport({ order: stubOrder, clientName, cert: stubCert });
+        }}
+      />
+    </div>
+  );
+};
+
+const ManualReportCard: React.FC<{
+  cert: CertEntry;
+  onOpenReport: (order: OrderRow, clientName: string, cert: CertEntry) => void;
+}> = ({ cert, onOpenReport }) => {
+  const isFinalized = cert.status === 'finalized';
+  return (
+    <div className={`group relative bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200 border-l-4 ${
+      isFinalized ? 'border-l-emerald-500 border-y border-r border-slate-200' : 'border-l-purple-400 border-y border-r border-slate-200'
+    }`}>
+      <div className="p-5">
+        <div className="flex items-start justify-between mb-4">
+          <div className="flex-1 min-w-0 pr-2">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1 truncate">{cert.clientName}</h3>
+            <p className="text-base font-extrabold text-slate-800 leading-tight line-clamp-2">{cert.material}</p>
+            <span className={`inline-flex items-center gap-1 mt-2 px-2 py-0.5 text-[10px] font-bold rounded border ${
+              isFinalized ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-purple-50 text-purple-700 border-purple-200'
+            }`}>
+              {isFinalized ? <CheckCircle2 size={10} /> : <FileEdit size={10} />}
+              {isFinalized ? 'Report Approved' : 'Report Draft'}
+            </span>
+          </div>
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-purple-100/80 text-purple-700 uppercase tracking-wide shrink-0">
+            <Sparkles size={10} /> تقرير
+          </span>
+        </div>
+
+        <div className="h-px bg-slate-100 my-4 w-full" />
+
+        <button
+          onClick={() => {
+            const stubOrder: OrderRow = {
+              id: cert.orderId, material: cert.material, machine: '', requiredQty: 0,
+              accessory: '', manufacturedQty: 0, remainingQty: 0,
+              orderReceiptDate: '', startDate: '', endDate: '',
+              scrapQty: 0, others: '', notes: '', batchDeliveries: 0, accessoryDeliveries: 0,
+            };
+            onOpenReport(stubOrder, cert.clientName, cert);
+          }}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-purple-50 hover:bg-purple-100 text-purple-600 text-xs font-semibold transition-colors border border-purple-100"
+        >
+          <FileText className="w-3.5 h-3.5" />
+          فتح التقرير
+        </button>
+
+        {cert.lastSavedAt && (
+          <div className="pt-3 mt-3 flex items-center gap-1.5 text-xs text-slate-400 border-t border-slate-50">
+            <Clock className="w-3.5 h-3.5 text-slate-300" />
+            آخر حفظ: {new Date(cert.lastSavedAt).toLocaleString('en-GB')}
           </div>
         )}
       </div>
@@ -284,8 +472,9 @@ const ReportCard: React.FC<{
   activeDay: string;
   onOpenReport: (order: OrderRow, clientName: string, cert: CertEntry) => void;
   hasKnitting?: boolean;
+  certStatus?: 'none' | 'draft' | 'finalized';
   userRole?: string;
-}> = ({ ticket, machines, activeDay, onOpenReport, hasKnitting, userRole }) => {
+}> = ({ ticket, machines, activeDay, onOpenReport, hasKnitting, certStatus, userRole }) => {
   const printTime = new Date(ticket.printedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const printDate = new Date(ticket.printedAt).toLocaleDateString('en-GB');
   const isNew = (Date.now() - new Date(ticket.printedAt).getTime()) < 1000 * 60 * 60; // < 1 hour
@@ -375,21 +564,31 @@ const ReportCard: React.FC<{
             </h3>
             <p className="text-base font-extrabold text-slate-800 leading-tight line-clamp-2">{ticket.fabricName}</p>
 
-            {(['admin', 'factory_manager'] as string[]).includes(userRole ?? '') && (
-              hasKnitting ? (
-                <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 bg-teal-50 text-teal-700 text-[10px] font-bold rounded border border-teal-200">
-                  ✓ Knitting Structure
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 bg-slate-100 text-slate-400 text-[10px] font-semibold rounded border border-slate-200 italic">
-                  No Knitting Structure
-                </span>
-              )
-            )}
+            {/* Documentation status — report (everyone) + knitting structure (admin/factory_manager) */}
+            <div className="flex flex-wrap items-center gap-1.5 mt-2">
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded border ${
+                certStatus === 'finalized' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : certStatus === 'draft'  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                  : 'bg-slate-100 text-slate-400 border-slate-200'
+              }`}>
+                {certStatus === 'finalized' ? <CheckCircle2 size={10} /> : certStatus === 'draft' ? <FileEdit size={10} /> : <FileText size={10} />}
+                {certStatus === 'finalized' ? 'Report Approved' : certStatus === 'draft' ? 'Report Draft' : 'No Report'}
+              </span>
 
-            {/* Planned Machines - More subtle */}
+              {(['admin', 'factory_manager'] as string[]).includes(userRole ?? '') && (
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded border ${
+                  hasKnitting ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-slate-100 text-slate-400 border-slate-200'
+                }`}>
+                  <Layers size={10} />
+                  {hasKnitting ? 'Knitting Structure' : 'No Knitting Structure'}
+                </span>
+              )}
+            </div>
+
+            {/* Planned Machines — labeled so it isn't mistaken for another status badge */}
             {ticket.snapshot?.plannedMachines && ticket.snapshot.plannedMachines.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mt-2.5">
+              <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
+                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Machines</span>
                 {ticket.snapshot.plannedMachines.map(m => (
                   <span key={m} className="px-2 py-0.5 bg-slate-100 text-slate-600 text-[10px] font-bold uppercase rounded border border-slate-200">
                     {m}

@@ -107,21 +107,62 @@ export const DailySummaryModal: React.FC<DailySummaryModalProps> = ({
 
   if (!isOpen) return null;
 
-  // 1. Filter Finished Machines
-  const finishedMachines = machines.filter(m => 
-    (Number(m.remainingMfg) || 0) === 0 && 
-    (Number(m.dayProduction) || 0) > 0
+  // Machines now support multiple production runs per day via `extraSessions`
+  // (a machine can finish one client's fabric and start another the same day).
+  // Each run — the main slot plus every extra session — needs to be checked
+  // independently for "finished" / "low stock", since each has its own
+  // fabric/client/remainingMfg/dayProduction.
+  type SummaryRun = {
+    key: string;
+    machine: MachineRow;
+    fabric: string;
+    client: string;
+    dayProduction: number;
+    remainingMfg: number;
+  };
+
+  const buildRuns = (list: MachineRow[]): SummaryRun[] => {
+    const runs: SummaryRun[] = [];
+    list.forEach(m => {
+      runs.push({
+        key: `${m.id}-main`,
+        machine: m,
+        fabric: m.material || (m as any).fabric || '',
+        client: m.client || '',
+        dayProduction: Number(m.dayProduction) || 0,
+        remainingMfg: Number(m.remainingMfg) || 0,
+      });
+      ((m as any).extraSessions || []).forEach((es: any, idx: number) => {
+        runs.push({
+          key: `${m.id}-extra-${idx}`,
+          machine: m,
+          fabric: es.fabric || '',
+          client: es.client || '',
+          dayProduction: Number(es.dayProduction) || 0,
+          remainingMfg: Number(es.remainingMfg) || 0,
+        });
+      });
+    });
+    return runs;
+  };
+
+  const allRuns = buildRuns(machines);
+
+  // 1. Filter Finished Runs
+  const finishedRuns = allRuns.filter(r =>
+    r.remainingMfg === 0 &&
+    r.dayProduction > 0
   );
 
-  // 2. Filter Low Stock Machines
+  // 2. Filter Low Stock Runs
   // Logic from send report: status === 'Working' && remaining < 100 && remaining > 0
-  const lowStockMachines = machines.filter(m => 
-    m.status === MachineStatus.WORKING && 
-    (Number(m.remainingMfg) || 0) < 100 && 
-    (Number(m.remainingMfg) || 0) > 0
+  const lowStockRuns = allRuns.filter(r =>
+    r.machine.status === MachineStatus.WORKING &&
+    r.remainingMfg < 100 &&
+    r.remainingMfg > 0
   );
 
-  const hasNoAlerts = finishedMachines.length === 0 && lowStockMachines.length === 0;
+  const hasNoAlerts = finishedRuns.length === 0 && lowStockRuns.length === 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
@@ -160,33 +201,34 @@ export const DailySummaryModal: React.FC<DailySummaryModalProps> = ({
           )}
 
           {/* Finished Machines Section */}
-          {finishedMachines.length > 0 && (
+          {finishedRuns.length > 0 && (
             <div className="space-y-3">
               <h3 className="text-sm font-bold text-emerald-700 uppercase tracking-wider flex items-center gap-2">
                 <CheckCircle2 size={16} />
                 Finished Production
                 <span className="bg-emerald-100 text-emerald-800 text-xs px-2 py-0.5 rounded-full">
-                  {finishedMachines.length}
+                  {finishedRuns.length}
                 </span>
               </h3>
-              
+
               <div className="grid gap-3 sm:grid-cols-2">
-                {finishedMachines.map((m) => {
-                  const fabricName = m.material || m.fabric || 'Unknown';
+                {finishedRuns.map((run) => {
+                  const m = run.machine;
+                  const fabricName = run.fabric || 'Unknown';
                   const { shortName } = parseFabricName(fabricName);
                   const hasPlans = m.futurePlans && m.futurePlans.length > 0;
                   const nextPlan = hasPlans ? m.futurePlans[0] : null;
                   const { shortName: nextFabric } = nextPlan ? parseFabricName(nextPlan.fabric) : { shortName: '-' };
-                  
+
                   const linkedWrapper = findLinkedOrder(nextPlan);
 
                   return (
-                    <div key={m.id} className="bg-emerald-50/50 border border-emerald-100 rounded-lg p-3 hover:shadow-md transition-shadow">
+                    <div key={run.key} className="bg-emerald-50/50 border border-emerald-100 rounded-lg p-3 hover:shadow-md transition-shadow">
                       <div className="flex justify-between items-start mb-2">
                         <div className="font-bold text-gray-800">{m.machineName}</div>
                         <div className="text-xs text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded">Finished</div>
                       </div>
-                      
+
                       <div className="space-y-1 text-sm">
                         <div className="flex flex-col w-full">
                           <span className="text-gray-500 text-xs mb-0.5">Finished:</span>
@@ -194,7 +236,7 @@ export const DailySummaryModal: React.FC<DailySummaryModalProps> = ({
                         </div>
                         <div className="flex justify-between">
                           <span className="text-gray-500">Client:</span>
-                          <span className="font-medium text-gray-900">{m.client || '-'}</span>
+                          <span className="font-medium text-gray-900">{run.client || '-'}</span>
                         </div>
                         
                         <div className="mt-2 pt-2 border-t border-emerald-100 flex items-center justify-between">
@@ -279,18 +321,19 @@ export const DailySummaryModal: React.FC<DailySummaryModalProps> = ({
           )}
 
           {/* Low Stock Alerts Section */}
-          {lowStockMachines.length > 0 && (
+          {lowStockRuns.length > 0 && (
             <div className="space-y-3">
               <h3 className="text-sm font-bold text-amber-600 uppercase tracking-wider flex items-center gap-2">
                 <AlertTriangle size={16} />
                 Low Stock Alerts
                 <span className="bg-amber-100 text-amber-800 text-xs px-2 py-0.5 rounded-full">
-                  {lowStockMachines.length}
+                  {lowStockRuns.length}
                 </span>
               </h3>
-              
+
               <div className="grid gap-3 sm:grid-cols-2">
-                {lowStockMachines.map((m) => {
+                {lowStockRuns.map((run) => {
+                  const m = run.machine;
                   const hasPlans = m.futurePlans && m.futurePlans.length > 0;
                   const nextPlan = hasPlans ? m.futurePlans[0] : null;
                   const { shortName: nextFabric } = nextPlan ? parseFabricName(nextPlan.fabric) : { shortName: '-' };
@@ -298,20 +341,24 @@ export const DailySummaryModal: React.FC<DailySummaryModalProps> = ({
                   const linkedWrapper = findLinkedOrder(nextPlan);
 
                   return (
-                    <div key={m.id} className="bg-amber-50/50 border border-amber-100 rounded-lg p-3 hover:shadow-md transition-shadow">
+                    <div key={run.key} className="bg-amber-50/50 border border-amber-100 rounded-lg p-3 hover:shadow-md transition-shadow">
                       <div className="flex justify-between items-start mb-2">
                         <div className="font-bold text-gray-800">{m.machineName}</div>
                         <div className="text-xs text-amber-700 bg-amber-100 px-2 py-0.5 rounded font-bold">
-                          {m.remainingMfg} kg left
+                          {run.remainingMfg} kg left
                         </div>
                       </div>
 
                       <div className="space-y-1 text-sm">
                         <div className="flex flex-col w-full">
                           <span className="text-gray-500 text-xs mb-0.5">Running:</span>
-                          <span className="font-medium text-gray-900 break-words whitespace-normal text-right bg-white/50 px-1 rounded" dir="auto" title={m.fabric || m.material}>
-                             {parseFabricName(m.fabric || m.material).shortName}
+                          <span className="font-medium text-gray-900 break-words whitespace-normal text-right bg-white/50 px-1 rounded" dir="auto" title={run.fabric}>
+                             {parseFabricName(run.fabric).shortName}
                           </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-500">Client:</span>
+                          <span className="font-medium text-gray-900">{run.client || '-'}</span>
                         </div>
 
                         <div className="mt-2 pt-2 border-t border-amber-100 flex items-center justify-between">

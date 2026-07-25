@@ -38,6 +38,36 @@ export const DataService = {
 
   async updateMachineInMachineSS(machineId: string, updates: any): Promise<void> {
     const cleanUpdates = JSON.parse(JSON.stringify(updates));
+
+    // Auto-clean the future schedule: whenever a machine's active job
+    // (orderId/orderReference) is set, drop any queued future plan carrying
+    // the same reference — production already started, so that plan is
+    // stale. This runs here (not just in Schedule's manual "Activate"
+    // button) because every page that starts a job on a machine — Daily
+    // Machine Plan included — funnels through this one function, so the
+    // schedule stays clean automatically no matter where work was started.
+    const newOrderId = cleanUpdates.orderId;
+    const newOrderReference = cleanUpdates.orderReference;
+    if ((newOrderId || newOrderReference) && !('futurePlans' in cleanUpdates)) {
+      const machineRef = doc(db, 'MachineSS', machineId);
+      const snap = await getDoc(machineRef);
+      const existingPlans: any[] = snap.exists() ? ((snap.data() as any).futurePlans || []) : [];
+      if (existingPlans.length) {
+        // Some older plans have the real order id stored under
+        // orderReference instead of orderId (a legacy linking quirk), so
+        // treat orderId/orderReference as one interchangeable identifier
+        // set on both sides rather than comparing field-to-field.
+        const activeKeys = [newOrderId, newOrderReference].filter(Boolean);
+        const prunedPlans = existingPlans.filter((p: any) => {
+          const planKeys = [p.orderId, p.orderReference].filter(Boolean);
+          return !activeKeys.some((k) => planKeys.includes(k));
+        });
+        if (prunedPlans.length !== existingPlans.length) {
+          cleanUpdates.futurePlans = prunedPlans;
+        }
+      }
+    }
+
     await setDoc(doc(db, 'MachineSS', machineId), cleanUpdates, { merge: true });
   },
 
