@@ -442,7 +442,9 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
               {modalForm.variants.map((variant, vIdx) => (
                 <div key={variant.id || vIdx} className="bg-slate-50 p-3 rounded-lg border border-slate-200 relative group">
                   <div className="flex justify-between items-center mb-2">
-                    <span className="text-xs font-bold text-slate-400">VARIANT {vIdx + 1}</span>
+                    <span className="text-xs font-bold text-slate-400">
+                      VARIANT {vIdx + 1}{variant.label ? <span className="text-slate-600 font-semibold"> — {variant.label}</span> : ''}
+                    </span>
                     <button
                       onClick={() => setModalForm(prev => ({
                         ...prev,

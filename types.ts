@@ -77,6 +77,7 @@ export interface FabricYarn {
 export interface FabricVariant {
   id: string;
   yarns: FabricYarn[];
+  label?: string; // optional name, e.g. carried over from a sample report's variant label
 }
 
 export interface FabricDefinition {

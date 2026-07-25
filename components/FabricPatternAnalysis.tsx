@@ -19,6 +19,11 @@ interface Cert {
   gauge?: string; gog?: string; stitchLength?: string; feederCount?: string; needleCount?: string;
   storedClientName?: string; storedMaterial?: string;
   sampleNumber?: string; date?: string; isFinalized?: boolean;
+  // New Sample mode: multiple recipe attempts within one report. When present,
+  // each one becomes its own analysis record — more data points to learn from.
+  variants?: { id: string; label?: string; yarns?: YarnRow[]; stitchLength?: string;
+    rawWeight?: string; rawWidth?: string; zeroWeight?: string; zeroWidth?: string;
+    finishedWeight?: string; finishedWidth?: string }[];
 }
 
 interface Recipe {
@@ -181,7 +186,25 @@ export function FabricPatternAnalysis({ userRole, onBack }: { userRole: string; 
       samplesSnap.docs.forEach(d => {
         const data = d.data() as any;
         const cert: Cert | undefined = data.cert;
-        if (cert) recs.push(buildRecord(d.id, cert, data.storedMaterial || data.sampleCode || '', true));
+        if (!cert) return;
+        const fallbackMaterial = data.storedMaterial || data.sampleCode || '';
+        if (cert.variants && cert.variants.length) {
+          // One analysis record per variant — same sample, different recipe attempts.
+          cert.variants.forEach((v, idx) => {
+            const label = v.label ? ` — ${v.label}` : (cert.variants!.length > 1 ? ` — #${idx + 1}` : '');
+            recs.push(buildRecord(`${d.id}::${v.id}`, {
+              ...cert,
+              yarns: v.yarns, stitchLength: v.stitchLength,
+              rawWeight: v.rawWeight, rawWidth: v.rawWidth,
+              zeroWeight: v.zeroWeight, zeroWidth: v.zeroWidth,
+              finishedWeight: v.finishedWeight, finishedWidth: v.finishedWidth,
+              sampleNumber: (cert.sampleNumber || '') + label,
+            }, fallbackMaterial, true));
+          });
+        } else {
+          // Backward compat: old flat-shape sample, pre-variants
+          recs.push(buildRecord(d.id, cert, fallbackMaterial, true));
+        }
       });
 
       // Safety net: surface any indexed certificate the full-order read didn't return

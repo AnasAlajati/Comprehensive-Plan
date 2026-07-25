@@ -9,6 +9,7 @@ import {
   RefreshCw, CheckCircle2, Ruler, Cpu, Layers, Droplets,
   FlaskConical, Image as ImageIcon, Sparkles, Upload
 } from 'lucide-react';
+import { SampleVariantsSection } from './SampleVariantsSection';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -70,6 +71,8 @@ interface SampleCertData {
   cylinderGauge: string; dialGauge: string; stitchLength: string; visco: string;
   viscoRows: ViscoRow[];
   yarns: YarnRow[];
+  // New Sample mode only — multiple recipe attempts within one report (see SampleVariant)
+  variants: SampleVariant[];
   // Needle arrangement
   needleBedType: 'single' | 'double'; // single = cylinder only; double = dial + cylinder
   needleColumns: number;
@@ -112,6 +115,50 @@ const normalizeViscoRows = (rows?: ViscoRow[], legacy?: string): ViscoRow[] => {
   return r.slice(0, VISCO_MAX_ROWS);
 };
 
+const emptyYarnRow = (): YarnRow =>
+  ({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, type: '', lotNumber: '', cones: '', percentage: '', yarnDetail: '', twistCount: '', feeders: '' });
+
+const DEFAULT_DYEHOUSE_STEPS = {
+  'تثبيت': false, 'صباغة': false, 'انزيم': false, 'كسر بياض': false,
+  'عصارة': false, 'مجفف': false, 'رام': false, 'كسترة': false,
+  'كربون': false, 'كومبكتور': false, 'قص براسل وتصميغ': false,
+};
+
+// ─── Sample variants (New Sample mode only) ────────────────────────────────
+// Each variant is an independent recipe attempt within one sample session:
+// its own measurements, yarns, stitch length, and visco readings — plus its
+// own dyehouse info ONLY if it truly differs (otherwise it follows the
+// report's shared/general dyehouse block).
+export interface SampleVariant {
+  id: string;
+  label: string;
+  rawWeight: string; rawWidth: string;
+  zeroWeight: string; zeroWidth: string;
+  finishedWeight: string; finishedWidth: string;
+  shrinkageLength: string; shrinkageWidth: string;
+  yarns: YarnRow[];
+  stitchLength: string;
+  viscoRows: ViscoRow[];
+  hasCustomDyehouse: boolean;
+  dyehouseSteps: Record<string, boolean>;
+  tathbeet: TathbeetData;
+  dyehouseNotes: string;
+}
+
+export const makeSampleVariant = (label = ''): SampleVariant => ({
+  id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  label,
+  rawWeight: '', rawWidth: '', zeroWeight: '', zeroWidth: '', finishedWeight: '', finishedWidth: '',
+  shrinkageLength: '', shrinkageWidth: '',
+  yarns: [emptyYarnRow()],
+  stitchLength: '',
+  viscoRows: [emptyViscoRow(), emptyViscoRow()],
+  hasCustomDyehouse: false,
+  dyehouseSteps: { ...DEFAULT_DYEHOUSE_STEPS },
+  tathbeet: { ...EMPTY_TATHBEET },
+  dyehouseNotes: '',
+});
+
 const DEFAULT_NEEDLE_COLS = 12;
 const DEFAULT_CAM_COLS    = 8;
 
@@ -139,6 +186,7 @@ const EMPTY_CERT: SampleCertData = {
   cylinderGauge: '', dialGauge: '', stitchLength: '', visco: '',
   viscoRows: [emptyViscoRow(), emptyViscoRow()],
   yarns: [],
+  variants: [],
   needleBedType:    'single',
   needleColumns:    DEFAULT_NEEDLE_COLS,
   needleDialTracks: 4,
@@ -416,13 +464,29 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
         const sampleSnap = await getDoc(doc(db, 'fabric_samples', sampleId!));
         const saved = (sampleSnap.exists() ? (sampleSnap.data() as any).cert : null) as Partial<SampleCertData> | null;
         if (saved) {
-          const yarns = (saved.yarns && saved.yarns.length)
-            ? saved.yarns
-            : [{ id: '1', type: '', lotNumber: '', cones: '', percentage: '', yarnDetail: '', twistCount: '', feeders: '' }];
+          // Migrate old flat-shape samples (pre-variants) into a single variant,
+          // so nothing already saved gets silently dropped.
+          const variants: SampleVariant[] = (saved.variants && saved.variants.length)
+            ? saved.variants.map(v => ({
+                ...makeSampleVariant(),
+                ...v,
+                yarns:     (v.yarns && v.yarns.length) ? v.yarns : [emptyYarnRow()],
+                viscoRows: normalizeViscoRows(v.viscoRows),
+              }))
+            : [{
+                ...makeSampleVariant(),
+                rawWeight: saved.rawWeight || '', rawWidth: saved.rawWidth || '',
+                zeroWeight: saved.zeroWeight || '', zeroWidth: saved.zeroWidth || '',
+                finishedWeight: saved.finishedWeight || '', finishedWidth: saved.finishedWidth || '',
+                shrinkageLength: saved.shrinkageLength || '', shrinkageWidth: saved.shrinkageWidth || '',
+                yarns: (saved.yarns && saved.yarns.length) ? saved.yarns : [emptyYarnRow()],
+                stitchLength: saved.stitchLength || '',
+                viscoRows: normalizeViscoRows(saved.viscoRows, saved.visco),
+              }];
           setData({
             ...EMPTY_CERT,
             ...saved,
-            yarns,
+            variants,
             dyehouseSteps:    { ...EMPTY_CERT.dyehouseSteps, ...(saved.dyehouseSteps || {}) },
             tathbeet:         { ...EMPTY_TATHBEET, ...(saved.tathbeet || {}) },
             needleTracks:     { ...makeNeedleTracks(saved.needleColumns ?? DEFAULT_NEEDLE_COLS), ...(saved.needleTracks || {}) },
@@ -430,8 +494,10 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
             needleColumns:    saved.needleColumns    ?? DEFAULT_NEEDLE_COLS,
             camColumns:       saved.camColumns       ?? DEFAULT_CAM_COLS,
           });
+        } else {
+          // brand-new sample with no saved cert → seed with one empty variant
+          setData(prev => ({ ...prev, variants: [makeSampleVariant()] }));
         }
-        // brand-new sample with no saved cert → keep EMPTY_CERT defaults
         return;
       }
 
@@ -597,6 +663,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
       try {
         // ── Standalone sample mode: persist to fabric_samples/{sampleId} ──
         if (isSample) {
+          const v0 = next.variants[0];
           await setDoc(doc(db, 'fabric_samples', sampleId!), {
             cert:           next,
             sampleCode:     next.sampleNumber || '',
@@ -604,9 +671,10 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
             swatchImageUrl: next.swatchImageUrl || '',
             status:         next.linkedFabricId ? 'linked' : (next.isFinalized ? 'finalized' : 'draft'),
             linkedFabricId: next.linkedFabricId || null,
-            rawWeight:      next.rawWeight,      rawWidth:      next.rawWidth,
-            zeroWeight:     next.zeroWeight,     zeroWidth:     next.zeroWidth,
-            finishedWeight: next.finishedWeight, finishedWidth: next.finishedWidth,
+            variantCount:   next.variants.length,
+            rawWeight:      v0?.rawWeight || '',      rawWidth:      v0?.rawWidth || '',
+            zeroWeight:     v0?.zeroWeight || '',     zeroWidth:     v0?.zeroWidth || '',
+            finishedWeight: v0?.finishedWeight || '', finishedWidth: v0?.finishedWidth || '',
             lastSavedAt:    new Date().toISOString(),
           }, { merge: true });
           setSave('saved');
@@ -683,6 +751,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
           finalizedBy: getAuth().currentUser?.email || 'Unknown',
         };
         if (saveTimer.current) clearTimeout(saveTimer.current);
+        const v0 = next.variants[0];
         await setDoc(doc(db, 'fabric_samples', sampleId!), {
           cert:           next,
           sampleCode:     next.sampleNumber || '',
@@ -690,9 +759,10 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
           swatchImageUrl: next.swatchImageUrl || '',
           status:         next.linkedFabricId ? 'linked' : 'finalized',
           linkedFabricId: next.linkedFabricId || null,
-          rawWeight:      next.rawWeight,      rawWidth:      next.rawWidth,
-          zeroWeight:     next.zeroWeight,     zeroWidth:     next.zeroWidth,
-          finishedWeight: next.finishedWeight, finishedWidth: next.finishedWidth,
+          variantCount:   next.variants.length,
+          rawWeight:      v0?.rawWeight || '',      rawWidth:      v0?.rawWidth || '',
+          zeroWeight:     v0?.zeroWeight || '',     zeroWidth:     v0?.zeroWidth || '',
+          finishedWeight: v0?.finishedWeight || '', finishedWidth: v0?.finishedWidth || '',
           lastSavedAt:    next.finalizedAt,
         }, { merge: true });
         setData(next);
@@ -1030,8 +1100,17 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
             </div>
           </div>
 
-          {/* 2 · Measurements */}
-          <Section id="measurements" title="المقاسات" subtitle="خام · زيرو · جاهز"
+          {/* 2 · Variants (New Sample mode) — each variant is its own recipe attempt:
+               measurements, yarns, stitch length, visco, and optional dyehouse override */}
+          {isSample && (
+            <SampleVariantsSection
+              variants={data.variants}
+              onChange={(variants) => update('variants', variants)}
+            />
+          )}
+
+          {/* 2 · Measurements (order-bound certificates only) */}
+          {!isSample && <Section id="measurements" title="المقاسات" subtitle="خام · زيرو · جاهز"
             icon={<Ruler size={16} className="text-amber-600" />} accent="bg-amber-50">
             <div className="pt-4 space-y-4">
 
@@ -1095,7 +1174,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                 </Field>
               </div>
             </div>
-          </Section>
+          </Section>}
 
           {/* 3 · Machine */}
           <Section id="machine" title="بيانات الماكينة" subtitle={order.machine ? `مجلوبة تلقائياً من بيانات ماكينة: ${order.machine}` : "المواصفات الفنية للماكينة"}
@@ -1130,6 +1209,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
               <Field label="الطارة" sublabel="Tara" className="max-w-xs">
                 <Input value={data.tara} onChange={e => update('tara', e.target.value)} />
               </Field>
+              {!isSample && (
               <div className="pt-3 border-t border-slate-100">
                 <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">قراءات الماكينة</p>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
@@ -1166,11 +1246,12 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                   </div>
                 </div>
               </div>
+              )}
             </div>
           </Section>
 
-          {/* 4 · Yarn — auto-filled from order */}
-          <Section id="yarns" title="بيانات الغزول" subtitle="مجلوبة تلقائياً من بيانات الطلب"
+          {/* 4 · Yarn — order-bound certificates only (New Sample yarns live inside each variant above) */}
+          {!isSample && <Section id="yarns" title="بيانات الغزول" subtitle="مجلوبة تلقائياً من بيانات الطلب"
             icon={<Layers size={16} className="text-rose-500" />} accent="bg-rose-50">
             <div className="pt-4 space-y-3">
               {data.yarns.map((yarn, idx) => (
@@ -1219,7 +1300,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                 <Plus size={15} /> إضافة غزل
               </button>
             </div>
-          </Section>
+          </Section>}
           </div>}
 
           {/* 5 & 6 · Needle + Cam — Knitting Structure tab only, hidden from non-knitting roles */}
@@ -1453,8 +1534,9 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
           </div>}
 
           {activeSection === 'cert' && <div className={!canEditCert ? 'pointer-events-none select-none opacity-60' : ''}>
-          {/* 7 · Dyehouse */}
-          <Section id="dyehouse" title="بيانات المصبغة" subtitle="خطوات العينة في المصبغة"
+          {/* 7 · Dyehouse — shared/general block. In sample mode, a variant only gets its
+               own independent copy of this if its "بيانات مصبغة مختلفة" toggle is on. */}
+          <Section id="dyehouse" title="بيانات المصبغة" subtitle={isSample ? 'الإعدادات العامة — تُستخدم لكل متغير لم يفعّل بيانات مصبغة مختلفة' : 'خطوات العينة في المصبغة'}
             icon={<Droplets size={16} className="text-indigo-500" />} accent="bg-indigo-50">
             <div className="pt-4 space-y-4">
 
@@ -1531,8 +1613,8 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
             </div>
           </Section>
 
-          {/* 8 · Lab */}
-          <Section id="lab" title="نتائج المعمل" subtitle="قراءات تفصيلية بعد الاختبار"
+          {/* 8 · Lab (order-bound certificates only — duplicates measurements already on the sample's variants) */}
+          {!isSample && <Section id="lab" title="نتائج المعمل" subtitle="قراءات تفصيلية بعد الاختبار"
             icon={<FlaskConical size={16} className="text-teal-600" />} accent="bg-teal-50" defaultOpen={false}>
             <div className="pt-4">
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
@@ -1541,7 +1623,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                 <Field label="وزن مجهز"><Input type="number" value={data.finishedWeight} onChange={e => update('finishedWeight', e.target.value)} /></Field>
               </div>
             </div>
-          </Section>
+          </Section>}
 
           <div className="h-8" />
           </div>}
@@ -1641,3 +1723,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
     </div>
   );
 }
+
+// ─── Shared primitives re-exported for SampleVariantsSection ──────────────────
+export type { YarnRow, ViscoRow, TathbeetData };
+export { Field, Input, ViscoHeaderInput, TathbeetMeasFields, emptyYarnRow, emptyViscoRow, VISCO_HEADER_PRESETS, VISCO_MIN_ROWS, VISCO_MAX_ROWS, EMPTY_TATHBEET };

@@ -35,12 +35,23 @@ interface SampleEntry {
 
 // Map a sample's certificate data → Add-New-Fabric prefill
 const certToFabricPrefill = (cert: any, sampleId: string): Partial<FabricDefinition> => {
-  const yarns = (cert?.yarns || [])
+  const yarnsOf = (yarns: any[]) => (yarns || [])
     .filter((y: any) => (y.type || '').trim())
     .map((y: any) => ({ name: (y.type || '').trim(), percentage: parseFloat(y.percentage) || 0, scrapPercentage: 0 }));
+
+  // Each sample variant becomes its own fabric variant, carrying its label forward
+  // so multi-variant samples stay distinguishable once they're a real fabric.
+  const sampleVariants: any[] = Array.isArray(cert?.variants) ? cert.variants : [];
+  const variants = sampleVariants.length
+    ? sampleVariants
+        .map((v: any, idx: number) => ({ id: `v${Date.now()}_${idx}`, yarns: yarnsOf(v.yarns), label: v.label || undefined }))
+        .filter((v: any) => v.yarns.length)
+    // Backward compat: old flat-shape certs without variants
+    : (yarnsOf(cert?.yarns).length ? [{ id: `v${Date.now()}`, yarns: yarnsOf(cert?.yarns) }] : []);
+
   return {
     name: cert?.storedMaterial || cert?.sampleNumber || '',
-    variants: yarns.length ? [{ id: `v${Date.now()}`, yarns }] : [],
+    variants,
     workCenters: cert?.machineName ? [cert.machineName] : [],
     ...(cert?.swatchImageUrl ? { imageUrl: cert.swatchImageUrl } : {}),
     ...( { sourceSampleId: sampleId } as any),
