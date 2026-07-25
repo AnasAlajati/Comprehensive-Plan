@@ -235,11 +235,11 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
                   </div>
                   
                   {Object.entries(modalForm.machineOverrides).map(([machineId, rate]) => {
-                    const machine = machines.find(m => String(m.id) === machineId || m.name === machineId);
+                    const machine = machines.find(m => String(m.id) === machineId || (m.machineName || m.name) === machineId);
                     return (
                       <div key={machineId} className="flex items-center gap-2">
                         <span className="text-xs font-medium text-slate-700 flex-1 truncate">
-                          {machine?.name || machine?.machineName || machineId}
+                          {(machine?.machineName || machine?.name) || machineId}
                         </span>
                         <input
                           type="number"
@@ -288,10 +288,10 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
                     >
                       <option value="">+ Add machine exception...</option>
                       {machines
-                        .filter(m => !modalForm.machineOverrides[String(m.id)] && !modalForm.machineOverrides[m.name])
+                        .filter(m => !modalForm.machineOverrides[String(m.id)] && !modalForm.machineOverrides[m.machineName || m.name])
                         .map(m => (
-                          <option key={m.id} value={m.name || String(m.id)}>
-                            {m.name || m.machineName} ({m.brand} - {m.type})
+                          <option key={m.id} value={(m.machineName || m.name) || String(m.id)}>
+                            {(m.machineName || m.name)} ({m.brand} - {m.type})
                           </option>
                         ))}
                     </select>
@@ -316,29 +316,32 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
               </div>
               <div className="max-h-40 overflow-y-auto p-1 space-y-1">
                  {machines
-                   .filter(m => (m.name || '').toLowerCase().includes(machineSearch.toLowerCase()))
-                   .map((m, idx) => (
+                   .filter(m => ((m.machineName || m.name) || '').toLowerCase().includes(machineSearch.toLowerCase()))
+                   .map((m, idx) => {
+                     const mName = m.machineName || m.name;
+                     return (
                      <label key={`${m.id}-${idx}`} className="flex items-center gap-2 p-2 hover:bg-slate-50 rounded cursor-pointer transition-colors">
-                       <input 
+                       <input
                          type="checkbox"
-                         checked={modalForm.workCenters.includes(m.name)}
+                         checked={modalForm.workCenters.includes(mName)}
                          onChange={(e) => {
                            if (e.target.checked) {
-                             if (!modalForm.workCenters.includes(m.name)) {
-                                setModalForm(prev => ({...prev, workCenters: [...prev.workCenters, m.name]}));
+                             if (!modalForm.workCenters.includes(mName)) {
+                                setModalForm(prev => ({...prev, workCenters: [...prev.workCenters, mName]}));
                              }
                            } else {
-                             setModalForm(prev => ({...prev, workCenters: prev.workCenters.filter(w => w !== m.name)}));
+                             setModalForm(prev => ({...prev, workCenters: prev.workCenters.filter(w => w !== mName)}));
                            }
                          }}
                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                        />
                        <div className="flex flex-col">
-                         <span className="text-xs font-medium text-slate-700">{m.name}</span>
+                         <span className="text-xs font-medium text-slate-700">{mName}</span>
                          <span className="text-[10px] text-slate-400">{m.brand} - {m.type}</span>
                        </div>
                      </label>
-                 ))}
+                     );
+                 })}
                  {machines.length === 0 && <div className="p-4 text-center text-xs text-slate-400">No machines found</div>}
               </div>
             </div>

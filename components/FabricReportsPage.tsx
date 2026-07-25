@@ -583,36 +583,6 @@ export function FabricReportsPage({ userRole, userName }: { userRole: string; us
     });
   };
 
-  // Admin-only pattern analysis (lives inside the Fabric Archive)
-  if (showAnalysis && userRole === 'admin') {
-    return <FabricPatternAnalysis userRole={userRole} onBack={() => setShowAnalysis(false)} />;
-  }
-
-  // New-sample report (standalone, not tied to an order) + Create-Fabric overlay
-  if (openSample) {
-    return (
-      <>
-        <SampleCertificatePage
-          sampleId={openSample}
-          order={STUB_ORDER(openSample)}
-          clientName=""
-          userRole={userRole}
-          onClose={() => { setOpenSample(null); loadSamples(); }}
-          onCreateFabric={(cert) => setCreateFabricFor({ sampleId: openSample, cert })}
-        />
-        {createFabricFor && (
-          <FabricFormModal
-            isOpen
-            onClose={() => setCreateFabricFor(null)}
-            onSave={handleCreateFabricSave}
-            machines={machines}
-            prefill={certToFabricPrefill(createFabricFor.cert, createFabricFor.sampleId)}
-          />
-        )}
-      </>
-    );
-  }
-
   const q = search.toLowerCase();
   const filtered = groups.filter(g =>
     !search ||
@@ -652,6 +622,37 @@ export function FabricReportsPage({ userRole, userName }: { userRole: string; us
     return [...groupsByDay.entries()];
   }, [groups, search, dayFilter]);
   const totalDateFiltered = dayGroupedCerts.reduce((s, [, certs]) => s + certs.length, 0);
+
+  // Admin-only pattern analysis (lives inside the Fabric Archive)
+  if (showAnalysis && userRole === 'admin') {
+    return <FabricPatternAnalysis userRole={userRole} onBack={() => setShowAnalysis(false)} />;
+  }
+
+  // New-sample report (standalone, not tied to an order) + Create-Fabric overlay
+  if (openSample) {
+    return (
+      <>
+        <SampleCertificatePage
+          sampleId={openSample}
+          order={STUB_ORDER(openSample)}
+          clientName=""
+          userRole={userRole}
+          machines={machines}
+          onClose={() => { setOpenSample(null); loadSamples(); }}
+          onCreateFabric={(cert) => setCreateFabricFor({ sampleId: openSample, cert })}
+        />
+        {createFabricFor && (
+          <FabricFormModal
+            isOpen
+            onClose={() => setCreateFabricFor(null)}
+            onSave={handleCreateFabricSave}
+            machines={machines}
+            prefill={certToFabricPrefill(createFabricFor.cert, createFabricFor.sampleId)}
+          />
+        )}
+      </>
+    );
+  }
 
   if (opening) {
     return (

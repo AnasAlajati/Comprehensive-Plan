@@ -388,6 +388,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
   const [uploading, setUploading] = useState(false);
   const [orderedGsm,   setOrderedGsm]   = useState<number | null>(null);
   const [orderedWidth, setOrderedWidth] = useState<number | null>(null);
+  const [sampleMachines, setSampleMachines] = useState<any[]>([]);
   const saveTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const orderRef   = useRef<any>(null);
   const fabricRef  = useRef<any>(null);
@@ -404,6 +405,14 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
     (async () => {
       // ── Standalone sample mode: load from fabric_samples/{sampleId} ──
       if (isSample) {
+        // Machine list for the machine-name dropdown (prefer the caller's list; fetch if not given)
+        if (machinesProp && machinesProp.length) {
+          setSampleMachines(machinesProp);
+        } else {
+          const machinesSnap = await getDocs(collection(db, 'MachineSS'));
+          setSampleMachines(machinesSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+        }
+
         const sampleSnap = await getDoc(doc(db, 'fabric_samples', sampleId!));
         const saved = (sampleSnap.exists() ? (sampleSnap.data() as any).cert : null) as Partial<SampleCertData> | null;
         if (saved) {
@@ -797,6 +806,24 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
     scheduleSave(next); return next;
   });
 
+  // ── Machine select (sample mode) — picking a machine fills its specs too ──
+  const selectMachine = (name: string) => {
+    const m = sampleMachines.find((mm: any) => (mm.machineName || mm.name) === name);
+    setData(prev => {
+      const next: SampleCertData = {
+        ...prev,
+        machineName: name,
+        machineType: m?.type    || '',
+        gauge:       m?.dia     != null ? String(m.dia)     : '',
+        gog:         m?.gauge   != null ? String(m.gauge)   : '',
+        needleCount: m?.needles != null ? String(m.needles) : '',
+        feederCount: m?.feeders != null ? String(m.feeders) : '',
+      };
+      scheduleSave(next);
+      return next;
+    });
+  };
+
   // ── Yarn helpers ──
   const updateYarn = (id: string, field: keyof YarnRow, val: string) =>
     update('yarns', data.yarns.map(y => y.id === id ? { ...y, [field]: val } : y));
@@ -928,6 +955,47 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                 <p className="text-xs text-slate-400">{isSample ? 'عينة جديدة — لا ترتبط بطلب أو قماش بعد' : 'الحقول الملونة تعبأ تلقائياً من الطلب'}</p>
               </div>
             </div>
+
+            {/* Swatch image */}
+            <div className="flex items-center gap-4 mb-4 pb-4 border-b border-slate-100">
+              <button type="button" onClick={() => imgInput.current?.click()}
+                className="relative shrink-0 w-24 h-24 rounded-xl border-2 border-dashed border-slate-200 hover:border-indigo-300 bg-slate-50 overflow-hidden flex items-center justify-center transition-colors group">
+                {data.swatchImageUrl ? (
+                  <img src={data.swatchImageUrl} alt="عينة القماش" className="w-full h-full object-cover" />
+                ) : (
+                  <div className="flex flex-col items-center gap-1 text-slate-400 group-hover:text-indigo-500">
+                    <ImageIcon size={22} />
+                    <span className="text-[10px] font-medium">رفع صورة</span>
+                  </div>
+                )}
+                {uploading && (
+                  <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+                    <RefreshCw size={18} className="animate-spin text-indigo-500" />
+                  </div>
+                )}
+              </button>
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-slate-700 mb-1">صورة العينة</p>
+                <p className="text-xs text-slate-400 mb-2">
+                  {isSample ? 'أهم حقل الآن — العينة ليس لها اسم بعد، والصورة هي الطريقة الوحيدة للتعرف عليها' : 'صورة قماش العينة (اختياري)'}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => imgInput.current?.click()} disabled={uploading}
+                    className="text-xs font-medium px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 disabled:opacity-50 transition-colors inline-flex items-center gap-1.5">
+                    <Upload size={12} /> {data.swatchImageUrl ? 'تغيير الصورة' : 'رفع صورة'}
+                  </button>
+                  {data.swatchImageUrl && (
+                    <button type="button" onClick={() => update('swatchImageUrl', '')}
+                      className="text-xs font-medium px-3 py-1.5 rounded-lg bg-rose-50 text-rose-500 hover:bg-rose-100 transition-colors">
+                      إزالة
+                    </button>
+                  )}
+                </div>
+              </div>
+              <input ref={imgInput} type="file" accept="image/*" className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) uploadSwatch(f); e.target.value = ''; }} />
+            </div>
+
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {isSample ? (
                 <Field label="اسم/كود العينة">
@@ -1024,7 +1092,20 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
             icon={<Cpu size={16} className="text-purple-600" />} accent="bg-purple-50">
             <div className="pt-4 space-y-4">
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <Field label="اسم الماكينة"><Input placeholder="ماكينة 1" value={data.machineName} onChange={e => update('machineName', e.target.value)} /></Field>
+                <Field label="اسم الماكينة">
+                  {isSample ? (
+                    <select dir="rtl" value={data.machineName} onChange={e => selectMachine(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none text-sm text-slate-800 transition-all">
+                      <option value="">اختر ماكينة...</option>
+                      {sampleMachines.map((m: any) => {
+                        const name = m.machineName || m.name;
+                        return <option key={m.id ?? name} value={name}>{name}</option>;
+                      })}
+                    </select>
+                  ) : (
+                    <Input placeholder="ماكينة 1" value={data.machineName} onChange={e => update('machineName', e.target.value)} />
+                  )}
+                </Field>
                 <Field label="نوع الماكينة" sublabel="Type"><Input placeholder="Single Jersey" value={data.machineType} onChange={e => update('machineType', e.target.value)} /></Field>
                 <Field label="القطر" sublabel="DIA (inch)"><Input type="number" placeholder="32" value={data.gauge} onChange={e => update('gauge', e.target.value)} /></Field>
                 <Field label="الجوج" sublabel="Gauge"><Input type="number" placeholder="26" value={data.gog} onChange={e => update('gog', e.target.value)} /></Field>
