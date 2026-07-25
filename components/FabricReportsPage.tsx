@@ -425,10 +425,14 @@ export function FabricReportsPage({ userRole, userName }: { userRole: string; us
   const [samples, setSamples] = useState<SampleEntry[]>([]);
   const [machines, setMachines] = useState<any[]>([]);
   const [openSample, setOpenSample] = useState<string | null>(null);
+  const [sampleTab, setSampleTab] = useState<'cert' | 'knitting'>('cert');
   const [creatingSample, setCreatingSample] = useState(false);
   const [createFabricFor, setCreateFabricFor] = useState<{ sampleId: string; cert: any } | null>(null);
 
   const canMakeSample = ['admin', 'machine_technician', 'factory_manager'].includes(userRole);
+
+  // Reset to the certificate tab whenever a different (or new) sample is opened
+  useEffect(() => { setSampleTab('cert'); }, [openSample]);
 
   const loadSamples = async () => {
     try {
@@ -641,6 +645,34 @@ export function FabricReportsPage({ userRole, userName }: { userRole: string; us
 
   // New-sample report (standalone, not tied to an order) + Create-Fabric overlay
   if (openSample) {
+    // Admin-only tab bar: unlike the normal archive (Sample Certificate / Production
+    // Order / Knitting Structure), a new sample has no production order yet, so only
+    // the Knitting Structure tab is added here — and only for admins.
+    const sampleTabBar = userRole === 'admin' && (
+      <div style={{ background: '#f8fafc', borderBottom: '1px solid #e5e7eb', borderTop: '1px solid #e5e7eb', padding: '0 20px', display: 'flex', alignItems: 'center', gap: 0 }}>
+        {([
+          { key: 'cert',     label: 'Sample Certificate', icon: <ClipboardList size={13} /> },
+          { key: 'knitting', label: 'Knitting Structure',  icon: <Layers size={13} /> },
+        ] as { key: 'cert' | 'knitting'; label: string; icon: React.ReactNode }[]).map(t => {
+          const active = sampleTab === t.key;
+          return (
+            <button key={t.key} onClick={() => setSampleTab(t.key)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '10px 16px', fontSize: 12, fontWeight: 600,
+                borderBottom: active ? '2px solid #4f46e5' : '2px solid transparent',
+                borderTop: 'none', borderLeft: 'none', borderRight: 'none',
+                color: active ? '#4f46e5' : '#6b7280',
+                background: 'none', cursor: 'pointer',
+                transition: 'color .15s', whiteSpace: 'nowrap',
+              }}>
+              {t.icon} {t.label}
+            </button>
+          );
+        })}
+      </div>
+    );
+
     return (
       <>
         <SampleCertificatePage
@@ -649,6 +681,8 @@ export function FabricReportsPage({ userRole, userName }: { userRole: string; us
           clientName=""
           userRole={userRole}
           machines={machines}
+          headerSlot={sampleTabBar || undefined}
+          activeSection={userRole === 'admin' && sampleTab === 'knitting' ? 'knitting' : 'cert'}
           onClose={() => { setOpenSample(null); loadSamples(); }}
           onCreateFabric={(cert) => setCreateFabricFor({ sampleId: openSample, cert })}
         />
