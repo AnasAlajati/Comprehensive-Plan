@@ -10,6 +10,8 @@ interface FabricFormModalProps {
   initialData?: FabricDefinition | null;
   machines: any[];
   highlightAddVariant?: boolean;
+  /** Seed a brand-new fabric (e.g. from a sample report). Ignored when initialData is set. */
+  prefill?: Partial<FabricDefinition> | null;
 }
 
 // Helper to normalize machine type
@@ -26,7 +28,8 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
   onSave,
   initialData,
   machines,
-  highlightAddVariant = false
+  highlightAddVariant = false,
+  prefill = null
 }) => {
   const [isHighlighting, setIsHighlighting] = useState(false);
 
@@ -46,6 +49,8 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
     variants: FabricVariant[];
     avgProductionPerDay: number;
     machineOverrides: Record<string, number>;
+    imageUrl?: string;
+    sourceSampleId?: string;
   }>({ name: '', code: '', shortName: '', workCenters: [], variants: [], avgProductionPerDay: 0, machineOverrides: {} });
   
   const [machineSearch, setMachineSearch] = useState('');
@@ -62,15 +67,29 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
           workCenters: initialData.workCenters || [],
           variants: initialData.variants ? JSON.parse(JSON.stringify(initialData.variants)) : [],
           avgProductionPerDay: initialData.avgProductionPerDay || 0,
-          machineOverrides: initialData.machineOverrides || {}
+          machineOverrides: initialData.machineOverrides || {},
         });
         setShowOverrides(Object.keys(initialData.machineOverrides || {}).length > 0);
+      } else if (prefill) {
+        // Seed a new fabric from a sample report (or any partial)
+        setModalForm({
+          name: prefill.name || '',
+          code: prefill.code || '',
+          shortName: prefill.shortName || '',
+          workCenters: prefill.workCenters || [],
+          variants: prefill.variants ? JSON.parse(JSON.stringify(prefill.variants)) : [],
+          avgProductionPerDay: prefill.avgProductionPerDay || 0,
+          machineOverrides: prefill.machineOverrides || {},
+          imageUrl: prefill.imageUrl,
+          sourceSampleId: (prefill as any).sourceSampleId,
+        });
+        setShowOverrides(Object.keys(prefill.machineOverrides || {}).length > 0);
       } else {
         setModalForm({ name: '', code: '', shortName: '', workCenters: [], variants: [], avgProductionPerDay: 0, machineOverrides: {} });
         setShowOverrides(false);
       }
     }
-  }, [isOpen, initialData]);
+  }, [isOpen, initialData, prefill]);
 
   const handleOdooPaste = async () => {
     try {
@@ -193,6 +212,19 @@ export const FabricFormModal: React.FC<FabricFormModalProps> = ({
         </div>
         
         <div className="p-6 space-y-4 overflow-y-auto">
+          {/* From-sample banner (prefill) */}
+          {(modalForm.sourceSampleId || modalForm.imageUrl) && !initialData && (
+            <div className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              {modalForm.imageUrl && (
+                <img src={modalForm.imageUrl} alt="swatch" className="w-14 h-14 rounded-lg object-cover border border-blue-200 shrink-0" />
+              )}
+              <div className="text-xs text-blue-800">
+                <p className="font-bold">مُنشأ من عينة</p>
+                <p className="text-blue-600">تم تعبئة الغزل والمكنة والصورة من تقرير العينة — راجعها وأكمل الاسم.</p>
+              </div>
+            </div>
+          )}
+
           {/* ODOO Copy Button */}
           <div className="flex justify-end">
             <button

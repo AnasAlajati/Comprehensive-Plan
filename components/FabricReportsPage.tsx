@@ -1,13 +1,51 @@
 import React, { useState, useEffect } from 'react';
 import { collection, collectionGroup, query, getDocs, orderBy, setDoc, doc, where } from 'firebase/firestore';
+import { getAuth } from 'firebase/auth';
 import { db } from '../services/firebase';
-import { OrderRow, ProductionTicket } from '../types';
+import { DataService } from '../services/dataService';
+import { OrderRow, ProductionTicket, FabricDefinition } from '../types';
 import { SampleCertificatePage } from './SampleCertificatePage';
+import { FabricPatternAnalysis } from './FabricPatternAnalysis';
+import { FabricFormModal } from './FabricFormModal';
 import {
   Search, CheckCircle2, FileEdit, Calendar,
   ExternalLink, RefreshCw, ArrowLeft, Package,
-  ChevronRight, User, Printer, ClipboardList, X, Layers
+  ChevronRight, User, Printer, ClipboardList, X, Layers, TrendingUp,
+  Beaker, Plus, Image as ImageIcon, Link2
 } from 'lucide-react';
+
+// A stub OrderRow (samples are not tied to an order)
+const STUB_ORDER = (id: string, material = ''): OrderRow => ({
+  id, material, machine: '', requiredQty: 0, accessory: '', manufacturedQty: 0,
+  remainingQty: 0, orderReceiptDate: '', startDate: '', endDate: '',
+  scrapQty: 0, others: '', notes: '', batchDeliveries: 0, accessoryDeliveries: 0,
+} as OrderRow);
+
+interface SampleEntry {
+  id: string;
+  sampleCode: string;
+  swatchImageUrl: string;
+  date: string;
+  status: 'draft' | 'finalized' | 'linked';
+  linkedFabricId?: string | null;
+  linkedFabricMaterial?: string;
+  storedMaterial?: string;
+  cert?: any;
+}
+
+// Map a sample's certificate data → Add-New-Fabric prefill
+const certToFabricPrefill = (cert: any, sampleId: string): Partial<FabricDefinition> => {
+  const yarns = (cert?.yarns || [])
+    .filter((y: any) => (y.type || '').trim())
+    .map((y: any) => ({ name: (y.type || '').trim(), percentage: parseFloat(y.percentage) || 0, scrapPercentage: 0 }));
+  return {
+    name: cert?.storedMaterial || cert?.sampleNumber || '',
+    variants: yarns.length ? [{ id: `v${Date.now()}`, yarns }] : [],
+    workCenters: cert?.machineName ? [cert.machineName] : [],
+    ...(cert?.swatchImageUrl ? { imageUrl: cert.swatchImageUrl } : {}),
+    ...( { sourceSampleId: sampleId } as any),
+  };
+};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -367,6 +405,69 @@ export function FabricReportsPage({ userRole }: { userRole: string }) {
   const [search,   setSearch]   = useState('');
   const [selected, setSelected] = useState<FabricGroup | null>(null);
   const [opening,  setOpening]  = useState<{ order: OrderRow; clientName: string; cert: CertEntry } | null>(null);
+  const [showAnalysis, setShowAnalysis] = useState(false);
+
+  // New-fabric samples
+  const [samples, setSamples] = useState<SampleEntry[]>([]);
+  const [machines, setMachines] = useState<any[]>([]);
+  const [openSample, setOpenSample] = useState<string | null>(null);
+  const [creatingSample, setCreatingSample] = useState(false);
+  const [createFabricFor, setCreateFabricFor] = useState<{ sampleId: string; cert: any } | null>(null);
+
+  const canMakeSample = ['admin', 'machine_technician', 'factory_manager'].includes(userRole);
+
+  const loadSamples = async () => {
+    try {
+      const snap = await getDocs(collection(db, 'fabric_samples'));
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as SampleEntry));
+      list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      setSamples(list);
+    } catch { /* rules not deployed yet — ignore */ }
+  };
+
+  useEffect(() => {
+    loadSamples();
+    getDocs(collection(db, 'MachineSS')).then(snap =>
+      setMachines(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    ).catch(() => {});
+  }, []);
+
+  const createNewSample = async () => {
+    if (creatingSample) return;
+    setCreatingSample(true);
+    try {
+      const id = `sample_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      await setDoc(doc(db, 'fabric_samples', id), {
+        sampleCode: '', status: 'draft', swatchImageUrl: '',
+        date: new Date().toISOString().split('T')[0],
+        createdAt: new Date().toISOString(),
+        createdBy: getAuth().currentUser?.email || '',
+      });
+      setOpenSample(id);
+    } finally { setCreatingSample(false); }
+  };
+
+  const handleCreateFabricSave = async (formData: Partial<FabricDefinition>) => {
+    if (!createFabricFor) return;
+    const { sampleId, cert } = createFabricFor;
+    // Keep imageUrl out of upsertFabric (it would write imagePath: undefined, which Firestore rejects).
+    const { imageUrl, ...rest } = formData;
+    const saved = await DataService.upsertFabric(rest, machines);
+    // Two-way link (+ carry the swatch image forward, without imagePath)
+    await setDoc(doc(db, 'FabricSS', saved.id), {
+      sourceSampleId: sampleId,
+      ...(imageUrl ? { imageUrl } : {}),
+    }, { merge: true });
+    await setDoc(doc(db, 'fabric_samples', sampleId), {
+      linkedFabricId: saved.id, status: 'linked',
+      linkedFabricMaterial: saved.name || formData.name || '',
+      cert: { ...cert, linkedFabricId: saved.id },
+    }, { merge: true });
+    window.dispatchEvent(new CustomEvent('fabric-saved', { detail: saved }));
+    setCreateFabricFor(null);
+    setOpenSample(null);
+    loadSamples();
+  };
 
   useEffect(() => {
     (async () => {
@@ -480,6 +581,36 @@ export function FabricReportsPage({ userRole }: { userRole: string }) {
     );
   }
 
+  // Admin-only pattern analysis (lives inside the Fabric Archive)
+  if (showAnalysis && userRole === 'admin') {
+    return <FabricPatternAnalysis userRole={userRole} onBack={() => setShowAnalysis(false)} />;
+  }
+
+  // New-sample report (standalone, not tied to an order) + Create-Fabric overlay
+  if (openSample) {
+    return (
+      <>
+        <SampleCertificatePage
+          sampleId={openSample}
+          order={STUB_ORDER(openSample)}
+          clientName=""
+          userRole={userRole}
+          onClose={() => { setOpenSample(null); loadSamples(); }}
+          onCreateFabric={(cert) => setCreateFabricFor({ sampleId: openSample, cert })}
+        />
+        {createFabricFor && (
+          <FabricFormModal
+            isOpen
+            onClose={() => setCreateFabricFor(null)}
+            onSave={handleCreateFabricSave}
+            machines={machines}
+            prefill={certToFabricPrefill(createFabricFor.cert, createFabricFor.sampleId)}
+          />
+        )}
+      </>
+    );
+  }
+
   const q = search.toLowerCase();
   const filtered = groups.filter(g =>
     !search ||
@@ -531,6 +662,45 @@ export function FabricReportsPage({ userRole }: { userRole: string }) {
               </div>
             ))}
           </div>
+
+          {/* Origin sample (the new-fabric sample this fabric was created from) */}
+          {(() => {
+            const origin = samples.filter(s => s.status === 'linked' && s.linkedFabricMaterial && s.linkedFabricMaterial === selected.material);
+            if (!origin.length) return null;
+            return (
+              <div style={{ marginBottom: 28 }}>
+                <p style={{ fontSize: 11, fontWeight: 700, color: '#0f766e', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 14 }}>Original Sample</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {origin.map(s => (
+                    <div key={s.id}
+                      style={{ background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: 12, padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16 }}>
+                      <div style={{ width: 44, height: 44, borderRadius: 10, background: '#fff', border: '1px solid #99f6e4', overflow: 'hidden', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {s.swatchImageUrl
+                          ? <img src={s.swatchImageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          : <ImageIcon size={18} style={{ color: '#5eead4' }} />}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 700, fontSize: 14, color: '#0f766e' }}>Original Sample</span>
+                          {s.sampleCode && (
+                            <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#0f766e', background: '#fff', border: '1px solid #99f6e4', padding: '2px 7px', borderRadius: 5 }}>{s.sampleCode}</span>
+                          )}
+                        </div>
+                        <p style={{ fontSize: 12, color: '#5b8a86', margin: '4px 0 0' }}>
+                          The report this fabric was created from
+                          {s.date ? ` · ${new Date(s.date).toLocaleDateString('en-GB', { year: 'numeric', month: 'short', day: 'numeric' })}` : ''}
+                        </p>
+                      </div>
+                      <button onClick={() => setOpenSample(s.id)}
+                        style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', fontSize: 12, fontWeight: 600, color: '#fff', background: '#0f766e', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+                        Open Report <ExternalLink size={11} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Customer rows */}
           <p style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 14 }}>Customer Records</p>
@@ -609,14 +779,80 @@ export function FabricReportsPage({ userRole }: { userRole: string }) {
               {groups.length} fabric{groups.length !== 1 ? 's' : ''} · {groups.reduce((a, g) => a + g.certs.length, 0)} total records
             </p>
           </div>
-          <div style={{ position: 'relative' }}>
-            <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', pointerEvents: 'none' }} />
-            <input
-              placeholder="Search code or name..."
-              value={search} onChange={e => setSearch(e.target.value)}
-              style={{ paddingLeft: 36, paddingRight: 16, paddingTop: 10, paddingBottom: 10, fontSize: 13, borderRadius: 10, border: '1px solid #e5e7eb', background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,.06)', outline: 'none', width: 240 }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {canMakeSample && (
+              <button onClick={createNewSample} disabled={creatingSample}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '10px 16px', fontSize: 13, fontWeight: 700, color: '#fff', background: '#0f766e', border: 'none', borderRadius: 10, cursor: 'pointer', boxShadow: '0 1px 4px rgba(15,118,110,.3)', whiteSpace: 'nowrap', opacity: creatingSample ? 0.6 : 1 }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#115e59')}
+                onMouseLeave={e => (e.currentTarget.style.background = '#0f766e')}
+                title="تقرير عينة جديدة (قماش لم يُنشأ بعد)">
+                <Plus size={15} /> عينة جديدة
+              </button>
+            )}
+            {userRole === 'admin' && (
+              <button onClick={() => setShowAnalysis(true)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '10px 16px', fontSize: 13, fontWeight: 700, color: '#fff', background: '#4f46e5', border: 'none', borderRadius: 10, cursor: 'pointer', boxShadow: '0 1px 4px rgba(79,70,229,.3)', whiteSpace: 'nowrap' }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#4338ca')}
+                onMouseLeave={e => (e.currentTarget.style.background = '#4f46e5')}
+                title="تحليل أنماط الزيرو — للمدير فقط">
+                <TrendingUp size={15} /> تحليل الأنماط
+              </button>
+            )}
+            <div style={{ position: 'relative' }}>
+              <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', pointerEvents: 'none' }} />
+              <input
+                placeholder="Search code or name..."
+                value={search} onChange={e => setSearch(e.target.value)}
+                style={{ paddingLeft: 36, paddingRight: 16, paddingTop: 10, paddingBottom: 10, fontSize: 13, borderRadius: 10, border: '1px solid #e5e7eb', background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,.06)', outline: 'none', width: 240 }} />
+            </div>
           </div>
         </div>
+
+        {/* New-fabric samples (image-first; no name yet) */}
+        {samples.length > 0 && (
+          <div style={{ marginBottom: 36 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+              <Beaker size={15} style={{ color: '#0f766e' }} />
+              <p style={{ fontSize: 11, fontWeight: 700, color: '#0f766e', textTransform: 'uppercase', letterSpacing: 2, margin: 0 }}>
+                عينات جديدة · New Samples
+              </p>
+              <span style={{ fontSize: 11, color: '#9ca3af' }}>
+                {samples.filter(s => s.status !== 'linked').length} قيد التطوير · {samples.filter(s => s.status === 'linked').length} مرتبطة
+              </span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 14 }}>
+              {samples.map(s => {
+                const linked = s.status === 'linked';
+                return (
+                  <button key={s.id} onClick={() => setOpenSample(s.id)}
+                    style={{ background: '#fff', borderRadius: 14, border: `1px solid ${linked ? '#bfdbfe' : '#e5e7eb'}`, padding: 0, textAlign: 'right', cursor: 'pointer', overflow: 'hidden', display: 'flex', flexDirection: 'column', transition: 'box-shadow .15s, border-color .15s' }}
+                    onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 4px 20px rgba(0,0,0,.1)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.boxShadow = 'none'; }}>
+                    {/* Swatch */}
+                    <div style={{ height: 110, background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                      {s.swatchImageUrl
+                        ? <img src={s.swatchImageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        : <ImageIcon size={28} style={{ color: '#cbd5e1' }} />}
+                    </div>
+                    <div style={{ padding: '10px 12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: '#111827', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {s.sampleCode || 'بدون رقم'}
+                        </span>
+                        {linked
+                          ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 700, color: '#2563eb', background: '#eff6ff', border: '1px solid #bfdbfe', padding: '2px 6px', borderRadius: 5, whiteSpace: 'nowrap' }}><Link2 size={9} /> مرتبطة</span>
+                          : <span style={{ fontSize: 10, fontWeight: 700, color: '#d97706', background: '#fffbeb', border: '1px solid #fde68a', padding: '2px 6px', borderRadius: 5, whiteSpace: 'nowrap' }}>عينة</span>}
+                      </div>
+                      <p style={{ fontSize: 11, color: '#9ca3af', margin: '4px 0 0' }}>
+                        {s.date ? new Date(s.date).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' }) : '—'}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Grid */}
         {loading ? (

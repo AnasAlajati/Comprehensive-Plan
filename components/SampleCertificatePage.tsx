@@ -69,6 +69,8 @@ interface SampleCertData {
   isFinalized: boolean;
   finalizedAt: string;
   finalizedBy: string;
+  // Standalone-sample linkage (unused for order-bound certificates)
+  linkedFabricId?: string;
 }
 
 const DEFAULT_NEEDLE_COLS = 12;
@@ -277,13 +279,18 @@ function TathbeetMeasFields({ prefix, label, tathbeet, onChange }: {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-export function SampleCertificatePage({ order, clientName, onClose, headerSlot, machines: machinesProp, activeSection = 'cert', userRole }: {
+export function SampleCertificatePage({ order, clientName, onClose, headerSlot, machines: machinesProp, activeSection = 'cert', userRole, sampleId, onCreateFabric }: {
   order: OrderRow; clientName: string; onClose: () => void;
   headerSlot?: React.ReactNode;
   machines?: any[];
   activeSection?: 'cert' | 'knitting';
   userRole?: string;
+  /** When set, the report is a standalone new-fabric sample stored at fabric_samples/{sampleId} (no order). */
+  sampleId?: string;
+  /** Sample mode: build a fabric from this report (opens Add New Fabric pre-filled in the parent). */
+  onCreateFabric?: (cert: SampleCertData) => void;
 }) {
+  const isSample = !!sampleId;
   const [data, setData]      = useState<SampleCertData>({ ...EMPTY_CERT });
   const [saveStatus, setSave] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [uploading, setUploading] = useState(false);
@@ -301,6 +308,30 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
   // ── Load Firestore data + auto-fill yarn ──
   useEffect(() => {
     (async () => {
+      // ── Standalone sample mode: load from fabric_samples/{sampleId} ──
+      if (isSample) {
+        const sampleSnap = await getDoc(doc(db, 'fabric_samples', sampleId!));
+        const saved = (sampleSnap.exists() ? (sampleSnap.data() as any).cert : null) as Partial<SampleCertData> | null;
+        if (saved) {
+          const yarns = (saved.yarns && saved.yarns.length)
+            ? saved.yarns
+            : [{ id: '1', type: '', lotNumber: '', cones: '', percentage: '', yarnDetail: '', twistCount: '', feeders: '' }];
+          setData({
+            ...EMPTY_CERT,
+            ...saved,
+            yarns,
+            dyehouseSteps:    { ...EMPTY_CERT.dyehouseSteps, ...(saved.dyehouseSteps || {}) },
+            tathbeet:         { ...EMPTY_TATHBEET, ...(saved.tathbeet || {}) },
+            needleTracks:     { ...makeNeedleTracks(saved.needleColumns ?? DEFAULT_NEEDLE_COLS), ...(saved.needleTracks || {}) },
+            camTracks:        { ...makeCamTracks(saved.camColumns ?? DEFAULT_CAM_COLS),          ...(saved.camTracks    || {}) },
+            needleColumns:    saved.needleColumns    ?? DEFAULT_NEEDLE_COLS,
+            camColumns:       saved.camColumns       ?? DEFAULT_CAM_COLS,
+          });
+        }
+        // brand-new sample with no saved cert → keep EMPTY_CERT defaults
+        return;
+      }
+
       // Load yarns collection to resolve yarnId → readable name
       const yarnSnap = await getDocs(collection(db, 'yarns'));
       const yarnMap: Record<string, string> = {};
@@ -445,7 +476,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
         }));
       }
     })();
-  }, [order.id]);
+  }, [order.id, sampleId]);
 
   // ── Auto-save ──
   const scheduleSave = useCallback((next: SampleCertData) => {
@@ -454,6 +485,24 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
     setSave('saving');
     saveTimer.current = setTimeout(async () => {
       try {
+        // ── Standalone sample mode: persist to fabric_samples/{sampleId} ──
+        if (isSample) {
+          await setDoc(doc(db, 'fabric_samples', sampleId!), {
+            cert:           next,
+            sampleCode:     next.sampleNumber || '',
+            storedMaterial: next.storedMaterial || '',
+            swatchImageUrl: next.swatchImageUrl || '',
+            status:         next.linkedFabricId ? 'linked' : (next.isFinalized ? 'finalized' : 'draft'),
+            linkedFabricId: next.linkedFabricId || null,
+            rawWeight:      next.rawWeight,      rawWidth:      next.rawWidth,
+            zeroWeight:     next.zeroWeight,     zeroWidth:     next.zeroWidth,
+            finishedWeight: next.finishedWeight, finishedWidth: next.finishedWidth,
+            lastSavedAt:    new Date().toISOString(),
+          }, { merge: true });
+          setSave('saved');
+          setTimeout(() => setSave('idle'), 2000);
+          return;
+        }
         if (!orderRef.current) {
           const snap = await getDocs(query(collectionGroup(db, 'orders')));
           const d = snap.docs.find(d => d.id === order.id);
@@ -502,7 +551,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
         }
       } catch { setSave('error'); }
     }, 1500);
-  }, [order.id, clientName, order.material]);
+  }, [order.id, clientName, order.material, sampleId]);
 
   const update = useCallback(<K extends keyof SampleCertData>(key: K, value: SampleCertData[K]) => {
     setData(prev => { const next = { ...prev, [key]: value }; scheduleSave(next); return next; });
@@ -514,6 +563,32 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
     if (finalizing) return;
     setFinalizing(true);
     try {
+      // ── Standalone sample mode ──
+      if (isSample) {
+        const next: SampleCertData = {
+          ...data,
+          isFinalized: true,
+          finalizedAt: new Date().toISOString(),
+          finalizedBy: getAuth().currentUser?.email || 'Unknown',
+        };
+        if (saveTimer.current) clearTimeout(saveTimer.current);
+        await setDoc(doc(db, 'fabric_samples', sampleId!), {
+          cert:           next,
+          sampleCode:     next.sampleNumber || '',
+          storedMaterial: next.storedMaterial || '',
+          swatchImageUrl: next.swatchImageUrl || '',
+          status:         next.linkedFabricId ? 'linked' : 'finalized',
+          linkedFabricId: next.linkedFabricId || null,
+          rawWeight:      next.rawWeight,      rawWidth:      next.rawWidth,
+          zeroWeight:     next.zeroWeight,     zeroWidth:     next.zeroWidth,
+          finishedWeight: next.finishedWeight, finishedWidth: next.finishedWidth,
+          lastSavedAt:    next.finalizedAt,
+        }, { merge: true });
+        setData(next);
+        setSave('saved');
+        setTimeout(() => setSave('idle'), 2000);
+        return;
+      }
       if (!orderRef.current) {
         const snap = await getDocs(query(collectionGroup(db, 'orders')));
         const d = snap.docs.find(d => d.id === order.id);
@@ -556,7 +631,9 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
   const uploadSwatch = async (file: File) => {
     setUploading(true);
     try {
-      const r = ref(storage, `sampleCertificates/${order.id}/swatch-${Date.now()}`);
+      const r = ref(storage, isSample
+        ? `fabricSamples/${sampleId}/swatch-${Date.now()}`
+        : `sampleCertificates/${order.id}/swatch-${Date.now()}`);
       await uploadBytes(r, file);
       update('swatchImageUrl', await getDownloadURL(r));
     } finally { setUploading(false); }
@@ -643,10 +720,24 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
             <div className="flex items-center gap-2 flex-wrap">
               <Sparkles size={16} className={data.isFinalized ? 'text-emerald-500' : 'text-indigo-500'} />
               <span className="font-bold text-slate-800 text-base">
-                {activeSection === 'knitting' ? 'Knitting Structure' : 'Sample Certificate'}
+                {activeSection === 'knitting' ? 'Knitting Structure' : isSample ? 'تقرير عينة جديدة' : 'Sample Certificate'}
               </span>
-              <span className="text-slate-300">•</span>
-              <span className="text-sm text-slate-600">{order.material}</span>
+              {isSample ? (
+                <>
+                  <span className="text-slate-300">•</span>
+                  <span className="text-sm text-slate-600 font-mono">{data.sampleNumber || 'عينة بدون رقم'}</span>
+                  {data.linkedFabricId && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-700 border border-blue-300">
+                      <CheckCircle2 size={11} /> مرتبطة بقماش
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <span className="text-slate-300">•</span>
+                  <span className="text-sm text-slate-600">{order.material}</span>
+                </>
+              )}
               {data.isFinalized && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700 border border-emerald-300">
                   <CheckCircle2 size={11} /> معتمدة
@@ -680,6 +771,14 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
               اعتماد نهائي
             </button>
           )}
+          {isSample && onCreateFabric && canEditCert && (
+            <button onClick={() => onCreateFabric(data)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${data.linkedFabricId
+                ? 'bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100'
+                : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
+              <Plus size={15} /> {data.linkedFabricId ? 'تعديل القماش المرتبط' : 'إنشاء قماش من العينة'}
+            </button>
+          )}
           <button onClick={() => window.print()} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors">
             <Printer size={15} /> طباعة
           </button>
@@ -699,19 +798,27 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
               <div className="p-2 rounded-lg bg-indigo-50"><Sparkles size={16} className="text-indigo-600" /></div>
               <div>
                 <p className="font-bold text-slate-800">بيانات العينة</p>
-                <p className="text-xs text-slate-400">الحقول الملونة تعبأ تلقائياً من الطلب</p>
+                <p className="text-xs text-slate-400">{isSample ? 'عينة جديدة — لا ترتبط بطلب أو قماش بعد' : 'الحقول الملونة تعبأ تلقائياً من الطلب'}</p>
               </div>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <Field label="اسم العميل">
-                <div className="px-3 py-2 rounded-lg bg-indigo-50 border border-indigo-100 text-sm text-indigo-800 font-medium">{clientName}</div>
-              </Field>
-              <Field label="اسم الخامة">
-                <div className="px-3 py-2 rounded-lg bg-indigo-50 border border-indigo-100 text-sm text-indigo-800 font-medium">{order.material}</div>
-              </Field>
-              <Field label="رقم العينة">
-                <Input placeholder="S-001" value={data.sampleNumber} onChange={e => update('sampleNumber', e.target.value)} />
-              </Field>
+              {isSample ? (
+                <Field label="اسم/كود العينة">
+                  <Input placeholder="مثال: S-2026-014" value={data.sampleNumber} onChange={e => update('sampleNumber', e.target.value)} />
+                </Field>
+              ) : (
+                <>
+                  <Field label="اسم العميل">
+                    <div className="px-3 py-2 rounded-lg bg-indigo-50 border border-indigo-100 text-sm text-indigo-800 font-medium">{clientName}</div>
+                  </Field>
+                  <Field label="اسم الخامة">
+                    <div className="px-3 py-2 rounded-lg bg-indigo-50 border border-indigo-100 text-sm text-indigo-800 font-medium">{order.material}</div>
+                  </Field>
+                  <Field label="رقم العينة">
+                    <Input placeholder="S-001" value={data.sampleNumber} onChange={e => update('sampleNumber', e.target.value)} />
+                  </Field>
+                </>
+              )}
               <Field label="التاريخ">
                 <Input type="date" value={data.date} onChange={e => update('date', e.target.value)} />
               </Field>

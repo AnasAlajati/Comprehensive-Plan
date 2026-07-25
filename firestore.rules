@@ -1,71 +1,74 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
+
     // ========================================
     // HELPER FUNCTIONS
     // ========================================
-    
+
     // Check if user is authenticated
     function isAuthenticated() {
       return request.auth != null;
     }
-    
+
     // Get user's email (lowercase)
     function getUserEmail() {
       return request.auth.token.email.lower();
     }
-    
+
     // Get user document from users collection
     function getUserData() {
       return get(/databases/$(database)/documents/users/$(getUserEmail())).data;
     }
-    
+
     // Check if user document exists
     function userExists() {
       return exists(/databases/$(database)/documents/users/$(getUserEmail()));
     }
-    
+
     // Check user roles
     function isAdmin() {
       return isAuthenticated() && userExists() && getUserData().role == 'admin';
     }
-    
+
     function isEditor() {
       return isAuthenticated() && userExists() && getUserData().role == 'schedule_editor';
     }
-    
+
     function isViewer() {
       return isAuthenticated() && userExists() && getUserData().role == 'viewer';
     }
-    
+
     function isDyehouseManager() {
       return isAuthenticated() && userExists() && getUserData().role == 'dyehouse_manager';
     }
-    
+
     function isFactoryManager() {
       return isAuthenticated() && userExists() && getUserData().role == 'factory_manager';
     }
-    
+
     // Check if user is approved (not pending)
     function isApproved() {
       return isAuthenticated() && userExists() && getUserData().role != 'pending';
     }
-    
-    // Can write data (admin or editor)
-    // TEMP: Allow any authenticated user while debugging
+
+    // Can write data: any APPROVED role except read-only 'viewer'.
+    // This deliberately mirrors the UI's own gating (isReadOnly = viewer),
+    // so every role that writes today (admin, schedule_editor, dyehouse_manager,
+    // dyehouse_colors_manager, factory_manager, daily_planner, machine_technician)
+    // keeps writing — but enforced by the database, not just hidden buttons.
+    // 'pending' and missing/unknown roles are denied.
     function canWrite() {
-      return isAuthenticated();
-      // return isAdmin() || isEditor() || isFactoryManager();
+      return isAuthenticated() && userExists()
+        && getUserData().role != 'pending'
+        && getUserData().role != 'viewer';
     }
-    
-    // Can read data (any approved user)
-    // TEMP: Allow any authenticated user while debugging
+
+    // Can read data: any approved user (all roles except 'pending')
     function canRead() {
-      return isAuthenticated();
-      // return isApproved();
+      return isApproved();
     }
-    
+
     // ========================================
     // USERS COLLECTION - HIGHLY PROTECTED
     // ========================================
@@ -75,30 +78,30 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (
         getUserEmail() == userEmail || isApproved()
       );
-      
+
       // Users can update their own presence fields only
-      allow update: if isAuthenticated() && 
+      allow update: if isAuthenticated() &&
         getUserEmail() == userEmail &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isOnline', 'lastSeen', 'lastActivePage', 'lastActivePageAt']);
-      
+
       // Only ADMINS can create new users or change roles
       allow create: if isAdmin() || (
         // Allow first user bootstrap OR self-registration as pending
-        isAuthenticated() && 
+        isAuthenticated() &&
         getUserEmail() == userEmail &&
         request.resource.data.role == 'pending'
       );
-      
+
       // Only ADMINS can update role or delete users
       // But admin cannot demote themselves (handled in app, extra safety here)
       allow update: if isAdmin() && (
         // Prevent admin from changing their own role to non-admin
         !(getUserEmail() == userEmail && request.resource.data.role != 'admin')
       );
-      
+
       allow delete: if isAdmin();
     }
-    
+
     // ========================================
     // MACHINES - Protected from random creation
     // ========================================
@@ -120,112 +123,122 @@ service cloud.firestore {
       allow read: if canRead();
       allow write: if canWrite();
     }
-    
+
+    // CollectionGroup rule required for collectionGroup("orders") queries —
+    // used all over the app (ClientOrdersPage, FabricReportsPage,
+    // SampleCertificatePage, Dyehouse pages, OrderPickerModal, ...).
+    // Covers every collection named "orders" at any depth, including
+    // CustomerSheets/{id}/orders and the top-level /orders.
+    match /{path=**}/orders/{orderId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
     // Legacy machines collection
     match /machines/{machineId} {
       allow read: if canRead();
       allow update: if canWrite();
       allow create, delete: if isAdmin(); // Only admins can add or delete
-      
+
       match /daily_logs/{logDate} {
         allow read: if canRead();
         allow write: if canWrite();
       }
     }
-    
+
     // ========================================
     // BUSINESS DATA - Standard Protection
     // ========================================
-    
+
     // Customers
     match /CustomerSheets/{customerId} {
       allow read: if canRead();
       allow write: if canWrite();
-      
+
       // Orders subcollection
       match /orders/{orderId} {
         allow read: if canRead();
         allow write: if canWrite();
       }
     }
-    
+
     // Fabrics
     match /FabricSS/{fabricId} {
       allow read: if canRead();
       allow write: if canWrite();
     }
-    
+
     // Yarns
     match /yarns/{yarnId} {
       allow read: if canRead();
       allow write: if canWrite();
     }
-    
+
     // Yarn Inventory
     match /yarn_inventory/{itemId} {
       allow read: if canRead();
       allow write: if canWrite();
     }
-    
+
     // Orders
     match /orders/{orderId} {
       allow read: if canRead();
       allow write: if canWrite();
     }
-    
+
     // Dyehouses
     match /dyehouses/{dyehouseId} {
       allow read: if canRead();
       allow write: if canWrite() || isDyehouseManager();
     }
-    
+
     // Dyehouse Inventory
     match /dyehouse_inventory/{itemId} {
       allow read: if canRead();
       allow write: if canWrite() || isDyehouseManager();
     }
-    
+
     // External Plans (External Factories)
     match /ExternalPlans/{planId} {
       allow read: if canRead();
       allow write: if canWrite();
     }
-    
+
     // Samples
     match /samples/{sampleId} {
       allow read: if canRead();
       allow write: if canWrite();
     }
-    
+
     // Scrap Reasons
     match /scrap_reasons/{reasonId} {
       allow read: if canRead();
       allow write: if isAdmin();
     }
-    
+
     // ========================================
     // SYSTEM/ANALYTICS DATA
     // ========================================
-    
+
     // Daily Production Index
     match /daily_production_index/{dateStr} {
       allow read: if canRead();
       allow write: if canWrite();
     }
-    
+
     // Factory Stats
     match /factory_stats/{statId} {
       allow read: if canRead();
       allow write: if canWrite();
     }
-    
+
     // Activity Logs - Anyone approved can create, only admins can delete
     match /activityLogs/{logId} {
       allow read: if canRead();
       allow create: if isApproved();
       allow update, delete: if isAdmin();
     }
-    
+
     // Settings (global app settings like activeDay)
     match /settings/{settingId} {
       allow read: if canRead();
@@ -251,6 +264,138 @@ service cloud.firestore {
       allow create: if canWrite();
       allow delete: if canWrite();
       allow update: if false; // transfers are immutable; delete and re-create
+    }
+
+    // ========================================
+    // COLLECTIONS PREVIOUSLY MISSING FROM RULES
+    // (inventoried from every collection()/doc() reference in the code so the
+    //  repo rules file can be deployed without breaking any workflow)
+    // ========================================
+
+    // Sample certificates index (written by SampleCertificatePage autosave/finalize)
+    match /sample_certificates/{orderId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Standalone new-fabric sample reports (Fabric Archive → "New Sample" → becomes a fabric)
+    match /fabric_samples/{sampleId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Zero Pattern Analysis exclusions ("remove wrong data" from the tracking sheet)
+    match /analysis_exclusions/{recordId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Production tickets (printed production orders, Recent Prints)
+    match /ProductionTickets/{ticketId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Seasons
+    match /Seasons/{seasonId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Dyehouse name aliases (Excel import "remember this link")
+    match /dyehouseAliases/{aliasId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Color palette (color name -> hex links)
+    match /colorPalette/{colorId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Legacy/parallel client + fabric collections still read in places
+    match /clients/{clientId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /customers/{customerId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /fabrics/{fabricId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /Fabrics/{fabricId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /OrderSS/{orderId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /YarnInventory/{itemId} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Client real-name mapping
+    match /ClientRealNames/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Daily summaries + reporting overrides
+    match /DailySummaries/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /DeliveryOverrides/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /MonthlyProductionOverrides/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /MonthlyScrapOverrides/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Fabric purchases
+    match /FabricPurchases/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // External production logs
+    match /externalProduction/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Sample daily work tracking
+    match /sampleDailyWork/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Technicians & workers directories
+    match /technicians/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+    match /workers/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
+    }
+
+    // Work center mappings
+    match /work_center_mappings/{id} {
+      allow read: if canRead();
+      allow write: if canWrite();
     }
 
     // ========================================
