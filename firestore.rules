@@ -79,10 +79,13 @@ service cloud.firestore {
         getUserEmail() == userEmail || isApproved()
       );
 
-      // Users can update their own presence fields only
+      // Users can update their own presence + active-time fields only
       allow update: if isAuthenticated() &&
         getUserEmail() == userEmail &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isOnline', 'lastSeen', 'lastActivePage', 'lastActivePageAt']);
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'isOnline', 'lastSeen', 'lastActivePage', 'lastActivePageAt',
+          'activeDateToday', 'activeSecondsToday', 'lastActiveAt'
+        ]);
 
       // Only ADMINS can create new users or change roles
       allow create: if isAdmin() || (
@@ -100,22 +103,6 @@ service cloud.firestore {
       );
 
       allow delete: if isAdmin();
-
-      // Daily active-time tracking (Users page "Active Today" column +
-      // admin Feature Usage report). Each user can only write their own
-      // bucket; any approved user can read all of them for the reports.
-      match /dailyActivity/{dateId} {
-        allow read: if canRead();
-        allow write: if isAuthenticated() && getUserEmail() == userEmail;
-      }
-    }
-
-    // CollectionGroup rule required for collectionGroup("dailyActivity") queries
-    // (Firestore requires a top-level wildcard match for collectionGroup reads).
-    // Writes always go through the direct users/{email}/dailyActivity path above.
-    match /{path=**}/dailyActivity/{dateId} {
-      allow read: if canRead();
-      allow write: if false;
     }
 
     // ========================================

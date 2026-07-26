@@ -227,12 +227,6 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
-  // Keep a ref to the current page so the presence heartbeat (below) can
-  // attribute active seconds to whichever page was open at each tick,
-  // without needing to restart that effect on every navigation.
-  const viewModeRef = useRef(viewMode);
-  useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
-
   // Presence & Activity Tracking (Online, Idle, Background)
   useEffect(() => {
     if (!user?.email || !isAuthorized) return;
@@ -284,7 +278,7 @@ const App: React.FC = () => {
         // Only count time toward daily/weekly totals while genuinely online —
         // idle and backgrounded time is never recorded.
         if (newStatus === 'online') {
-            TimeTrackingService.recordActiveSeconds(email, 60, viewModeRef.current);
+            TimeTrackingService.recordActiveSeconds(email, 60);
         }
     }, 60000);
 

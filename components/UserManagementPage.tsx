@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   collection, 
   collectionGroup,
@@ -21,8 +21,7 @@ import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth'
 import { db, firebaseConfig, auth } from '../services/firebase';
 import { ActivityService, ActivityLog } from '../services/activityService';
 import { getCairoDateString, formatDuration } from '../services/timeTrackingService';
-import { FeatureUsagePage } from './FeatureUsagePage';
-import { Trash2, UserPlus, Shield, ShieldAlert, Mail, User as UserIcon, Copy, Check, Key, Circle, Clock, Activity, MapPin, Edit3, Plus, X, ChevronDown, ChevronUp, AlertTriangle, Database, RefreshCw, BarChart3 } from 'lucide-react';
+import { Trash2, UserPlus, Shield, ShieldAlert, Mail, User as UserIcon, Copy, Check, Key, Circle, Clock, Activity, MapPin, Edit3, Plus, X, ChevronDown, ChevronUp, AlertTriangle, Database, RefreshCw } from 'lucide-react';
 
 interface UserData {
   id: string;
@@ -35,6 +34,8 @@ interface UserData {
   lastSeen?: any;
   lastActivePage?: string;
   lastActivePageAt?: any;
+  activeDateToday?: string;
+  activeSecondsToday?: number;
   lastModification?: {
     action: string;
     entityType: string;
@@ -61,11 +62,7 @@ export const UserManagementPage: React.FC = () => {
   const [userActivities, setUserActivities] = useState<Record<string, ActivityLog[]>>({});
   const [loadingActivities, setLoadingActivities] = useState<string | null>(null);
 
-  // Today's active-time-per-user (Cairo calendar day), keyed by user email
-  const [todayActiveSeconds, setTodayActiveSeconds] = useState<Record<string, number>>({});
-
-  // Tab: the user list/management tools, or the Feature Usage report
-  const [activeTab, setActiveTab] = useState<'users' | 'feature-usage'>('users');
+  const todayStr = useMemo(() => getCairoDateString(), []);
 
   // Season Migration states
   const [migrationOpen, setMigrationOpen] = useState(false);
@@ -333,24 +330,6 @@ export const UserManagementPage: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
-  // Live "Active Today" total per user, from each user's dailyActivity sub-collection
-  useEffect(() => {
-    const todayStr = getCairoDateString();
-    const q = query(collectionGroup(db, 'dailyActivity'), where('date', '==', todayStr));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const map: Record<string, number> = {};
-      snapshot.docs.forEach(d => {
-        const email = d.ref.parent.parent?.id;
-        if (!email) return;
-        map[email] = Number(d.data().totalSeconds) || 0;
-      });
-      setTodayActiveSeconds(map);
-    }, (err) => {
-      console.warn('UserManagementPage dailyActivity listener error:', err);
-    });
-    return () => unsubscribe();
-  }, []);
-
   const fetchUsers = async () => {
     try {
       const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
@@ -494,36 +473,6 @@ export const UserManagementPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex items-center gap-2 border-b border-slate-200">
-        <button
-          onClick={() => setActiveTab('users')}
-          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors ${
-            activeTab === 'users'
-              ? 'border-indigo-600 text-indigo-700'
-              : 'border-transparent text-slate-500 hover:text-slate-700'
-          }`}
-        >
-          <Shield size={16} />
-          Users
-        </button>
-        <button
-          onClick={() => setActiveTab('feature-usage')}
-          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors ${
-            activeTab === 'feature-usage'
-              ? 'border-indigo-600 text-indigo-700'
-              : 'border-transparent text-slate-500 hover:text-slate-700'
-          }`}
-        >
-          <BarChart3 size={16} />
-          Feature Usage
-        </button>
-      </div>
-
-      {activeTab === 'feature-usage' && <FeatureUsagePage />}
-
-      {activeTab === 'users' && (
-      <>
       {/* Success Credential Display */}
       {createdUserCreds && (
         <div className="bg-green-50 border border-green-200 rounded-xl p-6 shadow-sm animate-in fade-in slide-in-from-top-4">
@@ -811,7 +760,7 @@ export const UserManagementPage: React.FC = () => {
                     {/* Active Today */}
                     <td className="px-6 py-4">
                       {(() => {
-                        const seconds = todayActiveSeconds[user.id] || 0;
+                        const seconds = user.activeDateToday === todayStr ? (user.activeSecondsToday || 0) : 0;
                         if (seconds < 60) {
                           return <span className="text-xs text-slate-400 italic">Not active yet</span>;
                         }
@@ -1378,8 +1327,6 @@ export const UserManagementPage: React.FC = () => {
         </div>
 
       </div>
-      </>
-      )}
     </div>
   );
 };
