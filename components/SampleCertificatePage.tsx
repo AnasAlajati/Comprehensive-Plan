@@ -85,6 +85,9 @@ interface SampleCertData {
   camDialTracks: number;        // 2–4
   camCylTracks: number;         // 2–4
   camTracks: Record<string, CamStitch[]>;
+  // Which cam columns (feeder positions) have spandex/lycra fed in — shared
+  // across dial and cylinder, since it's a property of the feeder position.
+  camSpandexCols: boolean[];
   dyehouseSteps: Record<string, boolean>;
   tathbeet: TathbeetData;
   dyehouseNotes: string;
@@ -176,6 +179,16 @@ const makeNeedleTracks = (cols: number): Record<string, boolean[]> =>
 const makeCamTracks = (cols: number): Record<string, CamStitch[]> =>
   Object.fromEntries(CAM_TRACKS.map(t => [t, Array<CamStitch>(cols).fill('knit')]));
 
+const makeCamSpandex = (cols: number): boolean[] => Array(cols).fill(false);
+
+// Pad/truncate a saved camSpandexCols array to match the current column count
+// (handles columns having been added/removed since it was last saved).
+const normalizeSpandexCols = (saved: boolean[] | undefined, cols: number): boolean[] => {
+  const base = makeCamSpandex(cols);
+  (saved || []).forEach((v, i) => { if (i < cols) base[i] = !!v; });
+  return base;
+};
+
 const EMPTY_CERT: SampleCertData = {
   sampleNumber: '', date: new Date().toISOString().split('T')[0],
   rawWeight: '', rawWidth: '', zeroWeight: '', zeroWidth: '',
@@ -197,6 +210,7 @@ const EMPTY_CERT: SampleCertData = {
   camDialTracks:    4,
   camCylTracks:     4,
   camTracks:        makeCamTracks(DEFAULT_CAM_COLS),
+  camSpandexCols:   makeCamSpandex(DEFAULT_CAM_COLS),
   dyehouseSteps: {
     'تثبيت': false, 'صباغة': false, 'انزيم': false, 'كسر بياض': false,
     'عصارة': false, 'مجفف': false, 'رام': false, 'كسترة': false,
@@ -269,6 +283,22 @@ function CamCell({ value, onClick }: { value: CamStitch; onClick: () => void }) 
       className={`w-7 h-7 rounded border-2 flex items-center justify-center transition-all hover:scale-110 active:scale-95 select-none ${cfg.bg} ${cfg.text} ${cfg.border}`}
     >
       <cfg.Icon />
+    </button>
+  );
+}
+
+/** Spandex cell — toggles whether this feeder column has spandex/lycra fed */
+function SpandexCell({ active, onClick }: { active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title={active ? 'ليكرا في هذا العمود' : 'بدون ليكرا'}
+      className={`w-7 h-7 rounded border-2 flex items-center justify-center text-[10px] font-bold transition-all hover:scale-110 active:scale-95 select-none
+        ${active
+          ? 'bg-purple-600 border-purple-600 text-white'
+          : 'bg-white border-slate-300 text-transparent hover:border-purple-300'}`}
+    >
+      L
     </button>
   );
 }
@@ -491,6 +521,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
             tathbeet:         { ...EMPTY_TATHBEET, ...(saved.tathbeet || {}) },
             needleTracks:     { ...makeNeedleTracks(saved.needleColumns ?? DEFAULT_NEEDLE_COLS), ...(saved.needleTracks || {}) },
             camTracks:        { ...makeCamTracks(saved.camColumns ?? DEFAULT_CAM_COLS),          ...(saved.camTracks    || {}) },
+            camSpandexCols:   normalizeSpandexCols(saved.camSpandexCols, saved.camColumns ?? DEFAULT_CAM_COLS),
             needleColumns:    saved.needleColumns    ?? DEFAULT_NEEDLE_COLS,
             camColumns:       saved.camColumns       ?? DEFAULT_CAM_COLS,
           });
@@ -614,6 +645,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
           },
           needleTracks:     { ...makeNeedleTracks(saved.needleColumns ?? DEFAULT_NEEDLE_COLS), ...(saved.needleTracks || {}) },
           camTracks:        { ...makeCamTracks(saved.camColumns ?? DEFAULT_CAM_COLS),          ...(saved.camTracks    || {}) },
+          camSpandexCols:   normalizeSpandexCols(saved.camSpandexCols, saved.camColumns ?? DEFAULT_CAM_COLS),
           needleColumns:    saved.needleColumns    ?? DEFAULT_NEEDLE_COLS,
           camColumns:       saved.camColumns       ?? DEFAULT_CAM_COLS,
           needleBedType:    saved.needleBedType    ?? 'single',
@@ -648,6 +680,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
             camDialTracks:    savedStructure.camDialTracks    ?? prev.camDialTracks,
             camCylTracks:     savedStructure.camCylTracks     ?? prev.camCylTracks,
             camTracks:        { ...makeCamTracks(savedStructure.camColumns ?? DEFAULT_CAM_COLS), ...(savedStructure.camTracks || {}) },
+            camSpandexCols:   normalizeSpandexCols(savedStructure.camSpandexCols, savedStructure.camColumns ?? DEFAULT_CAM_COLS),
           } : {}),
         }));
       }
@@ -704,6 +737,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                   camDialTracks:    next.camDialTracks,
                   camCylTracks:     next.camCylTracks,
                   camTracks:        next.camTracks,
+                  camSpandexCols:   next.camSpandexCols,
                 },
               },
             }, { merge: true });
@@ -869,11 +903,21 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
     });
   };
 
+  const toggleCamSpandex = (i: number) => {
+    setData(prev => {
+      const cols = [...(prev.camSpandexCols || makeCamSpandex(prev.camColumns))];
+      cols[i] = !cols[i];
+      const next = { ...prev, camSpandexCols: cols };
+      scheduleSave(next); return next;
+    });
+  };
+
   const addCamCol = () => setData(prev => {
     const cols = prev.camColumns + 1;
     const tracks: Record<string, CamStitch[]> = {};
     CAM_TRACKS.forEach(t => { tracks[t] = [...(prev.camTracks[t] || Array(prev.camColumns).fill('knit')), 'knit'] as CamStitch[]; });
-    const next = { ...prev, camColumns: cols, camTracks: tracks };
+    const spandexCols = [...(prev.camSpandexCols || makeCamSpandex(prev.camColumns)), false];
+    const next = { ...prev, camColumns: cols, camTracks: tracks, camSpandexCols: spandexCols };
     scheduleSave(next); return next;
   });
 
@@ -882,7 +926,8 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
     const cols = prev.camColumns - 1;
     const tracks: Record<string, CamStitch[]> = {};
     CAM_TRACKS.forEach(t => { tracks[t] = (prev.camTracks[t] || []).slice(0, cols) as CamStitch[]; });
-    const next = { ...prev, camColumns: cols, camTracks: tracks };
+    const spandexCols = (prev.camSpandexCols || makeCamSpandex(prev.camColumns)).slice(0, cols);
+    const next = { ...prev, camColumns: cols, camTracks: tracks, camSpandexCols: spandexCols };
     scheduleSave(next); return next;
   });
 
@@ -1494,6 +1539,26 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
 
                 return (
                   <>
+                    {/* Spandex/lycra feed — one shared row per column, independent of dial/cylinder */}
+                    <div className="space-y-1.5">
+                      <p className="text-xs font-bold text-purple-600 uppercase tracking-wider">ليكرا (Spandex)</p>
+                      <div className="overflow-x-auto pb-1">
+                        <div className="space-y-1.5" style={{ minWidth: 'max-content' }}>
+                          <CamColNums />
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs font-semibold text-purple-600 w-20 shrink-0 text-right">ليكرا</span>
+                            <div className="flex gap-1">
+                              {Array.from({ length: data.camColumns }).map((_, i) => (
+                                <SpandexCell key={i}
+                                  active={!!data.camSpandexCols[i]}
+                                  onClick={() => toggleCamSpandex(i)} />
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
                     {data.camBedType === 'double' && (
                       <div className="space-y-1.5">
                         <div className="flex items-center gap-3">
