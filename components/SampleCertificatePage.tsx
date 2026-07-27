@@ -1537,28 +1537,24 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                   </div>
                 );
 
+                // Spandex/lycra row — same shared data, rendered attached to the numbers
+                // header of each grid (dial's and cylinder's) so it's visibly the same
+                // column 1/2/3... as the track rows right below it, not a separate section.
+                const SpandexRow = () => (
+                  <div className="flex items-center gap-3 pb-1.5 mb-0.5 border-b border-dashed border-purple-200">
+                    <span className="text-xs font-semibold text-purple-600 w-20 shrink-0 text-right">ليكرا</span>
+                    <div className="flex gap-1">
+                      {Array.from({ length: data.camColumns }).map((_, i) => (
+                        <SpandexCell key={i}
+                          active={!!data.camSpandexCols[i]}
+                          onClick={() => toggleCamSpandex(i)} />
+                      ))}
+                    </div>
+                  </div>
+                );
+
                 return (
                   <>
-                    {/* Spandex/lycra feed — one shared row per column, independent of dial/cylinder */}
-                    <div className="space-y-1.5">
-                      <p className="text-xs font-bold text-purple-600 uppercase tracking-wider">ليكرا (Spandex)</p>
-                      <div className="overflow-x-auto pb-1">
-                        <div className="space-y-1.5" style={{ minWidth: 'max-content' }}>
-                          <CamColNums />
-                          <div className="flex items-center gap-3">
-                            <span className="text-xs font-semibold text-purple-600 w-20 shrink-0 text-right">ليكرا</span>
-                            <div className="flex gap-1">
-                              {Array.from({ length: data.camColumns }).map((_, i) => (
-                                <SpandexCell key={i}
-                                  active={!!data.camSpandexCols[i]}
-                                  onClick={() => toggleCamSpandex(i)} />
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
                     {data.camBedType === 'double' && (
                       <div className="space-y-1.5">
                         <div className="flex items-center gap-3">
@@ -1570,6 +1566,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                         <div className="overflow-x-auto pb-1">
                           <div className="space-y-1.5" style={{ minWidth: 'max-content' }}>
                             <CamColNums />
+                            <SpandexRow />
                             {dialKeys.map(t => <CamRow key={t} track={t} />)}
                           </div>
                         </div>
@@ -1586,6 +1583,7 @@ export function SampleCertificatePage({ order, clientName, onClose, headerSlot, 
                       <div className="overflow-x-auto pb-1">
                         <div className="space-y-1.5" style={{ minWidth: 'max-content' }}>
                           <CamColNums />
+                          <SpandexRow />
                           {cylKeys.map(t => <CamRow key={t} track={t} />)}
                         </div>
                       </div>
