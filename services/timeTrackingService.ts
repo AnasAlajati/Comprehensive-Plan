@@ -1,19 +1,35 @@
 /**
- * Time Tracking Service - Tracks each user's total active time for today
- * (Cairo calendar day), stored directly on their own users/{email} doc:
- *   - activeDateToday: string (e.g. "2026-07-26")
- *   - activeSecondsToday: number
+ * Time Tracking Service - Three independent pieces:
  *
- * Written directly on the user doc (rather than a dailyActivity
- * sub-collection) so it's readable from the same live "users" listener
- * every page already uses — no extra collectionGroup query, and no
- * Firestore index to configure.
+ * 1. Presence ("is a tab open") — see hooks/usePresence.ts. Writes lastSeen
+ *    to the user's own users/{email} doc. Online/Offline is derived purely
+ *    client-side from that timestamp (now - lastSeen < 3min) — never stored
+ *    as a boolean.
+ *
+ * 2. Activity/idle tracking — see hooks/useActivityTracking.ts. Buffers
+ *    active/idle seconds in memory (sampled every 15s, classified by real
+ *    input + tab visibility) and flushes them here via flushActivity(),
+ *    which increments (never overwrites) a per-day doc so concurrent tabs
+ *    or tick drift can't clobber each other.
+ *
+ * 3. History — getUserActivityHistory() / getTodayActivityForAllUsers()
+ *    below, reading the user_activity collection this writes to.
+ *
+ * Storage: user_activity/{uid}_{date}
+ *   - uid: string, date: string (YYYY-MM-DD, Cairo calendar day)
+ *   - activeSeconds: number, idleSeconds: number
+ *
+ * Deliberately a flat top-level collection (not a sub-collection) so every
+ * read here is a single-field equality query — no collectionGroup query,
+ * no composite index to configure in Firebase Console.
  */
 
-import { doc, getDoc, updateDoc, setDoc, serverTimestamp, increment } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp, increment, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from './firebase';
 
-// Cairo-local calendar date, e.g. "2026-07-20"
+// Cairo-local calendar date, e.g. "2026-07-20" — the reset boundary for
+// "today", the same calendar day for every user regardless of the
+// server's or viewer's own timezone.
 export function getCairoDateString(d: Date = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Africa/Cairo',
@@ -34,27 +50,68 @@ export function formatDuration(totalSeconds: number): string {
   return `${hours}h ${minutes}m`;
 }
 
+export interface DailyActivity {
+  uid: string;
+  date: string;
+  activeSeconds: number;
+  idleSeconds: number;
+}
+
 export const TimeTrackingService = {
   /**
-   * Adds `seconds` to today's (Cairo) active-time total for this user.
-   * Called from the presence heartbeat only while the user's status is
-   * 'online' (not idle/background) — idle and background time is never
-   * recorded. Resets to today's count if the stored date has rolled over.
+   * Adds `seconds.active` / `seconds.idle` to today's (Cairo) bucket for
+   * this user. Uses increment() so multiple open tabs, or a flush racing
+   * a day rollover, only ever add — never overwrite each other.
    */
-  async recordActiveSeconds(email: string, seconds: number): Promise<void> {
-    if (!email || seconds <= 0) return;
-    const todayStr = getCairoDateString();
-    const ref = doc(db, 'users', email.toLowerCase());
+  async flushActivity(uid: string, seconds: { active: number; idle: number }): Promise<void> {
+    if (!uid || (seconds.active <= 0 && seconds.idle <= 0)) return;
+    const dateStr = getCairoDateString();
+    const docId = `${uid}_${dateStr}`;
     try {
-      const snap = await getDoc(ref);
-      const data = snap.exists() ? (snap.data() as any) : {};
-      if (data.activeDateToday === todayStr) {
-        await updateDoc(ref, { activeSecondsToday: increment(seconds), lastActiveAt: serverTimestamp() });
-      } else {
-        await setDoc(ref, { activeDateToday: todayStr, activeSecondsToday: seconds, lastActiveAt: serverTimestamp() }, { merge: true });
-      }
+      await setDoc(doc(db, 'user_activity', docId), {
+        uid,
+        date: dateStr,
+        activeSeconds: increment(Math.max(0, Math.round(seconds.active))),
+        idleSeconds: increment(Math.max(0, Math.round(seconds.idle))),
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
     } catch (err) {
-      console.error('Failed to record active time:', err);
+      console.error('Failed to flush activity:', err);
     }
-  }
+  },
+
+  /**
+   * Last `days` days of activity for one user, newest first. Sorted
+   * client-side (not via Firestore orderBy) so this stays a single
+   * equality-filter query — no composite index needed.
+   */
+  async getUserActivityHistory(uid: string, days = 14): Promise<DailyActivity[]> {
+    if (!uid) return [];
+    try {
+      const snap = await getDocs(query(collection(db, 'user_activity'), where('uid', '==', uid)));
+      const rows = snap.docs.map(d => d.data() as DailyActivity);
+      rows.sort((a, b) => b.date.localeCompare(a.date));
+      return rows.slice(0, days);
+    } catch (err) {
+      console.error('Failed to fetch activity history:', err);
+      return [];
+    }
+  },
+
+  /** Today's activity for every user, keyed by uid — for the live admin list view. */
+  async getTodayActivityForAllUsers(): Promise<Record<string, DailyActivity>> {
+    const todayStr = getCairoDateString();
+    try {
+      const snap = await getDocs(query(collection(db, 'user_activity'), where('date', '==', todayStr)));
+      const map: Record<string, DailyActivity> = {};
+      snap.docs.forEach(d => {
+        const data = d.data() as DailyActivity;
+        map[data.uid] = data;
+      });
+      return map;
+    } catch (err) {
+      console.error('Failed to fetch today activity:', err);
+      return {};
+    }
+  },
 };

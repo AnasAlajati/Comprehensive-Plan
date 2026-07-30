@@ -20,7 +20,7 @@ import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, firebaseConfig, auth } from '../services/firebase';
 import { ActivityService, ActivityLog } from '../services/activityService';
-import { getCairoDateString, formatDuration } from '../services/timeTrackingService';
+import { getCairoDateString, formatDuration, TimeTrackingService, DailyActivity } from '../services/timeTrackingService';
 import { Trash2, UserPlus, Shield, ShieldAlert, Mail, User as UserIcon, Copy, Check, Key, Circle, Clock, Activity, MapPin, Edit3, Plus, X, ChevronDown, ChevronUp, AlertTriangle, Database, RefreshCw } from 'lucide-react';
 
 interface UserData {
@@ -30,12 +30,9 @@ interface UserData {
   role: 'admin' | 'schedule_editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | 'machine_technician' | 'pending';
   createdAt: any;
   password?: string;
-  isOnline?: boolean;
   lastSeen?: any;
   lastActivePage?: string;
   lastActivePageAt?: any;
-  activeDateToday?: string;
-  activeSecondsToday?: number;
   lastModification?: {
     action: string;
     entityType: string;
@@ -62,7 +59,39 @@ export const UserManagementPage: React.FC = () => {
   const [userActivities, setUserActivities] = useState<Record<string, ActivityLog[]>>({});
   const [loadingActivities, setLoadingActivities] = useState<string | null>(null);
 
+  // Today's active/idle time per user (live), keyed by uid (lowercase email)
+  const [todayActivity, setTodayActivity] = useState<Record<string, DailyActivity>>({});
+  // Per-user 14-day active/idle history, loaded on row expansion
+  const [activityHistory, setActivityHistory] = useState<Record<string, DailyActivity[]>>({});
+  const [loadingHistory, setLoadingHistory] = useState<string | null>(null);
+
   const todayStr = useMemo(() => getCairoDateString(), []);
+
+  // Ticking clock so Online/Offline + "Xm ago" stay live without needing a
+  // Firestore write to trigger a re-render — recomputed against this, not
+  // stored as a boolean.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setNowTick(Date.now()), 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Live "Active Today" per user — single equality filter on a flat
+  // collection, no composite index required.
+  useEffect(() => {
+    const q = query(collection(db, 'user_activity'), where('date', '==', todayStr));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const map: Record<string, DailyActivity> = {};
+      snapshot.docs.forEach(d => {
+        const data = d.data() as DailyActivity;
+        map[data.uid] = data;
+      });
+      setTodayActivity(map);
+    }, (err) => {
+      console.warn('user_activity listener error:', err);
+    });
+    return () => unsubscribe();
+  }, [todayStr]);
 
   // Season Migration states
   const [migrationOpen, setMigrationOpen] = useState(false);
@@ -302,12 +331,29 @@ export const UserManagementPage: React.FC = () => {
     setLoadingActivities(null);
   };
 
+  // Load a user's 14-day active/idle history when their row expands.
+  // userId is the users/{id} doc id, which is always the lowercase email —
+  // the same value flushActivity() writes as the uid field, so it matches
+  // regardless of how the user.email field itself happens to be cased.
+  const loadActivityHistory = async (userId: string) => {
+    if (activityHistory[userId]) return; // Already loaded
+    setLoadingHistory(userId);
+    try {
+      const history = await TimeTrackingService.getUserActivityHistory(userId, 14);
+      setActivityHistory(prev => ({ ...prev, [userId]: history }));
+    } catch (err) {
+      console.error('Failed to load activity history:', err);
+    }
+    setLoadingHistory(null);
+  };
+
   const toggleUserExpansion = (userId: string, userEmail: string) => {
     if (expandedUserId === userId) {
       setExpandedUserId(null);
     } else {
       setExpandedUserId(userId);
       loadUserActivities(userEmail);
+      loadActivityHistory(userId);
     }
   };
 
@@ -414,7 +460,6 @@ export const UserManagementPage: React.FC = () => {
         email: newUserEmail.toLowerCase(),
         displayName: newUserName || newUserEmail.split('@')[0],
         role: newUserRole,
-        isOnline: false, // Default to offline on creation
         createdAt: serverTimestamp(),
         uid: uid || null,
         password: password // Storing password as requested
@@ -620,12 +665,14 @@ export const UserManagementPage: React.FC = () => {
                     <td className="px-6 py-4">
                       {(() => {
                         // Helper to calculate time ago
+                        // Online is derived purely from lastSeen recency (never a
+                        // stored boolean), recomputed against the ticking nowTick
+                        // state so this updates live without a Firestore write.
                         const getLastSeenInfo = (timestamp: any) => {
                           if (!timestamp) return { text: 'Never', isRecent: false };
-                          
+
                           const lastSeen = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-                          const now = new Date();
-                          const diffMs = now.getTime() - lastSeen.getTime();
+                          const diffMs = nowTick - lastSeen.getTime();
                           const diffMins = Math.floor(diffMs / 60000);
                           const isRecent = diffMins < 3; // 3 minutes threshold
 
@@ -643,8 +690,7 @@ export const UserManagementPage: React.FC = () => {
                         };
 
                         const lastSeenInfo = getLastSeenInfo(user.lastSeen);
-                        // Only show Green if online AND active in last 3 mins
-                        const isReallyOnline = user.isOnline && lastSeenInfo.isRecent;
+                        const isReallyOnline = lastSeenInfo.isRecent;
 
                         return (
                           <div className="flex items-center gap-3">
@@ -680,23 +726,21 @@ export const UserManagementPage: React.FC = () => {
                          const getLastSeenInfo = (timestamp: any) => {
                            if (!timestamp) return { text: 'Never', isRecent: false };
                            const lastSeen = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-                           const now = new Date();
-                           const diffMs = now.getTime() - lastSeen.getTime();
-                           return { 
-                             text: '', // calculated below to avoid dupe code 
+                           const diffMs = nowTick - lastSeen.getTime();
+                           return {
+                             text: '', // calculated below to avoid dupe code
                              isRecent: diffMs < 3 * 60 * 1000,
                              diffMins: Math.floor(diffMs / 60000),
                              obj: lastSeen
                            };
                          };
                          const info = getLastSeenInfo(user.lastSeen);
-                         const isReallyOnline = user.isOnline && info.isRecent;
-                         
+                         const isReallyOnline = info.isRecent;
+
                          // Re-calculate text for display
                          let timeText = 'Never';
                          if (user.lastSeen) {
-                            const now = new Date();
-                            const diffMins = Math.floor((now.getTime() - info.obj.getTime()) / 60000);
+                            const diffMins = Math.floor((nowTick - info.obj.getTime()) / 60000);
                             const diffHours = Math.floor(diffMins / 60);
                             const diffDays = Math.floor(diffHours / 24);
                             if (diffMins < 1) timeText = 'Just now';
@@ -760,15 +804,22 @@ export const UserManagementPage: React.FC = () => {
                     {/* Active Today */}
                     <td className="px-6 py-4">
                       {(() => {
-                        const seconds = user.activeDateToday === todayStr ? (user.activeSecondsToday || 0) : 0;
-                        if (seconds < 60) {
+                        const today = todayActivity[user.id];
+                        const activeSeconds = today?.activeSeconds || 0;
+                        const idleSeconds = today?.idleSeconds || 0;
+                        if (activeSeconds < 60 && idleSeconds < 60) {
                           return <span className="text-xs text-slate-400 italic">Not active yet</span>;
                         }
                         return (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 w-fit">
-                            <Clock className="w-3 h-3" />
-                            {formatDuration(seconds)}
-                          </span>
+                          <div className="flex flex-col gap-1">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 w-fit">
+                              <Clock className="w-3 h-3" />
+                              {formatDuration(activeSeconds)}
+                            </span>
+                            {idleSeconds >= 60 && (
+                              <span className="text-[10px] text-slate-400">+{formatDuration(idleSeconds)} idle</span>
+                            )}
+                          </div>
                         );
                       })()}
                     </td>
@@ -861,7 +912,38 @@ export const UserManagementPage: React.FC = () => {
                   {/* Expanded Activity Row */}
                   {expandedUserId === user.id && (
                     <tr className="bg-indigo-50/50">
-                      <td colSpan={8} className="px-6 py-4">
+                      <td colSpan={8} className="px-6 py-4 space-y-3">
+                        {/* Active/idle time history — last 14 days */}
+                        <div className="bg-white rounded-lg border border-indigo-100 p-4">
+                          <h4 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                            <Clock size={16} className="text-emerald-600" />
+                            Active Time — Last 14 Days
+                          </h4>
+                          {loadingHistory === user.id ? (
+                            <div className="flex items-center justify-center py-4">
+                              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-600"></div>
+                              <span className="ml-2 text-sm text-slate-500">Loading history...</span>
+                            </div>
+                          ) : activityHistory[user.id]?.length ? (
+                            <div className="space-y-1 max-h-56 overflow-y-auto">
+                              {activityHistory[user.id].map(day => (
+                                <div key={day.date} className="flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-slate-50 text-sm">
+                                  <span className="text-slate-600 font-mono text-xs">{day.date}</span>
+                                  <div className="flex items-center gap-3">
+                                    <span className="text-emerald-700 font-medium">{formatDuration(day.activeSeconds)} active</span>
+                                    <span className="text-slate-400 text-xs">{formatDuration(day.idleSeconds)} idle</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-center py-4 text-sm text-slate-500">
+                              <Clock className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+                              No active time recorded yet
+                            </div>
+                          )}
+                        </div>
+
                         <div className="bg-white rounded-lg border border-indigo-100 p-4">
                           <h4 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
                             <Activity size={16} className="text-indigo-600" />

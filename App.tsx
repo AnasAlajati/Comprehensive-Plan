@@ -19,7 +19,8 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { db, auth } from './services/firebase';
 import { DataService } from './services/dataService';
 import { ActivityService } from './services/activityService';
-import { TimeTrackingService } from './services/timeTrackingService';
+import { usePresence } from './hooks/usePresence';
+import { useActivityTracking } from './hooks/useActivityTracking';
 import { MachineRow } from './types';
 import { StatusBadge } from './components/StatusBadge';
 import { PlanningSchedule } from './components/PlanningSchedule';
@@ -193,9 +194,9 @@ const App: React.FC = () => {
                 setUserName(userData.displayName || email.split('@')[0]);
                 setIsAuthorized(true);
                 
-                // Update presence on login
+                // Update presence on login (usePresence takes over the
+                // recurring heartbeat once the app is mounted)
                 await setDoc(doc(db, 'users', email), {
-                  isOnline: true,
                   lastSeen: serverTimestamp()
                 }, { merge: true });
               }
@@ -227,103 +228,16 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
-  // Presence & Activity Tracking (Online, Idle, Background)
-  useEffect(() => {
-    if (!user?.email || !isAuthorized) return;
-
-    const email = user.email.toLowerCase();
-    const userDocRef = doc(db, 'users', email);
-
-    // Mutable state for the effect closure
-    let lastActivity = Date.now();
-    let currentStatus = 'online';
-
-    // Helper: Update Firestore
-    const updatePresence = async (status: string) => {
-      currentStatus = status;
-      try {
-        await setDoc(userDocRef, {
-          isOnline: true, // User is technically connected
-          status: status, // 'online' | 'idle' | 'background'
-          lastSeen: serverTimestamp()
-        }, { merge: true });
-      } catch (err) {
-        console.error('Failed to update presence:', err);
-      }
-    };
-
-    // 1. IDLE CHECKER (Heartbeat)
-    // Run every 60 seconds to check activity and send heartbeat
-    const heartbeatInterval = setInterval(() => {
-        const now = Date.now();
-        const isHidden = document.visibilityState === 'hidden';
-        
-        // Determine Status based on simple rules
-        let newStatus = currentStatus;
-
-        if (isHidden) {
-            newStatus = 'background';
-        } else {
-            // 5 minutes idle threshold
-            if (now - lastActivity > 5 * 60 * 1000) {
-                newStatus = 'idle';
-            } else {
-                newStatus = 'online';
-            }
-        }
-        
-        // Always send heartbeat to update 'lastSeen'
-        updatePresence(newStatus);
-
-        // Only count time toward daily/weekly totals while genuinely online —
-        // idle and backgrounded time is never recorded.
-        if (newStatus === 'online') {
-            TimeTrackingService.recordActiveSeconds(email, 60);
-        }
-    }, 60000);
-
-    // 2. VISIBILITY LISTENER (Immediate Background Detection)
-    const handleVisibility = () => {
-        if (document.visibilityState === 'hidden') {
-            updatePresence('background');
-        } else {
-            // Back to foreground - Reset activity if they come back
-            lastActivity = Date.now();
-            updatePresence('online');
-        }
-    };
-
-    // 3. ACTIVITY LISTENER (Reset Idle Timer)
-    const handleActivity = () => {
-        lastActivity = Date.now();
-        // If we were idle, immediately switch back to online without waiting for heartbeat
-        if (currentStatus === 'idle' && document.visibilityState === 'visible') {
-            updatePresence('online');
-        }
-    };
-
-    // Initial Set
-    updatePresence('online');
-
-    // Attach Listeners
-    document.addEventListener('visibilitychange', handleVisibility);
-    const events = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart'];
-    events.forEach(ev => window.addEventListener(ev, handleActivity));
-    
-    // Cleanup
-    return () => {
-      clearInterval(heartbeatInterval);
-      document.removeEventListener('visibilitychange', handleVisibility);
-      events.forEach(ev => window.removeEventListener(ev, handleActivity));
-      
-      // Set offline on exit
-      setDoc(userDocRef, {
-          isOnline: false,
-          status: 'offline',
-          lastSeen: serverTimestamp()
-      }, { merge: true }).catch(console.error);
-    };
-  }, [user?.email, isAuthorized]);
+  // Presence ("is a tab open") + Activity/idle tracking — see
+  // hooks/usePresence.ts and hooks/useActivityTracking.ts. Two
+  // independent pieces sharing only the user's email as an id: presence
+  // pings lastSeen every 60s regardless of activity (Online/Offline is
+  // derived from that timestamp, not stored); activity tracking samples
+  // real input + tab visibility every 15s and flushes buffered
+  // active/idle seconds every 30s.
+  const trackedEmail = (user?.email && isAuthorized) ? user.email.toLowerCase() : null;
+  usePresence(trackedEmail);
+  useActivityTracking(trackedEmail);
 
   // 1. Test Connection on Mount & Monitor Network Status
   useEffect(() => {
