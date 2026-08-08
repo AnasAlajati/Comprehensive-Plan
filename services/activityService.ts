@@ -22,8 +22,8 @@ import {
 import { db } from './firebase';
 
 // Activity types
-export type ActivityAction = 'create' | 'update' | 'delete' | 'view' | 'login' | 'logout';
-export type EntityType = 'machine' | 'order' | 'fabric' | 'plan' | 'yarn' | 'sample' | 'user' | 'dyehouse' | 'other';
+export type ActivityAction = 'create' | 'update' | 'delete' | 'view' | 'login' | 'logout' | 'reorder';
+export type EntityType = 'machine' | 'order' | 'fabric' | 'plan' | 'yarn' | 'sample' | 'user' | 'dyehouse' | 'client' | 'other';
 
 export interface ActivityLog {
   id?: string;
@@ -213,6 +213,8 @@ export const ActivityService = {
         return { color: 'text-purple-700', bgColor: 'bg-purple-100', label: 'Logged In' };
       case 'logout':
         return { color: 'text-orange-700', bgColor: 'bg-orange-100', label: 'Logged Out' };
+      case 'reorder':
+        return { color: 'text-indigo-700', bgColor: 'bg-indigo-100', label: 'Reordered' };
       default:
         return { color: 'text-slate-600', bgColor: 'bg-slate-100', label: action };
     }

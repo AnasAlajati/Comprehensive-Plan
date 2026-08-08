@@ -23,6 +23,7 @@ import {
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, auth, storage } from '../services/firebase';
 import { DataService } from '../services/dataService';
+import { ActivityService } from '../services/activityService';
 import { CustomerSheet, OrderRow, MachineSS, MachineStatus, Fabric, Yarn, YarnInventoryItem, YarnAllocationItem, FabricDefinition, Dyehouse, DyehouseMachine, Season, ReceiveEvent, DyeingBatch, DeliveryEvent, ExternalPlanAssignment } from '../types';
 import { FabricDetailsModal } from './FabricDetailsModal';
 import { FabricDyehouseModal } from './FabricDyehouseModal';
@@ -6928,6 +6929,15 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         createdByEmail: user?.email || 'Unknown',
         createdAt: new Date().toISOString()
       });
+      ActivityService.logActivity(
+        user?.email || 'Unknown',
+        userName || user?.displayName || 'Unknown',
+        'create',
+        'client',
+        docRef.id,
+        newCustomerName.trim(),
+        'عميل جديد تمت إضافته'
+      );
       setNewCustomerName('');
       setIsAddingCustomer(false);
       setSelectedCustomerId(docRef.id); // Auto-select new customer
@@ -6961,6 +6971,15 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       await batch.commit();
 
       await deleteDoc(doc(db, 'CustomerSheets', id));
+      ActivityService.logActivity(
+        auth.currentUser?.email || 'Unknown',
+        userName || auth.currentUser?.displayName || 'Unknown',
+        'delete',
+        'client',
+        id,
+        customerName,
+        'تم حذف العميل وكل طلباته'
+      );
       if (selectedCustomerId === id) setSelectedCustomerId(null);
     } catch (error) {
       console.error("Error deleting customer:", error);
@@ -7016,6 +7035,16 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       });
     }
 
+    ActivityService.logActivity(
+      user?.email || 'Unknown',
+      userName || user?.displayName || 'Unknown',
+      'create',
+      'order',
+      newRow.id,
+      selectedCustomer.name,
+      'طلب جديد تمت إضافته'
+    );
+
     setNewRowFlashId(newRow.id);
     setTimeout(() => setNewRowFlashId(null), 2000);
   };
@@ -7068,6 +7097,16 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         ...auditInfo
       });
     }
+
+    ActivityService.logActivity(
+      user?.email || 'Unknown',
+      userName || user?.displayName || 'Unknown',
+      'reorder',
+      'order',
+      newRow.id,
+      `${selectedCustomer.name} — ${fabrics.find(f => f.name === sourceRow.material)?.shortName || sourceRow.material || 'بدون خامة'}`,
+      `إعادة طلب (${reorderType || 'طلب عميل'})`
+    );
 
     setNewRowFlashId(newRow.id);
     setTimeout(() => setNewRowFlashId(null), 2000);
@@ -7167,10 +7206,26 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         });
     } else {
         // Legacy Mode
-        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { 
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), {
             orders: updatedOrders,
             ...auditInfo
         });
+    }
+
+    // Log only actual quantity movements — not every field edit (dates, notes,
+    // dyeing plan, etc.) — to keep the Orders Movement page focused.
+    if (currentRow && updates.requiredQty !== undefined && updates.requiredQty !== currentRow.requiredQty) {
+      const fabricLabel = fabrics.find(f => f.name === currentRow.material)?.shortName || currentRow.material || 'بدون خامة';
+      ActivityService.logActivity(
+        user?.email || 'Unknown',
+        userName || user?.displayName || 'Unknown',
+        'update',
+        'order',
+        rowId,
+        `${selectedCustomer.name} — ${fabricLabel}`,
+        `الكمية: ${currentRow.requiredQty} → ${updates.requiredQty}`,
+        [{ field: 'الكمية المطلوبة', oldValue: currentRow.requiredQty, newValue: updates.requiredQty }]
+      );
     }
   };
 
@@ -7383,6 +7438,16 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       const updatedOrders = selectedCustomer.orders.filter((o: any) => o.id !== rowId);
       await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { orders: updatedOrders, ...auditInfo });
     }
+
+    ActivityService.logActivity(
+      user?.email || 'Unknown',
+      userName || user?.displayName || 'Unknown',
+      'delete',
+      'order',
+      rowId,
+      `${selectedCustomer.name} — ${fabrics.find(f => f.name === order.material)?.shortName || order.material || 'بدون خامة'}`,
+      `تم حذف الطلب (الكمية: ${order.requiredQty})`
+    );
   };
 
   const handleDeleteRow = async (rowId: string) => {
@@ -7402,12 +7467,13 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
 
     // 2. Typing Verification
     const confirmation = window.prompt(`To delete this order row, please type "DELETE" in the box below:`);
-    
+
     if (confirmation !== 'DELETE') {
       if (confirmation !== null) alert("Incorrect text entered. Deletion cancelled.");
       return;
     }
-    
+
+    const orderBeingDeleted = selectedCustomer.orders.find(o => o.id === rowId);
     const hasSubCollectionData = flatOrders.some(o => o.customerId === selectedCustomerId);
 
     const user = auth.currentUser;
@@ -7425,10 +7491,22 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
     } else {
         // Legacy Mode
         const updatedOrders = selectedCustomer.orders.filter(o => o.id !== rowId);
-        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), { 
+        await updateDoc(doc(db, 'CustomerSheets', selectedCustomerId), {
             orders: updatedOrders,
             ...auditInfo
         });
+    }
+
+    if (orderBeingDeleted) {
+      ActivityService.logActivity(
+        user?.email || 'Unknown',
+        userName || user?.displayName || 'Unknown',
+        'delete',
+        'order',
+        rowId,
+        `${selectedCustomer.name} — ${fabrics.find(f => f.name === orderBeingDeleted.material)?.shortName || orderBeingDeleted.material || 'بدون خامة'}`,
+        `تم حذف الطلب (الكمية: ${orderBeingDeleted.requiredQty})`
+      );
     }
   };
 

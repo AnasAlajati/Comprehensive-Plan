@@ -45,6 +45,7 @@ import { MachinesPage } from './components/MachinesPage';
 import { GlobalFabricButton } from './components/GlobalFabricButton';
 import { LoginPage } from './components/LoginPage';
 import { UserManagementPage } from './components/UserManagementPage';
+import { OrdersMovementPage } from './components/OrdersMovementPage';
 import { RecentPrintsPage } from './components/RecentPrintsPage';
 import { 
   Send, 
@@ -73,7 +74,8 @@ import {
   Beaker,
   Printer,
   BookOpen,
-  Archive
+  Archive,
+  Activity
 } from 'lucide-react';
 import { MachineStatus } from './types';
 
@@ -106,7 +108,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // View Modes
-  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'real-maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'fabric-reports' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'sample-tracking' | 'sample-archive' | 'fabrics' | 'machines' | 'users' | 'recent-prints'>('excel');
+  const [viewMode, setViewMode] = useState<'excel' | 'planning' | 'maintenance' | 'real-maintenance' | 'idle' | 'orders' | 'compare' | 'history' | 'fabric-history' | 'fabric-reports' | 'yarn-inventory' | 'dyehouse-inventory' | 'dyehouse-directory' | 'sample-tracking' | 'sample-archive' | 'fabrics' | 'machines' | 'users' | 'recent-prints' | 'orders-movement'>('excel');
   const [planningInitialViewMode, setPlanningInitialViewMode] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
   
   // Force dyehouse_manager and dyehouse_colors_manager to only see dyehouse-directory or orders
@@ -770,6 +772,16 @@ const App: React.FC = () => {
              
              {userRole === 'admin' && (
                <button
+                 onClick={() => setViewMode('orders-movement')}
+                 className={`p-2 rounded-lg transition-colors ${viewMode === 'orders-movement' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}`}
+                 title="Orders Movement"
+               >
+                 <Activity size={20} />
+               </button>
+             )}
+
+             {userRole === 'admin' && (
+               <button
                  onClick={() => setViewMode('users')}
                  className={`p-2 rounded-lg transition-colors ${viewMode === 'users' ? 'bg-teal-50 text-teal-700' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}`}
                  title="User Management"
@@ -1197,6 +1209,10 @@ const App: React.FC = () => {
 
             {viewMode === 'users' && (
               <UserManagementPage userRole={userRole} />
+            )}
+
+            {viewMode === 'orders-movement' && (
+              <OrdersMovementPage userRole={userRole} />
             )}
 
             {viewMode === 'recent-prints' && (
