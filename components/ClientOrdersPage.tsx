@@ -3600,8 +3600,7 @@ const MemoizedOrderRow = React.memo(({
                 </colgroup>
                 <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                   <tr>
-                    <th className="px-3 py-2 text-right min-w-[120px] relative sticky right-0 z-20 bg-slate-50"
-                      style={{ willChange: 'transform' }}>
+                    <th className="px-3 py-2 text-right min-w-[120px] relative sticky right-0 z-20 bg-slate-50">
                       <div className="flex items-center gap-2">
                         <span>اللون</span>
                         {/* Column Visibility Toggle */}
@@ -3922,8 +3921,7 @@ const MemoizedOrderRow = React.memo(({
                       {/* Planned Info Tooltip for locked batches */}
                       {/* Sticky at every screen width so the color stays visible while scrolling
                           horizontally through the rest of the columns. */}
-                      <td className={`p-0 relative sticky right-0 z-10 ${currentGroupId ? 'bg-indigo-50' : 'bg-white'}`}
-                        style={{ willChange: 'transform' }}>
+                      <td className={`p-0 relative sticky right-0 z-10 ${currentGroupId ? 'bg-indigo-50' : 'bg-white'}`}>
                         <div className="flex items-center h-full pl-2">
                             {/* Checkbox for grouping */}
                             {isGroupingMode && canEditColors && (
