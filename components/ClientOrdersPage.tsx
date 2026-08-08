@@ -1315,7 +1315,7 @@ const MemoizedOrderRow = React.memo(({
     color: 160, colorApproval: 96, dispatchNumber: 96, formationDate: 128,
     daysAfterFormation: 80, dateSent: 128, daysAfterSent: 80, dyehouse: 128,
     quantity: 80, machine: 96, accessory: 64, sent: 80, received: 96,
-    remaining: 80, delivery: 96, status: 80, dyehouseStatus: 144, notes: 200, actions: 44,
+    remaining: 80, delivery: 96, status: 80, dyehouseStatus: 144, notes: 130, actions: 32,
   };
   // Column order + which toggleable id gates them (color/actions are always shown)
   const COLOR_COL_ORDER: { id: string; always?: boolean }[] = [
