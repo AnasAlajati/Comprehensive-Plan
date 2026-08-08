@@ -3600,7 +3600,7 @@ const MemoizedOrderRow = React.memo(({
                 </colgroup>
                 <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                   <tr>
-                    <th className="px-3 py-2 text-right min-w-[120px] relative sticky right-0 z-20 bg-slate-50 sm:static sm:z-auto"
+                    <th className="px-3 py-2 text-right min-w-[120px] relative sticky right-0 z-20 bg-slate-50"
                       style={{ willChange: 'transform' }}>
                       <div className="flex items-center gap-2">
                         <span>اللون</span>
@@ -3617,9 +3617,13 @@ const MemoizedOrderRow = React.memo(({
                             <Eye size={10} />
                           </button>
                           
-                          {/* Column Picker Dropdown */}
-                          {showColumnPicker && (
-                            <div 
+                          {/* Column Picker Dropdown — portaled to document.body so it renders
+                              relative to the viewport, not the sticky/will-change th it's
+                              nested inside (an ancestor with a transform or will-change:
+                              transform creates a new containing block for position:fixed
+                              descendants, otherwise trapping this inside that small cell). */}
+                          {showColumnPicker && createPortal(
+                            <div
                               className="fixed right-4 top-1/4 z-[9999] bg-white border border-slate-200 rounded-lg shadow-xl p-3 min-w-[200px] max-h-[400px] overflow-y-auto"
                               onClick={(e) => e.stopPropagation()}
                             >
@@ -3688,7 +3692,8 @@ const MemoizedOrderRow = React.memo(({
                                   <span className="text-slate-700">{col.label}</span>
                                 </label>
                               ))}
-                            </div>
+                            </div>,
+                            document.body
                           )}
                         </div>
                       </div>
@@ -3915,9 +3920,9 @@ const MemoizedOrderRow = React.memo(({
                       elements.push(
                     <tr key={batch.id || idx} className={`group/batch ${rowBgClass}`} style={rowStyle}>
                       {/* Planned Info Tooltip for locked batches */}
-                      {/* Sticky on phone so the color stays visible while scrolling horizontally
-                          through the rest of the columns (mirrors the Fabric-name column). */}
-                      <td className={`p-0 relative sticky right-0 z-10 sm:static sm:z-auto ${currentGroupId ? 'bg-indigo-50' : 'bg-white'}`}
+                      {/* Sticky at every screen width so the color stays visible while scrolling
+                          horizontally through the rest of the columns. */}
+                      <td className={`p-0 relative sticky right-0 z-10 ${currentGroupId ? 'bg-indigo-50' : 'bg-white'}`}
                         style={{ willChange: 'transform' }}>
                         <div className="flex items-center h-full pl-2">
                             {/* Checkbox for grouping */}
