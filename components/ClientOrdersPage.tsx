@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useMemo } from 'react';
+﻿import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactDOM from 'react-dom';
 import * as XLSX from 'xlsx-js-style';
 import { createPortal } from 'react-dom';
@@ -1141,6 +1141,53 @@ const ColorNameDropdown: React.FC<{
 
 // --- Optimized Row Component ---
 // (StatusLegend Removed)
+
+// Custom equality check for MemoizedOrderRow's React.memo. The default
+// shallow comparator was effectively a no-op here: several props (allOrders,
+// fabrics, dyehouses, machines, statusInfo, ...) are "supporting/lookup"
+// collections that get a brand-new array/object reference from Firestore's
+// onSnapshot listener whenever ANY order changes ANYWHERE in the app — not
+// just this row's own order — so comparing them by reference caused every
+// expanded row (including its heavy colors table) to re-render on every
+// unrelated write, which is what made the colors table's horizontal scroll
+// feel unsmooth (a React re-render landing mid-scroll competes with the
+// browser's own scroll compositing on the main thread and drops frames).
+//
+// row.id + row.lastUpdated is used as the correctness anchor instead of a
+// deep/reference row comparison: every order mutation in this file already
+// stamps lastUpdated (see the auditInfo objects in handleUpdateOrder etc.),
+// so "lastUpdated unchanged" reliably means "this row's data — including its
+// dyeingPlan/colors — hasn't changed," even though the row OBJECT reference
+// itself is rebuilt on every snapshot regardless.
+//
+// The bulk lookup/reference props are intentionally NOT compared — a row can
+// go a render or two without reflecting an unrelated machine/fabric/dyehouse
+// change while genuinely idle, and it self-corrects on the next render that
+// actually touches this row; that's a far better trade than re-rendering
+// every visible row on every unrelated Firestore write.
+const areOrderRowPropsEqual = (prev: any, next: any) => {
+  return (
+    prev.row.id === next.row.id &&
+    prev.row.lastUpdated === next.row.lastUpdated &&
+    prev.statusMatchType === next.statusMatchType &&
+    prev.flashNew === next.flashNew &&
+    prev.groupDepth === next.groupDepth &&
+    prev.isGroupParent === next.isGroupParent &&
+    prev.isGrouped === next.isGrouped &&
+    prev.isSelected === next.isSelected &&
+    prev.selectedCustomerName === next.selectedCustomerName &&
+    prev.selectedCustomerSeasonId === next.selectedCustomerSeasonId &&
+    prev.selectedCustomerSeasonName === next.selectedCustomerSeasonName &&
+    prev.showDyehouse === next.showDyehouse &&
+    prev.userRole === next.userRole &&
+    prev.userName === next.userName &&
+    prev.hasHistory === next.hasHistory &&
+    prev.transferAdjustment === next.transferAdjustment &&
+    prev.visibleColumns === next.visibleColumns &&
+    prev.colorColWidths === next.colorColWidths &&
+    prev.ordersColVis === next.ordersColVis
+  );
+};
 
 const MemoizedOrderRow = React.memo(({
   row,
@@ -3545,14 +3592,16 @@ const MemoizedOrderRow = React.memo(({
       <tr className="bg-slate-50/50 animate-in slide-in-from-top-2 table-row">
         <td colSpan={1} className="border-r border-slate-200"></td>
         <td colSpan={10} className="p-4 border-b border-slate-200 shadow-inner">
-            <div className="bg-white rounded border border-slate-200 overflow-x-auto">
+            <div className="bg-white rounded border border-slate-200 overflow-x-auto"
+              style={{ WebkitOverflowScrolling: 'touch', overscrollBehaviorX: 'contain' } as React.CSSProperties}>
               <table className="text-xs" dir="rtl" style={{ tableLayout: 'fixed', width: visibleColorCols.reduce((s, c) => s + colW(c.id), 0), minWidth: '100%' }}>
                 <colgroup>
                   {visibleColorCols.map(c => <col key={c.id} style={{ width: colW(c.id) }} />)}
                 </colgroup>
                 <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                   <tr>
-                    <th className="px-3 py-2 text-right min-w-[120px] relative sticky right-0 z-20 bg-slate-50 sm:static sm:z-auto">
+                    <th className="px-3 py-2 text-right min-w-[120px] relative sticky right-0 z-20 bg-slate-50 sm:static sm:z-auto"
+                      style={{ willChange: 'transform' }}>
                       <div className="flex items-center gap-2">
                         <span>اللون</span>
                         {/* Column Visibility Toggle */}
@@ -3868,7 +3917,8 @@ const MemoizedOrderRow = React.memo(({
                       {/* Planned Info Tooltip for locked batches */}
                       {/* Sticky on phone so the color stays visible while scrolling horizontally
                           through the rest of the columns (mirrors the Fabric-name column). */}
-                      <td className={`p-0 relative sticky right-0 z-10 sm:static sm:z-auto ${currentGroupId ? 'bg-indigo-50' : 'bg-white'}`}>
+                      <td className={`p-0 relative sticky right-0 z-10 sm:static sm:z-auto ${currentGroupId ? 'bg-indigo-50' : 'bg-white'}`}
+                        style={{ willChange: 'transform' }}>
                         <div className="flex items-center h-full pl-2">
                             {/* Checkbox for grouping */}
                             {isGroupingMode && canEditColors && (
@@ -5235,7 +5285,7 @@ const MemoizedOrderRow = React.memo(({
     )}
     </>
   );
-});
+}, areOrderRowPropsEqual);
 
 interface ClientOrdersPageProps {
   userRole?: 'admin' | 'editor' | 'viewer' | 'dyehouse_manager' | 'dyehouse_colors_manager' | 'factory_manager' | 'daily_planner' | null;
@@ -7576,6 +7626,44 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
       );
     }
   };
+
+  // Stable callbacks for MemoizedOrderRow's onOpenXxx-style props. These used
+  // to be defined inline inside the row-rendering .map() below, which meant
+  // React.memo on MemoizedOrderRow received a brand-new function reference
+  // for every one of these on every single render of ClientOrdersPage (e.g.
+  // any Firestore snapshot update anywhere in the app) — defeating the memo
+  // entirely and re-rendering every expanded order row's (heavy) colors
+  // table on every unrelated update, which is what caused the horizontal
+  // scroll jank in that table. None of these actually need per-row closure
+  // data (everything row-specific arrives as a call-time argument), so they
+  // can live here once instead of being recreated per row.
+  const handleOpenFabricDyehouse = useCallback((order: OrderRow) => setFabricDyehouseModal({ isOpen: true, order }), []);
+  const handleOpenColorApproval = useCallback((orderId: string, batchIdx: number, batch: DyeingBatch) => setColorApprovalModal({ isOpen: true, orderId, batchIdx, batch }), []);
+  const handleOpenCreatePlan = useCallback((order: OrderRow) => {
+    if (!selectedCustomer) return;
+    setCreatePlanModal({ isOpen: true, order, customerName: selectedCustomer.name });
+  }, [selectedCustomer]);
+  const handleOpenDyehousePlan = useCallback((order: OrderRow) => setDyehousePlanningModal({ isOpen: true, order }), []);
+  const handleOpenProductionOrder = useCallback((order: OrderRow, active: string[], planned: string[]) => {
+    setProductionOrderModal({ isOpen: true, order, activeMachines: active, plannedMachines: planned });
+  }, []);
+  const handleOpenHistory = useCallback((order: OrderRow) => setSelectedOrderForHistory(order), []);
+  const handleFilterMachineCap = useCallback((cap: string) => setMachineFilter(cap), []);
+  const handleOpenReceiveModal = useCallback((orderId: string, batchIdx: number, batch: DyeingBatch) => {
+    setReceiveModal({ isOpen: true, orderId, batchIdx, batch });
+    setNewReceive({ date: new Date().toISOString().split('T')[0], quantityRaw: 0, quantityAccessory: 0, notes: '' });
+  }, []);
+  const handleOpenSentModal = useCallback((orderId: string, batchIdx: number, batch: DyeingBatch) => {
+    setSentModal({ isOpen: true, orderId, batchIdx, batch });
+    setNewSent({ date: new Date().toISOString().split('T')[0], quantity: 0, notes: '' });
+  }, []);
+  const handleOpenDyehouseTracking = useCallback((data: { isOpen: boolean; orderId: string; batchIdx: number; batch: DyeingBatch }) => setDyehouseTrackingModal(data), []);
+  const handleOpenDelivery = useCallback((orderId: string, batchIdx: number, batch: DyeingBatch | null) => {
+    if (!selectedCustomer) return;
+    const order = flatOrders.find(o => o.id === orderId);
+    if (order) setDeliveryModal({ isOpen: true, customerId: selectedCustomer.id, orderId, batches: order.dyeingPlan || [] });
+  }, [selectedCustomer, flatOrders]);
+  const handleOpenSampleCertificate = useCallback((order: OrderRow, clientName: string) => setSampleCertModal({ order, clientName }), []);
 
   const handlePlanSearch = (clientName: string, fabricName: string) => {
     const reference = `${clientName}-${fabricName}`;
@@ -10254,14 +10342,10 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                     selectedCustomerSeasonName={(selectedCustomer as any).createdSeasonName || (selectedCustomer.createdSeasonId ? (seasons.find(s => s.id === selectedCustomer.createdSeasonId)?.name || '') : '')}
                                     onOpenFabricDetails={handleOpenFabricDetails}
                                     showDyehouse={showDyehouse}
-                                    onOpenFabricDyehouse={(order) => setFabricDyehouseModal({ isOpen: true, order })}
-                                    onOpenColorApproval={(orderId, batchIdx, batch) => setColorApprovalModal({ isOpen: true, orderId, batchIdx, batch })}
-                                    onOpenCreatePlan={(order) => setCreatePlanModal({  
-                                      isOpen: true, 
-                                      order, 
-                                      customerName: selectedCustomer.name 
-                                    })}
-                                    onOpenDyehousePlan={(order) => setDyehousePlanningModal({ isOpen: true, order })}
+                                    onOpenFabricDyehouse={handleOpenFabricDyehouse}
+                                    onOpenColorApproval={handleOpenColorApproval}
+                                    onOpenCreatePlan={handleOpenCreatePlan}
+                                    onOpenDyehousePlan={handleOpenDyehousePlan}
                                     dyehouses={dyehouses}
                                     handleCreateDyehouse={handleCreateDyehouse}
                                     machines={machines}
@@ -10271,30 +10355,14 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                     allOrders={flatOrders}
                                     userRole={userRole}
                                     userName={userName}
-                                    onOpenProductionOrder={(order, active, planned) => {
-                                      setProductionOrderModal({
-                                        isOpen: true,
-                                        order,
-                                        activeMachines: active,
-                                        plannedMachines: planned
-                                      });
-                                    }}
-                                    onOpenHistory={(order) => setSelectedOrderForHistory(order)}
+                                    onOpenProductionOrder={handleOpenProductionOrder}
+                                    onOpenHistory={handleOpenHistory}
                                     hasHistory={row.reorderOfId ? false : (historySet.has(row.material || '') || orderIdStatsMap.has(row.id))}
-                                    onFilterMachine={(cap) => setMachineFilter(cap)}
-                                    onOpenReceiveModal={(orderId, batchIdx, batch) => {
-                                      setReceiveModal({ isOpen: true, orderId, batchIdx, batch });
-                                      setNewReceive({ date: new Date().toISOString().split('T')[0], quantityRaw: 0, quantityAccessory: 0, notes: '' });
-                                    }}
-                                    onOpenSentModal={(orderId, batchIdx, batch) => {
-                                      setSentModal({ isOpen: true, orderId, batchIdx, batch });
-                                      setNewSent({ date: new Date().toISOString().split('T')[0], quantity: 0, notes: '' });
-                                    }}
-                                    onOpenDyehouseTracking={(data) => setDyehouseTrackingModal(data)}
-                                    onOpenDelivery={(orderId, batchIdx, batch) => {
-                                      const order = flatOrders.find(o => o.id === orderId);
-                                      if (order) setDeliveryModal({ isOpen: true, customerId: selectedCustomer.id, orderId, batches: order.dyeingPlan || [] });
-                                    }}
+                                    onFilterMachine={handleFilterMachineCap}
+                                    onOpenReceiveModal={handleOpenReceiveModal}
+                                    onOpenSentModal={handleOpenSentModal}
+                                    onOpenDyehouseTracking={handleOpenDyehouseTracking}
+                                    onOpenDelivery={handleOpenDelivery}
                                     visibleColumns={manageColorsVisibleColumns}
                                     onToggleColumnVisibility={handleToggleColumnVisibility}
                                     colorColWidths={colorColWidths}
@@ -10309,7 +10377,7 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
                                       if (t.fromOrderId === row.id) return sum - (Number(t.quantity) || 0);
                                       return sum;
                                     }, 0)}
-                                    onOpenSampleCertificate={(order, clientName) => setSampleCertModal({ order, clientName })}
+                                    onOpenSampleCertificate={handleOpenSampleCertificate}
                                     colorPalette={colorPalette}
                                     onSaveColorToPalette={handleSaveColorToPalette}
                                   />
