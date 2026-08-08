@@ -3593,7 +3593,7 @@ const MemoizedOrderRow = React.memo(({
         <td colSpan={1} className="border-r border-slate-200"></td>
         <td colSpan={10} className="p-4 border-b border-slate-200 shadow-inner">
             <div className="bg-white rounded border border-slate-200 overflow-x-auto"
-              style={{ WebkitOverflowScrolling: 'touch', overscrollBehaviorX: 'contain' } as React.CSSProperties}>
+              style={{ WebkitOverflowScrolling: 'touch', overscrollBehaviorX: 'contain', touchAction: 'pan-x' } as React.CSSProperties}>
               <table className="text-xs" dir="rtl" style={{ tableLayout: 'fixed', width: visibleColorCols.reduce((s, c) => s + colW(c.id), 0), minWidth: '100%' }}>
                 <colgroup>
                   {visibleColorCols.map(c => <col key={c.id} style={{ width: colW(c.id) }} />)}
