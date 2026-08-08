@@ -7212,8 +7212,8 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         });
     }
 
-    // Log only actual quantity movements — not every field edit (dates, notes,
-    // dyeing plan, etc.) — to keep the Orders Movement page focused.
+    // Log only actual quantity/fabric movements — not every field edit (dates,
+    // notes, dyeing plan, etc.) — to keep the Orders Movement page focused.
     if (currentRow && updates.requiredQty !== undefined && updates.requiredQty !== currentRow.requiredQty) {
       const fabricLabel = fabrics.find(f => f.name === currentRow.material)?.shortName || currentRow.material || 'بدون خامة';
       ActivityService.logActivity(
@@ -7225,6 +7225,25 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         `${selectedCustomer.name} — ${fabricLabel}`,
         `الكمية: ${currentRow.requiredQty} → ${updates.requiredQty}`,
         [{ field: 'الكمية المطلوبة', oldValue: currentRow.requiredQty, newValue: updates.requiredQty }]
+      );
+    }
+
+    // New orders start with no fabric — it's set moments later via this same
+    // handler. Log that moment too, so the movement feed actually shows
+    // which fabric was added, not just "new order" with nothing else.
+    if (currentRow && updates.material !== undefined && updates.material !== currentRow.material) {
+      const newFabricLabel = fabrics.find(f => f.name === updates.material)?.shortName || updates.material || 'بدون خامة';
+      ActivityService.logActivity(
+        user?.email || 'Unknown',
+        userName || user?.displayName || 'Unknown',
+        'update',
+        'order',
+        rowId,
+        `${selectedCustomer.name} — ${newFabricLabel}`,
+        currentRow.material
+          ? `تغيير الخامة: ${currentRow.material} → ${updates.material}`
+          : `تم تحديد الخامة: ${newFabricLabel}`,
+        [{ field: 'الخامة', oldValue: currentRow.material, newValue: updates.material }]
       );
     }
   };

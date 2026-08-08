@@ -15,7 +15,7 @@ const EVENT_CONFIG: Record<string, { icon: React.FC<any>; label: string; color: 
   'client:delete': { icon: UserMinus, label: 'حذف عميل',     color: 'text-red-700',     bg: 'bg-red-50',     border: 'border-red-200' },
   'order:create':  { icon: Plus,      label: 'طلب جديد',     color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' },
   'order:reorder': { icon: RotateCcw, label: 'إعادة طلب',    color: 'text-indigo-700',  bg: 'bg-indigo-50',  border: 'border-indigo-200' },
-  'order:update':  { icon: Package,   label: 'تحديث الكمية', color: 'text-amber-700',   bg: 'bg-amber-50',   border: 'border-amber-200' },
+  'order:update':  { icon: Package,   label: 'تحديث الطلب',  color: 'text-amber-700',   bg: 'bg-amber-50',   border: 'border-amber-200' },
   'order:delete':  { icon: Trash2,    label: 'حذف طلب',      color: 'text-rose-700',    bg: 'bg-rose-50',    border: 'border-rose-200' },
 };
 
