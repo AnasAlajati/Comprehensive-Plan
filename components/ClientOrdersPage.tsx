@@ -7246,6 +7246,54 @@ export const ClientOrdersPage: React.FC<ClientOrdersPageProps> = ({
         [{ field: 'الخامة', oldValue: currentRow.material, newValue: updates.material }]
       );
     }
+
+    // Dyehouse colors (dyeingPlan) — diffed by batch id against the prior
+    // state, so this single choke point catches the manual Add/Delete-color
+    // buttons AND the bulk paste-from-Excel import (DyehouseFabricImportModal)
+    // without needing separate logging at each call site. Two or more new
+    // batches appearing in the same update is only ever the bulk-paste case
+    // (the manual add button creates exactly one at a time) — summarized as
+    // a single entry instead of flooding the feed with one line per color.
+    if (currentRow && updates.dyeingPlan !== undefined) {
+      const oldPlan = currentRow.dyeingPlan || [];
+      const newPlan = updates.dyeingPlan || [];
+      const oldIds = new Set(oldPlan.map(b => b.id));
+      const newIds = new Set(newPlan.map(b => b.id));
+      const addedBatches = newPlan.filter(b => !oldIds.has(b.id));
+      const removedBatches = oldPlan.filter(b => !newIds.has(b.id));
+      const fabricLabel = fabrics.find(f => f.name === currentRow.material)?.shortName || currentRow.material || 'بدون خامة';
+      const colorEntityName = `${selectedCustomer.name} — ${fabricLabel}`;
+      const logColorEvent = (action: 'create' | 'update' | 'delete', details: string) =>
+        ActivityService.logActivity(
+          user?.email || 'Unknown',
+          userName || user?.displayName || 'Unknown',
+          action, 'dyehouse', rowId, colorEntityName, details
+        );
+
+      if (addedBatches.length >= 2) {
+        logColorEvent('create', `${addedBatches.length} ألوان جديدة تمت إضافتها دفعة واحدة (لصق من إكسل)`);
+      } else if (addedBatches.length === 1) {
+        const b = addedBatches[0];
+        logColorEvent('create', b.color ? `لون جديد: ${b.color}${b.quantity ? ` — الكمية: ${b.quantity}` : ''}` : 'لون جديد أضيف');
+      }
+
+      if (removedBatches.length >= 2) {
+        logColorEvent('delete', `${removedBatches.length} ألوان تم حذفها دفعة واحدة`);
+      } else if (removedBatches.length === 1) {
+        const b = removedBatches[0];
+        logColorEvent('delete', `تم حذف اللون${b.color ? `: ${b.color}` : ''}${b.quantity ? ` (الكمية: ${b.quantity})` : ''}`);
+      }
+
+      // A color slot that already existed getting its name typed in for the
+      // first time (mirrors the "fabric set" logic above for new orders).
+      newPlan.forEach(b => {
+        if (!oldIds.has(b.id)) return; // already covered by addedBatches above
+        const old = oldPlan.find(o => o.id === b.id);
+        if (old && !old.color && b.color) {
+          logColorEvent('update', `تم تسمية اللون: ${b.color}${b.quantity ? ` — الكمية: ${b.quantity}` : ''}`);
+        }
+      });
+    }
   };
 
   // === EXPORT/IMPORT REMOVED ===

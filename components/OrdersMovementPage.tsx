@@ -5,18 +5,22 @@ import { ActivityLog } from '../services/activityService';
 import { getCairoDateString } from '../services/timeTrackingService';
 import {
   Activity, AlertTriangle, ChevronLeft, ChevronRight, RefreshCw,
-  UserPlus, UserMinus, Plus, RotateCcw, Trash2, Package, Calendar
+  UserPlus, UserMinus, Plus, RotateCcw, Trash2, Package, Calendar,
+  Droplets, Tag
 } from 'lucide-react';
 
 // ─── Event styling, keyed by "entityType:action" ────────────────────────────────
 
 const EVENT_CONFIG: Record<string, { icon: React.FC<any>; label: string; color: string; bg: string; border: string }> = {
-  'client:create': { icon: UserPlus,  label: 'عميل جديد',    color: 'text-blue-700',    bg: 'bg-blue-50',    border: 'border-blue-200' },
-  'client:delete': { icon: UserMinus, label: 'حذف عميل',     color: 'text-red-700',     bg: 'bg-red-50',     border: 'border-red-200' },
-  'order:create':  { icon: Plus,      label: 'طلب جديد',     color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' },
-  'order:reorder': { icon: RotateCcw, label: 'إعادة طلب',    color: 'text-indigo-700',  bg: 'bg-indigo-50',  border: 'border-indigo-200' },
-  'order:update':  { icon: Package,   label: 'تحديث الطلب',  color: 'text-amber-700',   bg: 'bg-amber-50',   border: 'border-amber-200' },
-  'order:delete':  { icon: Trash2,    label: 'حذف طلب',      color: 'text-rose-700',    bg: 'bg-rose-50',    border: 'border-rose-200' },
+  'client:create':   { icon: UserPlus,      label: 'عميل جديد',     color: 'text-blue-700',    bg: 'bg-blue-50',    border: 'border-blue-200' },
+  'client:delete':   { icon: UserMinus,     label: 'حذف عميل',      color: 'text-red-700',     bg: 'bg-red-50',     border: 'border-red-200' },
+  'order:create':    { icon: Plus,          label: 'طلب جديد',      color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' },
+  'order:reorder':   { icon: RotateCcw,     label: 'إعادة طلب',     color: 'text-indigo-700',  bg: 'bg-indigo-50',  border: 'border-indigo-200' },
+  'order:update':    { icon: Package,       label: 'تحديث الطلب',   color: 'text-amber-700',   bg: 'bg-amber-50',   border: 'border-amber-200' },
+  'order:delete':    { icon: Trash2,        label: 'حذف طلب',       color: 'text-rose-700',    bg: 'bg-rose-50',    border: 'border-rose-200' },
+  'dyehouse:create': { icon: Droplets,      label: 'لون جديد',      color: 'text-cyan-700',    bg: 'bg-cyan-50',    border: 'border-cyan-200' },
+  'dyehouse:update': { icon: Tag,           label: 'تسمية لون',     color: 'text-sky-700',     bg: 'bg-sky-50',     border: 'border-sky-200' },
+  'dyehouse:delete': { icon: Trash2,        label: 'حذف لون',       color: 'text-pink-700',    bg: 'bg-pink-50',    border: 'border-pink-200' },
 };
 
 const FALLBACK_CONFIG = { icon: Activity, label: '', color: 'text-slate-600', bg: 'bg-slate-50', border: 'border-slate-200' };
@@ -50,7 +54,7 @@ export function OrdersMovementPage({ userRole }: { userRole: string }) {
     if (!isAdmin) return;
     // Single equality filter ('in' on one field) — no orderBy, no composite
     // index required. Sorted and day-filtered client-side below.
-    const q = query(collection(db, 'activityLogs'), where('entityType', 'in', ['order', 'client']));
+    const q = query(collection(db, 'activityLogs'), where('entityType', 'in', ['order', 'client', 'dyehouse']));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setLogs(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ActivityLog)));
       setLoading(false);
@@ -101,7 +105,7 @@ export function OrdersMovementPage({ userRole }: { userRole: string }) {
             <Activity size={22} className="text-indigo-600" /> حركة الطلبات
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            كل طلب جديد، إعادة طلب، تعديل كمية، أو حذف — من قام به ومتى
+            كل طلب جديد، إعادة طلب، تعديل كمية، تغيير لون، أو حذف — من قام به ومتى
           </p>
         </div>
 
